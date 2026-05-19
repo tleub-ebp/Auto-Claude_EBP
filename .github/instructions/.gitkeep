@@ -1,0 +1,4 @@
+# Placeholder pour le dossier `.github/instructions/`.
+# Les fichiers `*.instructions.md` ici sont chargés automatiquement par Copilot
+# selon leur frontmatter `applyTo`. Supprimer ce fichier si le dossier contient
+# déjà au moins un `.instructions.md`.
