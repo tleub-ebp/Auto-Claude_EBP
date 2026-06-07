@@ -14,6 +14,10 @@ export interface JiraAPI {
 		projectId: string,
 		maxItems?: number,
 	) => Promise<IPCResult<JiraWorkItem[]>>;
+	getJiraIssue: (
+		projectId: string,
+		issueKey: string,
+	) => Promise<IPCResult<JiraWorkItem>>;
 	checkJiraConnection: (
 		projectId: string,
 	) => Promise<IPCResult<JiraSyncStatus>>;
@@ -33,6 +37,12 @@ export const createJiraAPI = (): JiraAPI => ({
 		maxItems?: number,
 	): Promise<IPCResult<JiraWorkItem[]>> =>
 		invokeIpc(IPC_CHANNELS.JIRA_GET_ISSUES, projectId, maxItems),
+
+	getJiraIssue: (
+		projectId: string,
+		issueKey: string,
+	): Promise<IPCResult<JiraWorkItem>> =>
+		invokeIpc(IPC_CHANNELS.JIRA_GET_ISSUE, projectId, issueKey),
 
 	checkJiraConnection: (
 		projectId: string,

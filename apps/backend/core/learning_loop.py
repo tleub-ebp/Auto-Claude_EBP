@@ -302,7 +302,6 @@ class LearningLoop:
     def _analyze_architecture_patterns(self, build_record: dict[str, Any]):
         """Analyze architectural patterns."""
         agent_types = build_record.get("agent_types", [])
-        technologies_used = build_record.get("technologies_used", [])
 
         # Look for successful agent combinations
         if len(agent_types) >= 2:
@@ -336,7 +335,6 @@ class LearningLoop:
 
     def _analyze_performance_patterns(self, build_record: dict[str, Any]):
         """Analyze performance patterns."""
-        performance_metrics = build_record.get("performance_metrics", {})
         duration = build_record.get("duration", 0)
         tokens_used = build_record.get("tokens_used", 0)
 
@@ -533,7 +531,6 @@ class LearningLoop:
 
             elif pattern_type == "performance":
                 # Check performance category
-                metrics = build.get("performance_metrics", {})
                 duration = build.get("duration", 0)
                 tokens = build.get("tokens_used", 0)
 

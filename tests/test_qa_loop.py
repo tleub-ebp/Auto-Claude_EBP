@@ -31,6 +31,7 @@ _mocked_module_names = [
     "claude_agent_sdk.types",
     # Core infrastructure
     "core",
+    "core.agent_client",
     "core.auth",
     "core.client",
     "core.simple_client",
@@ -64,6 +65,7 @@ _mocked_module_names = [
     "security.bash_security_hook",
     # Agents
     "agents",
+    "agents.agent_audit",
     "agents.memory_manager",
     "agents.tools_pkg",
     # Integrations

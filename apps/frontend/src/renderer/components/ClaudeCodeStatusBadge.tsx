@@ -72,7 +72,6 @@ export function ClaudeCodeStatusBadge({
 	);
 
 	const [isOpen, setIsOpen] = useState(false);
-	const [showUpdateWarning, setShowUpdateWarning] = useState(false);
 	const [isInstalling, setIsInstalling] = useState(false);
 	const [installError, setInstallError] = useState<string | null>(null);
 
@@ -202,13 +201,19 @@ export function ClaudeCodeStatusBadge({
 
 		const terminalId = `cli-action-${Date.now()}`;
 
+		// `projectPath` may point at a folder the user has since deleted. Fall
+		// back to `.` (which the main process resolves to the user's home dir)
+		// so a missing project doesn't block global CLI actions.
+		const safeCwd =
+			projectPath && projectPath !== "." ? projectPath : ".";
+
 		// 1. Create PTY in main process first
 		const terminalResult = await globalThis.electronAPI.createTerminal({
 			id: terminalId,
-			cwd: projectPath,
+			cwd: safeCwd,
 			cols: 80,
 			rows: 25,
-			projectPath: projectPath,
+			projectPath: safeCwd,
 		});
 
 		if (!terminalResult.success) {
@@ -229,18 +234,49 @@ export function ClaudeCodeStatusBadge({
 		return true;
 	};
 
-	// Perform the actual install/update
+	// Perform the actual install/update.
+	//
+	// Strategy: try the silent-update path first (`claude install --force latest`
+	// run in the background via IPC). It works whenever Claude is already
+	// installed — which is the overwhelming majority case for the Update button.
+	// If silent install isn't available (fresh install) or the renderer hasn't
+	// exposed the IPC, fall back to opening an internal terminal.
 	const performInstall = async () => {
 		setIsInstalling(true);
-		setShowUpdateWarning(false);
 		setInstallError(null);
 		try {
-			const label = status === "outdated" ? "Claude Code Update" : "Claude Code Install";
+			const silentApi = globalThis.electronAPI?.installClaudeCodeSilent;
+			if (silentApi) {
+				const result = await silentApi();
+				if (result.success) {
+					await refreshClaude();
+					setTimeout(() => refreshClaude(), VERSION_RECHECK_DELAY_MS);
+					return;
+				}
+				// Only fall through to terminal mode for the explicit "needs a
+				// terminal" sentinel (fresh install). Any other error is shown
+				// to the user without launching a doomed terminal flow.
+				if (!result.error?.startsWith("silent_install_unavailable")) {
+					setInstallError(
+						result.error ||
+							t("navigation:claudeCode.installFailed", "Installation failed"),
+					);
+					return;
+				}
+			}
+
+			const label =
+				status === "outdated" ? "Claude Code Update" : "Claude Code Install";
 			const command = "claude install --force latest\n";
 
 			const opened = await openInternalTerminal(label, command);
 			if (!opened) {
-				setInstallError("Failed to open terminal");
+				setInstallError(
+					t(
+						"navigation:claudeCode.terminalUnavailable",
+						"Could not open a terminal. Try installing Claude Code from a terminal manually.",
+					),
+				);
 				return;
 			}
 
@@ -251,7 +287,9 @@ export function ClaudeCodeStatusBadge({
 		} catch (err) {
 			console.error("Failed to install Claude Code:", err);
 			setInstallError(
-				err instanceof Error ? err.message : "Installation failed",
+				err instanceof Error
+					? err.message
+					: t("navigation:claudeCode.installFailed", "Installation failed"),
 			);
 		} finally {
 			setIsInstalling(false);
@@ -272,7 +310,12 @@ export function ClaudeCodeStatusBadge({
 
 			const opened = await openInternalTerminal(label, command);
 			if (!opened) {
-				setInstallError("Failed to open terminal");
+				setInstallError(
+					t(
+						"navigation:claudeCode.terminalUnavailable",
+						"Could not open a terminal. Try installing Claude Code from a terminal manually.",
+					),
+				);
 				return;
 			}
 
@@ -283,7 +326,12 @@ export function ClaudeCodeStatusBadge({
 		} catch (err) {
 			console.error("Failed to switch Claude Code version:", err);
 			setInstallError(
-				err instanceof Error ? err.message : "Failed to switch version",
+				err instanceof Error
+					? err.message
+					: t(
+							"navigation:claudeCode.versionSwitchFailed",
+							"Failed to switch version",
+						),
 			);
 		} finally {
 			setIsInstalling(false);
@@ -329,15 +377,12 @@ export function ClaudeCodeStatusBadge({
 		}
 	};
 
-	// Handle install/update button click
+	// Handle install/update button click. The silent path runs `claude install
+	// --force latest` in the background and does NOT close existing sessions,
+	// so no confirmation dialog is needed. If the silent path is unavailable
+	// (fresh install) performInstall falls back to a terminal on its own.
 	const handleInstall = () => {
-		if (status === "outdated") {
-			// Show warning for updates since it will close running Claude sessions
-			setShowUpdateWarning(true);
-		} else {
-			// Fresh install - no warning needed
-			performInstall();
-		}
+		performInstall();
 	};
 
 	// Handle installation selection
@@ -750,43 +795,6 @@ export function ClaudeCodeStatusBadge({
 					</Button>
 				</div>
 			</PopoverContent>
-
-			{/* Update warning dialog */}
-			<AlertDialog open={showUpdateWarning} onOpenChange={setShowUpdateWarning}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>
-							{t(
-								"navigation:claudeCode.updateWarningTitle",
-								"Update Claude Code?",
-							)}
-						</AlertDialogTitle>
-						<AlertDialogDescription>
-							{t(
-								"navigation:claudeCode.updateWarningDescription",
-								"Updating will close all running Claude Code sessions. Any unsaved work in those sessions may be lost. Make sure to save your work before proceeding.",
-							)}
-							<span className="block mt-2 font-semibold text-foreground">
-								{t(
-									"navigation:claudeCode.updateWarningTerminalNote",
-									"A terminal window will open to run the installation command. Please wait for the installation to complete before continuing.",
-								)}
-							</span>
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel>
-							{t("common:cancel", "Cancel")}
-						</AlertDialogCancel>
-						<AlertDialogAction onClick={performInstall}>
-							{t(
-								"navigation:claudeCode.updateAnyway",
-								"Open Terminal & Update",
-							)}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
 
 			{/* Version rollback warning dialog */}
 			<AlertDialog

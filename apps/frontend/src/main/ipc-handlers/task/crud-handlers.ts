@@ -22,7 +22,28 @@ import { titleGenerator } from "../../title-generator";
 import { findAllSpecPaths, isValidTaskId } from "../../utils/spec-path-helpers";
 import { cleanupWorktree } from "../../utils/worktree-cleanup";
 import { findTaskWorktree, isPathWithinBase } from "../../worktree-paths";
+import { inlineAzureDevOpsImages } from "../shared/azure-attachments";
+import { stripHtml } from "../shared/sanitize";
+import { parseEnvFile } from "../utils";
 import { findTaskAndProject } from "./shared";
+
+/** Charge le PAT et l'URL d'organisation Azure DevOps depuis le `.env` projet. */
+function loadAzureDevOpsConfig(
+	projectPath: string,
+	autoBuildPath: string,
+): { pat: string | null; orgUrl: string | null } {
+	try {
+		const envPath = path.join(projectPath, autoBuildPath, ".env");
+		if (!existsSync(envPath)) return { pat: null, orgUrl: null };
+		const vars = parseEnvFile(readFileSync(envPath, "utf-8"));
+		return {
+			pat: vars.AZURE_DEVOPS_PAT || null,
+			orgUrl: vars.AZURE_DEVOPS_ORG_URL || null,
+		};
+	} catch {
+		return { pat: null, orgUrl: null };
+	}
+}
 
 /**
  * Register task CRUD (Create, Read, Update, Delete) handlers
@@ -82,21 +103,56 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 				return { success: false, error: "Project not found" };
 			}
 
-			// Auto-generate title if empty using Claude AI
-			let finalTitle = title;
+			// Les descriptions importées depuis un tracker (Azure DevOps, Jira)
+			// arrivent en HTML enrichi. On en dérive :
+			//  - `aiDescription` : texte brut (titres/spec/prompt IA, pas de HTML) ;
+			//  - `displayDescription` : HTML conservé pour l'affichage, avec les
+			//    images en pièce jointe Azure DevOps inlinées en data URIs (sinon
+			//    elles nécessitent un PAT et échouent dans le renderer).
+			const descriptionIsHtml =
+				typeof description === "string" &&
+				description.trimStart().startsWith("<");
+			let aiDescription = description;
+			let displayDescription = description;
+			if (descriptionIsHtml) {
+				aiDescription = stripHtml(description) || description;
+				displayDescription = description;
+				if (metadata?.importSource === "azure-devops") {
+					const az = loadAzureDevOpsConfig(
+						project.path,
+						project.autoBuildPath || "",
+					);
+					if (az.pat && az.orgUrl) {
+						try {
+							displayDescription = await inlineAzureDevOpsImages(
+								description,
+								az.orgUrl,
+								az.pat,
+							);
+						} catch (err) {
+							console.error("[TASK_CREATE] Image inlining failed:", err);
+						}
+					}
+				}
+			}
+
+			// Auto-generate title if empty using Claude AI.
+			// Le titre est toujours réduit en texte brut : un titre HTML enrichi
+			// (US/RsD Azure DevOps) ne doit jamais être affiché tel quel.
+			let finalTitle = title?.trim() ? stripHtml(title) || title : title;
 			if (!title?.trim()) {
 				console.warn(
 					"[TASK_CREATE] Title is empty, generating with Claude AI...",
 				);
 				try {
 					const generatedTitle =
-						await titleGenerator.generateTitle(description);
+						await titleGenerator.generateTitle(aiDescription);
 					if (generatedTitle) {
 						finalTitle = generatedTitle;
 						console.warn("[TASK_CREATE] Generated title:", finalTitle);
 					} else {
 						// Fallback: create title from first line of description
-						finalTitle = description.split("\n")[0].substring(0, 60);
+						finalTitle = aiDescription.split("\n")[0].substring(0, 60);
 						if (finalTitle.length === 60) finalTitle += "...";
 						console.warn(
 							"[TASK_CREATE] AI generation failed, using fallback:",
@@ -106,7 +162,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 				} catch (err) {
 					console.error("[TASK_CREATE] Title generation error:", err);
 					// Fallback: create title from first line of description
-					finalTitle = description.split("\n")[0].substring(0, 60);
+					finalTitle = aiDescription.split("\n")[0].substring(0, 60);
 					if (finalTitle.length === 60) finalTitle += "...";
 				}
 			}
@@ -151,7 +207,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 			// Create spec ID with zero-padded number and slugified title
 			const slugifiedTitle = finalTitle
 				.toLowerCase()
-				.replace(/[^a-z0-9]+/g, "-")
+				.replace(/[^\p{L}\p{N}]+/gu, "-")
 				.replace(/^-|-$/g, "")
 				.substring(0, 50);
 			const specId = `${String(specNumber).padStart(3, "0")}-${slugifiedTitle}`;
@@ -251,7 +307,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 			const now = new Date().toISOString();
 			const implementationPlan = {
 				feature: finalTitle,
-				description: description,
+				description: aiDescription,
 				created_at: now,
 				updated_at: now,
 				status: "pending",
@@ -277,9 +333,31 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 
 			// Create requirements.json with attached images
 			const requirements: Record<string, unknown> = {
-				task_description: description,
+				task_description: aiDescription,
 				workflow_type: taskMetadata.category || "feature",
 			};
+
+			// Conserver le HTML enrichi (images inlinées comprises) pour l'UI sans
+			// polluer `task_description` consommé par l'IA. project-store privilégie
+			// ce champ pour l'affichage de la description.
+			if (descriptionIsHtml && displayDescription !== aiDescription) {
+				requirements.display_description = displayDescription;
+			}
+
+			// Propagate acceptance criteria so they reach every pipeline phase
+			// (planner, spec_writer, qa_reviewer all read this from requirements.json).
+			if (
+				taskMetadata.acceptanceCriteria &&
+				taskMetadata.acceptanceCriteria.length > 0
+			) {
+				requirements.acceptance_criteria = taskMetadata.acceptanceCriteria;
+			}
+
+			// Propagate free-form extra note as `additional_context` so it gets
+			// surfaced to the orchestrator (see _load_requirements_context).
+			if (taskMetadata.extraNote?.trim()) {
+				requirements.additional_context = taskMetadata.extraNote.trim();
+			}
 
 			// Add attached images to requirements if present
 			if (
@@ -311,7 +389,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 				specId: specId,
 				projectId,
 				title: finalTitle,
-				description,
+				description: displayDescription,
 				status: "backlog",
 				subtasks: [],
 				logs: [],
@@ -375,6 +453,9 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 					commitMessage: "Auto-save before task deletion",
 					logPrefix: "[TASK_DELETE]",
 					deleteBranch: true,
+					// Ferme la PR distante associée pour éviter une PR
+					// orpheline pointant vers une branche supprimée.
+					prUrl: task.prUrl ?? task.metadata?.prUrl,
 				});
 
 				if (!cleanupResult.success) {
@@ -388,6 +469,11 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 					if (cleanupResult.autoCommitted) {
 						console.warn(
 							`[TASK_DELETE] Auto-committed uncommitted work before deletion`,
+						);
+					}
+					if (cleanupResult.prClosed && cleanupResult.closedPrNumber) {
+						console.warn(
+							`[TASK_DELETE] PR #${cleanupResult.closedPrNumber} fermée automatiquement`,
 						);
 					}
 					if (cleanupResult.warnings.length > 0) {
@@ -484,11 +570,47 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 					return { success: false, error: "Spec directory not found" };
 				}
 
+				// Derive AI-facing plain text and display HTML from the (possibly
+				// HTML) description, mirroring task creation:
+				//  - AI-consumed fields (plan, spec.md, task_description) get plain
+				//    text so the prompt is never polluted with markup or multi-MB
+				//    inlined image data URIs;
+				//  - the rich HTML — including inlined Azure DevOps images — is kept
+				//    in `display_description` for the UI.
+				const descriptionProvided = updates.description !== undefined;
+				const descriptionIsHtml =
+					descriptionProvided &&
+					(updates.description as string).trimStart().startsWith("<");
+				let aiDescription = updates.description;
+				let displayDescription = updates.description;
+				if (descriptionIsHtml) {
+					const html = updates.description as string;
+					aiDescription = stripHtml(html) || html;
+					displayDescription = html;
+					if (task.metadata?.importSource === "azure-devops") {
+						const az = loadAzureDevOpsConfig(
+							project.path,
+							project.autoBuildPath || "",
+						);
+						if (az.pat && az.orgUrl) {
+							try {
+								displayDescription = await inlineAzureDevOpsImages(
+									html,
+									az.orgUrl,
+									az.pat,
+								);
+							} catch (err) {
+								console.error("[TASK_UPDATE] Image inlining failed:", err);
+							}
+						}
+					}
+				}
+
 				// Auto-generate title if empty
 				let finalTitle = updates.title;
 				if (updates.title !== undefined && !updates.title.trim()) {
-					// Get description to use for title generation
-					const descriptionToUse = updates.description ?? task.description;
+					// Get description to use for title generation (plain text)
+					const descriptionToUse = aiDescription ?? task.description;
 					console.warn(
 						"[TASK_UPDATE] Title is empty, generating with Claude AI...",
 					);
@@ -527,8 +649,8 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 					if (finalTitle !== undefined) {
 						plan.feature = finalTitle;
 					}
-					if (updates.description !== undefined) {
-						plan.description = updates.description;
+					if (descriptionProvided) {
+						plan.description = aiDescription;
 					}
 					plan.updated_at = new Date().toISOString();
 
@@ -554,11 +676,11 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 					}
 
 					// Update description (## Overview section content)
-					if (updates.description !== undefined) {
+					if (descriptionProvided) {
 						// Replace content between ## Overview and the next ## section
 						specContent = specContent.replace(
 							/(## Overview\n)([\s\S]*?)((?=\n## )|$)/,
-							`$1${updates.description}\n\n$3`,
+							`$1${aiDescription}\n\n$3`,
 						);
 					}
 
@@ -679,11 +801,30 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 						const requirementsContent = readFileSync(requirementsPath, "utf-8");
 						const requirements = JSON.parse(requirementsContent);
 
-						if (updates.description !== undefined) {
-							requirements.task_description = updates.description;
+						if (descriptionProvided) {
+							requirements.task_description = aiDescription;
+							// Keep the rich HTML (with inlined images) for display only,
+							// without polluting the AI-consumed task_description.
+							if (descriptionIsHtml && displayDescription !== aiDescription) {
+								requirements.display_description = displayDescription;
+							} else {
+								delete requirements.display_description;
+							}
 						}
 						if (updates.metadata.category) {
 							requirements.workflow_type = updates.metadata.category;
+						}
+						if (updates.metadata.acceptanceCriteria !== undefined) {
+							requirements.acceptance_criteria =
+								updates.metadata.acceptanceCriteria;
+						}
+						if (updates.metadata.extraNote !== undefined) {
+							const trimmed = updates.metadata.extraNote.trim();
+							if (trimmed) {
+								requirements.additional_context = trimmed;
+							} else {
+								delete requirements.additional_context;
+							}
 						}
 
 						writeFileSync(
@@ -698,11 +839,13 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 					}
 				}
 
-				// Build the updated task object
+				// Build the updated task object. Surface the display HTML (with
+				// inlined images) so the UI matches what is persisted as
+				// display_description, consistent with task creation.
 				const updatedTask: Task = {
 					...task,
 					title: finalTitle ?? task.title,
-					description: updates.description ?? task.description,
+					description: displayDescription ?? task.description,
 					metadata: updatedMetadata,
 					updatedAt: new Date(),
 				};

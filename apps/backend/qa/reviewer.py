@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Union
 
 # Memory integration for cross-session learning
+from agents.agent_audit import audit_event
 from agents.memory_manager import get_graphiti_context, save_session_memory
 from core.agent_client import AgentClient, ContentBlockType
 
@@ -194,6 +195,14 @@ async def run_qa_agent_session(
         spec_dir=str(spec_dir),
         qa_session=qa_session,
         max_iterations=max_iterations,
+    )
+    audit_event(
+        project_dir,
+        kind="agent_invoked",
+        actor="qa_reviewer",
+        correlation_id=spec_dir.name,
+        summary=f"QA reviewer session {qa_session} invoked",
+        payload={"qa_session": qa_session, "max_iterations": max_iterations},
     )
 
     print(f"\n{'=' * 70}")
@@ -420,12 +429,12 @@ This is attempt {previous_error.get("consecutive_errors", 1) + 1}. If you fail t
                         # Safely extract tool input (handles None, non-dict, etc.)
                         inp = get_safe_tool_input(block)
 
-                        # Extract tool input for display
+                        # Extract tool input for display (full command/path)
                         if inp:
                             if "file_path" in inp:
-                                fp = inp["file_path"]
-                                if len(fp) > 50:
-                                    fp = "..." + fp[-47:]
+                                fp = str(inp["file_path"])
+                                if len(fp) > 2000:
+                                    fp = "..." + fp[-1997:]
                                 tool_input_display = fp
                             elif "pattern" in inp:
                                 tool_input_display = f"pattern: {inp['pattern']}"
@@ -676,16 +685,16 @@ async def _run_qa_agent_client_session(
 
                     if inp:
                         if "file_path" in inp:
-                            fp = inp["file_path"]
-                            if len(fp) > 50:
-                                fp = "..." + fp[-47:]
+                            fp = str(inp["file_path"])
+                            if len(fp) > 2000:
+                                fp = "..." + fp[-1997:]
                             tool_input_display = fp
                         elif "pattern" in inp:
                             tool_input_display = f"pattern: {inp['pattern']}"
                         elif "command" in inp:
-                            cmd = inp["command"]
-                            if len(cmd) > 50:
-                                cmd = cmd[:47] + "..."
+                            cmd = str(inp["command"])
+                            if len(cmd) > 2000:
+                                cmd = cmd[:1997] + "..."
                             tool_input_display = cmd
 
                     debug(
@@ -876,6 +885,19 @@ async def _process_qa_result(
         tool_count=tool_count,
         response_length=len(response_text),
         qa_status=status.get("status") if status else "unknown",
+    )
+    qa_status_value = status.get("status") if status else "unknown"
+    audit_event(
+        project_dir,
+        kind="agent_completed" if qa_status_value == "approved" else "agent_failed",
+        actor="qa_reviewer",
+        correlation_id=spec_dir.name,
+        summary=f"QA reviewer session {qa_session} → {qa_status_value}",
+        payload={
+            "qa_session": qa_session,
+            "verdict": qa_status_value,
+            "result_error": (str(result_error)[:500] if result_error else ""),
+        },
     )
 
     qa_discoveries = {

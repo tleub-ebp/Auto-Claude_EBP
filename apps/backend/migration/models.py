@@ -148,6 +148,14 @@ class TransformationResult:
             data["applied_at"] = self.applied_at.isoformat()
         return data
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TransformationResult":
+        data = dict(data)
+        applied_at = data.get("applied_at")
+        if isinstance(applied_at, str):
+            data["applied_at"] = datetime.fromisoformat(applied_at)
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
     def get_diff(self) -> str:
         """Generate unified diff representation."""
         from difflib import unified_diff

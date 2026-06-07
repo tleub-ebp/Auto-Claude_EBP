@@ -80,19 +80,42 @@ def validate_shell_c_command(command_string: str) -> ValidationResult:
     inner_command = _extract_c_argument(command_string)
 
     if inner_command is None:
-        # Not a -c invocation (e.g., "bash script.sh")
-        # Block dangerous shell constructs that could bypass sandbox restrictions:
-        # - Process substitution: <(...) or >(...)
-        # - Command substitution in dangerous contexts: $(...)
-        dangerous_patterns = ["<(", ">("]
+        # Not a -c invocation. Block:
+        # - Process substitution: <(...), >(...)
+        # - Command substitution: $(...) and backticks
+        # - Here-strings: <<<
+        # These are not validated by the allowlist and let an attacker run
+        # arbitrary commands inside otherwise-allowed shell invocations.
+        dangerous_patterns = ["<(", ">(", "$(", "`", "<<<"]
         for pattern in dangerous_patterns:
             if pattern in command_string:
                 return (
                     False,
-                    f"Process substitution '{pattern}' not allowed in shell commands",
+                    f"Shell metacharacter '{pattern}' not allowed in shell commands",
                 )
-        # Allow simple shell invocations (e.g., "bash script.sh")
-        # The script itself would need to be in allowed commands
+
+        # Reject `bash script.sh` form: the script's contents are not
+        # validated against the allowlist, so an agent that wrote `evil.sh`
+        # could invoke arbitrary commands by running it.
+        try:
+            tokens = shlex.split(command_string)
+        except ValueError:
+            return False, "Could not parse shell command"
+        if len(tokens) >= 2:
+            base_cmd = _cross_platform_basename(tokens[0])
+            if base_cmd in SHELL_INTERPRETERS:
+                # Allow bare `bash`, `bash --version`, etc., but reject any
+                # form that would execute a script file.
+                non_flag_args = [t for t in tokens[1:] if not t.startswith("-")]
+                if non_flag_args:
+                    return (
+                        False,
+                        (
+                            f"Executing a script via '{base_cmd} {non_flag_args[0]}' is "
+                            "not allowed: the script's contents bypass the command "
+                            f"allowlist. Use '{base_cmd} -c <inline command>' instead."
+                        ),
+                    )
         return True, ""
 
     # Get the security profile for the current project

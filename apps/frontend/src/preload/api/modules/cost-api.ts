@@ -40,10 +40,27 @@ export interface DashboardSnapshot {
 	merge_manual_count: number;
 }
 
+export interface ContextUsage {
+	provider: string;
+	model: string;
+	/** input_tokens de la dernière requête = remplissage du contexte */
+	contextTokens: number;
+	outputTokens: number;
+	timestamp: string;
+}
+
 export interface CostAPI {
 	getCostSummary(
 		projectPath: string,
 	): Promise<{ success: boolean; summary?: CostSummary; error?: string }>;
+	getContextUsage(
+		projectPath: string,
+		provider: string,
+	): Promise<{
+		success: boolean;
+		contextUsage?: ContextUsage | null;
+		error?: string;
+	}>;
 	getCostBudget(
 		projectPath: string,
 	): Promise<{ success: boolean; budget?: BudgetInfo; error?: string }>;
@@ -66,6 +83,9 @@ export interface CostAPI {
 export const createCostAPI = (): CostAPI => ({
 	getCostSummary: (projectPath: string) =>
 		ipcRenderer.invoke("costs:getSummary", projectPath),
+
+	getContextUsage: (projectPath: string, provider: string) =>
+		ipcRenderer.invoke("costs:getContextUsage", projectPath, provider),
 
 	getCostBudget: (projectPath: string) =>
 		ipcRenderer.invoke("costs:getBudget", projectPath),

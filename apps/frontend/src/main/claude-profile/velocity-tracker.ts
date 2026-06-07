@@ -47,7 +47,7 @@ class VelocityTracker {
 	private static instance: VelocityTracker;
 
 	/** Historical data points per profile (keyed by profileId) */
-	private dataPoints: Map<string, UsageDataPoint[]> = new Map();
+	private readonly dataPoints: Map<string, UsageDataPoint[]> = new Map();
 
 	private constructor() {}
 
@@ -67,6 +67,16 @@ class VelocityTracker {
 		sessionPercent: number,
 		weeklyPercent: number,
 	): void {
+		if (
+			!Number.isFinite(sessionPercent) ||
+			!Number.isFinite(weeklyPercent) ||
+			sessionPercent < 0 ||
+			sessionPercent > 100 ||
+			weeklyPercent < 0 ||
+			weeklyPercent > 100
+		) {
+			return;
+		}
 		const now = Date.now();
 		const point: UsageDataPoint = {
 			sessionPercent,
@@ -196,7 +206,8 @@ class VelocityTracker {
 			return { sessionMinutesRemaining: null, weeklyMinutesRemaining: null };
 		}
 
-		const latest = points[points.length - 1];
+		// biome-ignore lint/style/noNonNullAssertion: safely accessed after length check
+		const latest = points.at(-1)!;
 
 		// Session time-to-limit
 		let sessionMinutesRemaining: number | null = null;
@@ -216,14 +227,12 @@ class VelocityTracker {
 		}
 
 		return {
-			sessionMinutesRemaining:
-				sessionMinutesRemaining !== null
-					? Math.round(sessionMinutesRemaining * 10) / 10
-					: null,
-			weeklyMinutesRemaining:
-				weeklyMinutesRemaining !== null
-					? Math.round(weeklyMinutesRemaining * 10) / 10
-					: null,
+			sessionMinutesRemaining: sessionMinutesRemaining
+				? Math.round(sessionMinutesRemaining * 10) / 10
+				: null,
+			weeklyMinutesRemaining: weeklyMinutesRemaining
+				? Math.round(weeklyMinutesRemaining * 10) / 10
+				: null,
 		};
 	}
 

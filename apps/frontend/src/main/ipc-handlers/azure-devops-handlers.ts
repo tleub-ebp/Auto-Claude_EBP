@@ -1,4 +1,4 @@
-﻿import { spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -25,7 +25,20 @@ import type {
 } from "../../shared/types";
 import type { AgentManager } from "../agent";
 import { projectStore } from "../project-store";
-import { sanitizeText, sanitizeUrl } from "./shared/sanitize";
+import {
+	parseAcceptanceCriteriaText,
+	stripAcceptanceCriteriaSection,
+} from "../../shared/utils/acceptance-criteria";
+import {
+	inlineAzureDevOpsImages,
+	stripAzureAttachmentImages,
+} from "./shared/azure-attachments";
+import {
+	sanitizeText,
+	sanitizeUrl,
+	stripControlChars,
+	stripHtml,
+} from "./shared/sanitize";
 import { parseEnvFile } from "./utils";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -179,6 +192,7 @@ try:
             'areaPath': item.area_path,
             'iterationPath': item.iteration_path,
             'url': item.url,
+            'acceptanceCriteria': item.acceptance_criteria,
         } for item in items]
         print(json.dumps({'data': result}))
     
@@ -216,6 +230,26 @@ try:
                 sys.exit(1)
 
         print(json.dumps({'data': info}))
+    
+    elif operation == 'get_work_item':
+        work_item_id = int(params.get('work_item_id'))
+        item = connector.get_item(project=project, item_id=work_item_id)
+        result = {
+            'id': item.id,
+            'title': item.title,
+            'description': item.description,
+            'state': item.state,
+            'workItemType': item.work_item_type,
+            'assignedTo': item.assigned_to,
+            'tags': item.tags,
+            'priority': item.priority,
+            'createdDate': item.created_date.isoformat() if hasattr(item.created_date, 'isoformat') else item.created_date,
+            'areaPath': item.area_path,
+            'iterationPath': item.iteration_path,
+            'url': item.url,
+            'acceptanceCriteria': item.acceptance_criteria,
+        }
+        print(json.dumps({'data': result}))
     
     else:
         print(json.dumps({'error': f'Unknown operation: {operation}'}))
@@ -530,6 +564,58 @@ except Exception as e:
 		},
 	);
 
+	// Fetch a single work item directly by its global ID. Unlike
+	// GET_WORK_ITEMS (which lists the backlog and is capped/filtered), this
+	// resolves any work item — including custom types (e.g. RSD) or items
+	// outside the backlog window — so the import search can find it by ID.
+	ipcMain.handle(
+		IPC_CHANNELS.AZURE_DEVOPS_GET_WORK_ITEM,
+		async (
+			_,
+			projectId: string,
+			workItemId: number,
+		): Promise<IPCResult<AzureDevOpsWorkItem>> => {
+			const project = projectStore.getProject(projectId);
+			if (!project) {
+				return { success: false, error: "Project not found" };
+			}
+
+			const config = getAzureDevOpsConfig(project);
+			const envOverrides: Record<string, string> = {};
+			if (config.pat) envOverrides.AZURE_DEVOPS_PAT = config.pat;
+			if (config.orgUrl) envOverrides.AZURE_DEVOPS_ORG_URL = config.orgUrl;
+			const normalizedProject = normalizeProjectName(config.projectName);
+			if (normalizedProject)
+				envOverrides.AZURE_DEVOPS_PROJECT = normalizedProject;
+			if (!config.pat || !config.orgUrl) {
+				return {
+					success: false,
+					error: "Azure DevOps not configured for this project",
+				};
+			}
+
+			try {
+				const projectPath = path.join(
+					project.path,
+					project.autoBuildPath || "",
+				);
+
+				const item = (await callAzureDevOpsPython(
+					projectPath,
+					"get_work_item",
+					{ work_item_id: workItemId },
+					envOverrides,
+				)) as AzureDevOpsWorkItem;
+
+				return { success: true, data: item };
+			} catch (error: unknown) {
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				return { success: false, error: errorMessage };
+			}
+		},
+	);
+
 	ipcMain.handle(
 		IPC_CHANNELS.AZURE_DEVOPS_IMPORT_WORK_ITEMS,
 		async (
@@ -611,18 +697,42 @@ except Exception as e:
 
 				for (const item of selectedItems) {
 					try {
-						// Sanitize inputs
-						const safeTitle = sanitizeText(item.title, 200);
+						// Sanitize inputs.
+						// Le titre Azure DevOps peut contenir du HTML enrichi : on le
+						// réduit en texte brut sur une seule ligne (pas d'interprétation HTML).
+						const safeTitle = sanitizeText(
+							stripHtml(item.title).replace(/\s+/g, " "),
+							200,
+						);
 						const safeDescription = item.description
-							? sanitizeText(item.description, 5000)
+							? stripAcceptanceCriteriaSection(
+									sanitizeText(item.description, 5000),
+								)
 							: "";
+
+						// Description HTML conservée pour l'affichage (rendu enrichi).
+						// On inline les images en pièce jointe Azure DevOps (auth PAT)
+						// en data URIs pour qu'elles s'affichent dans le renderer.
+						let displayDescription = item.description
+							? stripAcceptanceCriteriaSection(
+									stripControlChars(item.description, true),
+								)
+							: "";
+						if (displayDescription && config.pat && config.orgUrl) {
+							displayDescription = await inlineAzureDevOpsImages(
+								displayDescription,
+								config.orgUrl,
+								config.pat,
+							);
+						}
+
 						const safeIdentifier = sanitizeText(`ADO-${item.id}`, 100);
 						const safeUrl = item.url ? sanitizeUrl(item.url) : "";
 
 						const slugifiedTitle =
 							safeTitle
 								.toLowerCase()
-								.replace(/[^a-z0-9]+/g, "-")
+								.replace(/[^\p{L}\p{N}]+/gu, "-")
 								.replace(/^-|-$/g, "")
 								.substring(0, 50) || "task";
 						const specId = `${String(specNumber).padStart(3, "0")}-${slugifiedTitle}`;
@@ -655,6 +765,10 @@ except Exception as e:
 							else if (item.priority >= 3) priority = "low";
 						}
 
+						const acceptanceCriteriaList = parseAcceptanceCriteriaText(
+							item.acceptanceCriteria,
+						);
+
 						const metadata: TaskMetadata = {
 							sourceType: "imported",
 							category: category as import("../../shared/types").TaskCategory,
@@ -663,6 +777,9 @@ except Exception as e:
 							azureDevOpsUrl: safeUrl,
 							azureDevOpsState: item.state,
 							azureDevOpsType: item.workItemType,
+							...(acceptanceCriteriaList.length > 0 && {
+								acceptanceCriteria: acceptanceCriteriaList,
+							}),
 							...(options?.requireReviewBeforeCoding && {
 								requireReviewBeforeCoding: true,
 							}),
@@ -703,37 +820,26 @@ except Exception as e:
 						descriptionParts.push("## Description");
 						descriptionParts.push("");
 						if (safeDescription) {
-							// Strip HTML tags from Azure DevOps rich text descriptions
-							// Use a loop to handle nested/reconstructed tags (e.g., <<script>script>)
-							let cleanDescription = safeDescription
-								.replace(/<br\s*\/?>/gi, "\n")
-								.replace(
-									/<\/?(p|div|li|ul|ol|h[1-6]|span|strong|em|b|i|a|table|tr|td|th|thead|tbody)[^>]*>/gi,
-									"\n",
-								);
-							// Repeatedly strip remaining tags until stable
-							let prev = "";
-							while (prev !== cleanDescription) {
-								prev = cleanDescription;
-								cleanDescription = cleanDescription.replace(/<[^>]+>/g, "");
-							}
-							// Decode HTML entities (order matters: decode &amp; last to avoid double-decode)
-							cleanDescription = cleanDescription
-								.replace(/&nbsp;/g, " ")
-								.replace(/&lt;/g, "<")
-								.replace(/&gt;/g, ">")
-								.replace(/&quot;/g, '"')
-								.replace(/&amp;/g, "&")
-								.replace(/\n{3,}/g, "\n\n")
-								.trim();
+							// Réduire la description HTML enrichie Azure DevOps en texte brut
+							// pour le pipeline de spec (les images sont retirées ici).
+							const cleanDescription = stripHtml(safeDescription);
 							descriptionParts.push(cleanDescription || safeTitle);
 						} else {
 							descriptionParts.push(safeTitle);
 						}
 
+						if (acceptanceCriteriaList.length > 0) {
+							descriptionParts.push("");
+							descriptionParts.push("## Acceptance Criteria");
+							descriptionParts.push("");
+							for (const criterion of acceptanceCriteriaList) {
+								descriptionParts.push(`- ${criterion}`);
+							}
+						}
+
 						const richDescription = descriptionParts.join("\n");
 
-						const requirements = {
+						const requirements: Record<string, unknown> = {
 							task_description: richDescription,
 							workflow_type:
 								category === "bug"
@@ -742,6 +848,22 @@ except Exception as e:
 										? "feature"
 										: category,
 						};
+						// Titre propre et accentué du work item, conservé pour l'affichage.
+						// Le scanner le sert en priorité dans extractTitle, ce qui évite de
+						// retomber sur le nom de dossier slugifié (accents perdus).
+						if (safeTitle) {
+							requirements.display_title = safeTitle;
+						}
+						// HTML enrichi (images Azure DevOps inlinées en data URIs) conservé
+						// séparément pour l'affichage. La scanner le sert en priorité 0
+						// (getRequirementsDisplayDescription) afin que les captures de l'US/RsD
+						// s'affichent sans authentification ni accès réseau au rendu.
+						if (displayDescription) {
+							requirements.display_description = displayDescription;
+						}
+						if (acceptanceCriteriaList.length > 0) {
+							requirements.acceptance_criteria = acceptanceCriteriaList;
+						}
 						const requirementsPath = path.join(
 							specDir,
 							AUTO_BUILD_PATHS.REQUIREMENTS,
@@ -764,7 +886,7 @@ except Exception as e:
 							specId,
 							projectId: project.id,
 							title: safeTitle,
-							description: safeDescription,
+							description: displayDescription || safeDescription,
 							status: "backlog",
 							subtasks: [],
 							logs: [],
@@ -795,6 +917,249 @@ except Exception as e:
 						tasks: importedTasks,
 					},
 				};
+			} catch (error: unknown) {
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				return { success: false, error: errorMessage };
+			}
+		},
+	);
+
+	// ============================================
+	// Azure DevOps imported-task display hydration (on demand)
+	// ============================================
+
+	/**
+	 * Hydrate the display fields of an imported Azure DevOps task on open.
+	 *
+	 * Older imports stored the raw work-item HTML in requirements.json and lost
+	 * the clean title (the spec-folder name is slugified, so accents are gone:
+	 * "Fenêtre…" → "fen-tre-…"). Two repairs, both lazy and one-shot:
+	 *
+	 *  - Title: when requirements.display_title is missing, fetch the work item's
+	 *    System.Title via the PAT (accents intact), and persist it. extractTitle
+	 *    serves it with top priority.
+	 *  - Images: `<img src="https://dev.azure.com/.../_apis/wit/attachments/...">`
+	 *    need PAT auth, so the renderer can't load them (ERR_TIMED_OUT). We
+	 *    download + base64-inline them (display_description); any that still fail
+	 *    are stripped so they never re-fire a failing request.
+	 *
+	 * Returns the (cleaned) html and the resolved title so the renderer can show
+	 * them immediately; both are also persisted for subsequent scans.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.AZURE_DEVOPS_HYDRATE_TASK_DISPLAY,
+		async (
+			_,
+			projectId: string,
+			taskId: string,
+		): Promise<IPCResult<{ html: string; title?: string }>> => {
+			try {
+				const project = projectStore.getProject(projectId);
+				if (!project) {
+					return { success: false, error: "Project not found" };
+				}
+
+				const task = projectStore
+					.getTasks(projectId)
+					.find((t) => t.id === taskId);
+				const specDir = task?.specsPath;
+				if (!specDir) {
+					return { success: false, error: "Task spec directory not found" };
+				}
+
+				const requirementsPath = path.join(
+					specDir,
+					AUTO_BUILD_PATHS.REQUIREMENTS,
+				);
+				if (!existsSync(requirementsPath)) {
+					return { success: false, error: "requirements.json not found" };
+				}
+
+				let requirements: Record<string, unknown>;
+				try {
+					requirements = JSON.parse(readFileSync(requirementsPath, "utf-8"));
+				} catch {
+					return { success: false, error: "requirements.json is malformed" };
+				}
+
+				const config = getAzureDevOpsConfig(project);
+				let changed = false;
+
+				// --- Title backfill (accented System.Title) -------------------------
+				let resolvedTitle =
+					typeof requirements.display_title === "string"
+						? requirements.display_title
+						: undefined;
+				const identifier = task?.metadata?.azureDevOpsIdentifier ?? "";
+				const workItemId = Number.parseInt(identifier.replace(/\D/g, ""), 10);
+				if (
+					!resolvedTitle &&
+					Number.isFinite(workItemId) &&
+					workItemId > 0 &&
+					config.pat &&
+					config.orgUrl
+				) {
+					try {
+						const projectPath = path.join(
+							project.path,
+							project.autoBuildPath || "",
+						);
+						const envOverrides: Record<string, string> = {
+							AZURE_DEVOPS_PAT: config.pat,
+							AZURE_DEVOPS_ORG_URL: config.orgUrl,
+						};
+						const normalizedProject = normalizeProjectName(config.projectName);
+						if (normalizedProject)
+							envOverrides.AZURE_DEVOPS_PROJECT = normalizedProject;
+
+						const rawItem = (await callAzureDevOpsPython(
+							projectPath,
+							"get_work_item",
+							{ work_item_id: workItemId },
+							envOverrides,
+						)) as { id: number; title?: string };
+
+						const cleanTitle = sanitizeText(
+							stripHtml(rawItem.title ?? "").replace(/\s+/g, " "),
+							200,
+						);
+						if (cleanTitle) {
+							requirements.display_title = cleanTitle;
+							resolvedTitle = cleanTitle;
+							changed = true;
+						}
+					} catch (err) {
+						console.warn(
+							"[AZURE_DEVOPS_HYDRATE_TASK_DISPLAY] Title fetch failed (non-fatal):",
+							err,
+						);
+					}
+				}
+
+				// --- Image inlining --------------------------------------------------
+				// Prefer an already-inlined display description, else the raw one.
+				const sourceHtml =
+					typeof requirements.display_description === "string" &&
+					requirements.display_description
+						? requirements.display_description
+						: typeof requirements.task_description === "string"
+							? requirements.task_description
+							: "";
+
+				let html = sourceHtml;
+				if (sourceHtml.includes("<img")) {
+					if (config.pat && config.orgUrl) {
+						html = await inlineAzureDevOpsImages(
+							sourceHtml,
+							config.orgUrl,
+							config.pat,
+						);
+					}
+					// Strip any attachment image that couldn't be inlined (no PAT, or
+					// the download failed) so the renderer never fires a failed request.
+					html = stripAzureAttachmentImages(html, config.orgUrl ?? undefined);
+
+					if (html !== requirements.display_description) {
+						requirements.display_description = html;
+						changed = true;
+					}
+				}
+
+				// Persist both fields together so the scanner serves them next time.
+				if (changed) {
+					try {
+						writeFileSync(
+							requirementsPath,
+							JSON.stringify(requirements, null, 2),
+							"utf-8",
+						);
+						projectStore.invalidateTasksCache(projectId);
+					} catch (err) {
+						console.warn(
+							"[AZURE_DEVOPS_HYDRATE_TASK_DISPLAY] Could not persist display fields:",
+							err,
+						);
+					}
+				}
+
+				return { success: true, data: { html, title: resolvedTitle } };
+			} catch (error: unknown) {
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				return { success: false, error: errorMessage };
+			}
+		},
+	);
+
+	// ============================================
+	// Azure DevOps AC Sync Operation
+	// ============================================
+
+	ipcMain.handle(
+		IPC_CHANNELS.AZURE_DEVOPS_SYNC_TASK_AC,
+		async (
+			_,
+			projectId: string,
+			taskId: string,
+			workItemId: number,
+		): Promise<IPCResult<{ acceptanceCriteria: string[] }>> => {
+			const project = projectStore.getProject(projectId);
+			if (!project?.autoBuildPath) {
+				return { success: false, error: "Project not found or not initialized" };
+			}
+
+			const config = getAzureDevOpsConfig(project);
+			const envOverrides: Record<string, string> = {};
+			if (config.pat) envOverrides.AZURE_DEVOPS_PAT = config.pat;
+			if (config.orgUrl) envOverrides.AZURE_DEVOPS_ORG_URL = config.orgUrl;
+			const normalizedProject = normalizeProjectName(config.projectName);
+			if (normalizedProject) envOverrides.AZURE_DEVOPS_PROJECT = normalizedProject;
+			if (!config.pat || !config.orgUrl) {
+				return { success: false, error: "Azure DevOps not configured" };
+			}
+
+			try {
+				const projectPath = path.join(project.path, project.autoBuildPath || "");
+
+				const rawItem = (await callAzureDevOpsPython(
+					projectPath,
+					"get_work_item",
+					{ work_item_id: workItemId },
+					envOverrides,
+				)) as { id: number; title: string; acceptanceCriteria?: string };
+
+				const acceptanceCriteriaList = parseAcceptanceCriteriaText(
+					rawItem.acceptanceCriteria ?? undefined,
+				);
+
+				// Persist to disk via TASK_UPDATE path (task_metadata.json + requirements.json)
+				const task = projectStore.getTasks(projectId).find((t) => t.id === taskId);
+				if (task?.specsPath) {
+					const specDir = task.specsPath;
+					const metadataPath = path.join(specDir, "task_metadata.json");
+					const requirementsPath = path.join(specDir, "requirements.json");
+
+					if (existsSync(metadataPath)) {
+						const meta = JSON.parse(readFileSync(metadataPath, "utf-8"));
+						meta.acceptanceCriteria = acceptanceCriteriaList;
+						writeFileSync(metadataPath, JSON.stringify(meta, null, 2), "utf-8");
+					}
+
+					if (existsSync(requirementsPath)) {
+						const reqs = JSON.parse(readFileSync(requirementsPath, "utf-8"));
+						reqs.acceptance_criteria = acceptanceCriteriaList;
+						writeFileSync(
+							requirementsPath,
+							JSON.stringify(reqs, null, 2),
+							"utf-8",
+						);
+					}
+
+					projectStore.invalidateTasksCache(projectId);
+				}
+
+				return { success: true, data: { acceptanceCriteria: acceptanceCriteriaList } };
 			} catch (error: unknown) {
 				const errorMessage =
 					error instanceof Error ? error.message : String(error);

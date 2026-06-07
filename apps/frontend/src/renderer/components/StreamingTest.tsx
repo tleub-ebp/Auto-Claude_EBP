@@ -30,11 +30,12 @@ export function StreamingTest({ tasks, onTaskStart }: StreamingTestProps) {
 	const [isConnected, setIsConnected] = useState(false);
 
 	// Check if streaming server is running
-	const checkStreamingServer = async () => {
+	const checkStreamingServer = async (signal?: AbortSignal) => {
 		try {
-			const response = await fetch("http://localhost:8765/health");
+			const response = await fetch("http://localhost:8765/health", { signal });
 			setIsStreamingServerRunning(response.ok);
 		} catch (error) {
+			if ((error as { name?: string })?.name === "AbortError") return;
 			console.error("Failed to check streaming server health:", error);
 			setIsStreamingServerRunning(false);
 		}
@@ -102,9 +103,16 @@ export function StreamingTest({ tasks, onTaskStart }: StreamingTestProps) {
 	};
 
 	React.useEffect(() => {
-		checkStreamingServer();
-		const interval = setInterval(checkStreamingServer, 5000);
-		return () => clearInterval(interval);
+		const controller = new AbortController();
+		checkStreamingServer(controller.signal);
+		const interval = setInterval(
+			() => checkStreamingServer(controller.signal),
+			5000,
+		);
+		return () => {
+			clearInterval(interval);
+			controller.abort();
+		};
 		// biome-ignore lint/correctness/useExhaustiveDependencies: intentional dependency omission
 	}, [checkStreamingServer]);
 

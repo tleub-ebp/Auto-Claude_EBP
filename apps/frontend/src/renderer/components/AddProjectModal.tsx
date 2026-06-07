@@ -692,8 +692,19 @@ export function AddProjectModal({
 				return;
 			}
 			// Ajoute le projet à notre store
-			const project = await addProject(result.data.path);
+			const added = await addProject(result.data.path);
+			const project = added?.project ?? null;
 			setCreatedProject(project);
+			if (added?.warning) {
+				toast({
+					title: t(
+						"addProject.gitRootWarningTitle",
+						"Possible misconfiguration",
+					),
+					description: added.warning,
+					variant: "default",
+				});
+			}
 			// Configure le remote si besoin
 			if (project && remoteType === "github") {
 				await globalThis.electronAPI.updateProjectEnv(project.id, {

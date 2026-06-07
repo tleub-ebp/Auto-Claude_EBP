@@ -12,7 +12,7 @@ interface ProviderContextType {
 	setSelectedProvider: (provider: string) => void;
 }
 
-const ProviderContext = createContext<ProviderContextType | undefined>(
+export const ProviderContext = createContext<ProviderContextType | undefined>(
 	undefined,
 );
 

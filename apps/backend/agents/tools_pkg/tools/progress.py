@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from claude_agent_sdk import tool
+    from claude_agent_sdk import ToolAnnotations, tool
 
     SDK_TOOLS_AVAILABLE = True
 except ImportError:
     SDK_TOOLS_AVAILABLE = False
     tool = None
+    ToolAnnotations = None  # type: ignore[assignment,misc]
 
 
 def create_progress_tools(spec_dir: Path, project_dir: Path) -> list:
@@ -41,6 +42,9 @@ def create_progress_tools(spec_dir: Path, project_dir: Path) -> list:
         "get_build_progress",
         "Get the current build progress including completed subtasks, pending subtasks, and next subtask to work on.",
         {},
+        # Read-only: enables the SDK to batch this call with other read-only
+        # tools in the same turn. Reads implementation_plan.json without writing.
+        annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def get_build_progress(args: dict[str, Any]) -> dict[str, Any]:
         """Get current build progress."""

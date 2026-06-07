@@ -332,56 +332,86 @@ class TaskDependencyGraph:
         return result
 
     def detect_cycles(self) -> list[list[str]]:
-        """Detect all cycles in the graph. Returns a list of cycle paths."""
+        """Detect all cycles in the graph. Returns a list of cycle paths.
+
+        Iterative DFS with an explicit stack — the recursive form blew the
+        default 1000-frame Python recursion limit on graphs with thousands
+        of nodes (RecursionError aborted cycle detection entirely on large
+        spec hierarchies).
+        """
         cycles: list[list[str]] = []
         visited: set[str] = set()
-        rec_stack: set[str] = set()
-        path: list[str] = []
 
-        def _dfs(node: str) -> None:
-            visited.add(node)
-            rec_stack.add(node)
-            path.append(node)
+        # Each stack frame: (node, iterator over its dependents). When the
+        # iterator is exhausted we pop, mirroring recursion.
+        for start in list(self._nodes):
+            if start in visited:
+                continue
+            rec_stack: set[str] = set()
+            path: list[str] = []
+            stack: list[tuple[str, Any]] = [
+                (start, iter(self._dependents.get(start, set())))
+            ]
+            visited.add(start)
+            rec_stack.add(start)
+            path.append(start)
 
-            for dep in self._dependents.get(node, set()):
+            while stack:
+                node, it = stack[-1]
+                try:
+                    dep = next(it)
+                except StopIteration:
+                    stack.pop()
+                    rec_stack.discard(node)
+                    if path:
+                        path.pop()
+                    continue
+
                 if dep not in visited:
-                    _dfs(dep)
+                    visited.add(dep)
+                    rec_stack.add(dep)
+                    path.append(dep)
+                    stack.append((dep, iter(self._dependents.get(dep, set()))))
                 elif dep in rec_stack:
                     cycle_start = path.index(dep)
                     cycles.append(path[cycle_start:] + [dep])
 
-            path.pop()
-            rec_stack.discard(node)
-
-        for tid in self._nodes:
-            if tid not in visited:
-                _dfs(tid)
-
         return cycles
 
     def get_critical_path(self) -> CriticalPath:
-        """Identify the critical path (longest weighted path through the DAG)."""
+        """Identify the critical path (longest weighted path through the DAG).
+
+        DP definition: `dist[tid]` is the total estimated_hours of the
+        longest path that ENDS at `tid` (inclusive of tid's own hours).
+        Computed by `dist[tid] = tid.hours + max(dist[d] for d in deps)`.
+        Previously the code used a "distance to enter" semantic and added
+        the leaf's hours back when picking end_node, which selected the
+        wrong end node on multi-branch graphs.
+        """
         if not self._nodes:
             return CriticalPath()
 
         topo = self.topological_sort()
 
-        # Longest path using estimated_hours as weight
-        dist: dict[str, float] = dict.fromkeys(topo, 0.0)
-        parent: dict[str, str | None] = dict.fromkeys(topo)
+        dist: dict[str, float] = {}
+        parent: dict[str, str | None] = {}
 
         for tid in topo:
             node = self._nodes[tid]
-            current_dist = dist[tid] + node.estimated_hours
-            for dependent in self._dependents.get(tid, set()):
-                if current_dist > dist[dependent]:
-                    dist[dependent] = current_dist
-                    parent[dependent] = tid
+            deps = self._dependencies.get(tid, set())
+            best_dep_dist = 0.0
+            best_parent: str | None = None
+            for dep_id in deps:
+                d = dist.get(dep_id, 0.0)
+                if d > best_dep_dist:
+                    best_dep_dist = d
+                    best_parent = dep_id
+            dist[tid] = best_dep_dist + node.estimated_hours
+            parent[tid] = best_parent
 
-        # Find the end node of critical path
         if not dist:
             return CriticalPath()
-        end_node = max(dist, key=lambda t: dist[t] + self._nodes[t].estimated_hours)
+        end_node = max(dist, key=dist.get)
 
         # Reconstruct path
         path: list[str] = [end_node]

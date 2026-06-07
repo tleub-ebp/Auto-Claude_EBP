@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -64,7 +64,12 @@ def _generate_id() -> str:
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().isoformat()
+    """Return current UTC timestamp in ISO format (naive — no offset).
+
+    Existing data on disk and external consumers parse this as a naive
+    string; switching to tz-aware would change the wire format.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 @dataclass

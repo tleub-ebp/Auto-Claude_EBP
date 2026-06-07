@@ -333,6 +333,45 @@ def score_codebase(project_path: str | Path) -> LongevityReport:
     return LongevityScorer().score_report(debt)
 
 
+def score_codebase_with_signals(
+    project_path: str | Path,
+    *,
+    coverage_xml: str | Path | None = None,
+    auto_load_sentinel: bool = True,
+) -> LongevityReport:
+    """Like :func:`score_codebase` but also feeds in coverage + vulns.
+
+    * If ``coverage_xml`` is provided, parses Cobertura XML → ratio.
+    * If ``auto_load_sentinel`` is True (default), reads
+      ``.workpilot/continuous-ai/deps/latest_scan.json`` from the project
+      root and passes the vulnerabilities to the scorer. Missing snapshot
+      is silently ignored (treated as "no signal").
+    """
+    from .ingest import load_sentinel_vulnerabilities, parse_coverage_xml
+
+    debt = scan_project(project_path)
+
+    coverage_ratio: float | None = None
+    if coverage_xml is not None:
+        coverage_ratio = parse_coverage_xml(coverage_xml)
+
+    vulnerabilities: list[dict] | None = None
+    if auto_load_sentinel:
+        snapshot = load_sentinel_vulnerabilities(project_path)
+        # Distinguish "no snapshot at all" (None → no penalty applied) from
+        # "scanned, all clean" ([]). load_sentinel returns [] in both cases,
+        # so we explicitly check the snapshot file's presence.
+        from .ingest import SENTINEL_LATEST_SCAN_REL
+
+        snapshot_path = Path(project_path) / SENTINEL_LATEST_SCAN_REL
+        if snapshot_path.exists():
+            vulnerabilities = snapshot
+
+    return LongevityScorer().score_report(
+        debt, vulnerabilities=vulnerabilities, coverage_ratio=coverage_ratio
+    )
+
+
 # ----------------------------------------------------------------------
 # Module-level helpers
 

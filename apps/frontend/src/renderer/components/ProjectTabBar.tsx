@@ -1,8 +1,9 @@
 import type { Project, UsageSnapshot } from "@shared/types";
 import { AlertTriangle, ChevronLeft, ChevronRight, Plus } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
+import { useProjectStore } from "@/stores/project-store";
 import { AuthStatusIndicator } from "./AuthStatusIndicator";
 import { useProviderContext } from "./ProviderContext";
 import { SortableProjectTab } from "./SortableProjectTab";
@@ -36,6 +37,24 @@ export function ProjectTabBar({
 	const [canScrollLeft, setCanScrollLeft] = useState(false);
 	const [canScrollRight, setCanScrollRight] = useState(false);
 	const { selectedProvider } = useProviderContext();
+	const missingPaths = useProjectStore((state) => state.missingPaths);
+	const repathProjectAction = useProjectStore((state) => state.repathProject);
+
+	// Open native directory picker and re-point the project at the chosen folder.
+	// Silently no-ops on cancel; on failure the missing-path indicator stays so
+	// the user can retry.
+	const handleRepathProject = useCallback(
+		async (projectId: string) => {
+			try {
+				const newPath = await globalThis.electronAPI?.selectDirectory?.();
+				if (!newPath) return;
+				await repathProjectAction(projectId, newPath);
+			} catch (err) {
+				console.error("[ProjectTabBar] repath failed:", err);
+			}
+		},
+		[repathProjectAction],
+	);
 
 	// State for usage warning
 	const [usage, setUsage] = useState<UsageSnapshot | null>(null);
@@ -242,6 +261,8 @@ export function ProjectTabBar({
 								onProjectClose(project.id);
 							}}
 							onRename={onProjectRename}
+							isMissing={missingPaths.has(project.id)}
+							onRepath={handleRepathProject}
 							// Pass control props only for the active tab
 							onSettingsClick={isActiveTab ? onSettingsClick : undefined}
 						/>

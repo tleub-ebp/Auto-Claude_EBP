@@ -300,6 +300,53 @@ export function registerCostHandlers(): void {
 	});
 
 	/**
+	 * costs:getContextUsage — retourne le remplissage de fenêtre de contexte de
+	 * la dernière requête d'un provider (proxy de la « session courante »).
+	 *
+	 * `contextTokens` = input_tokens du dernier enregistrement (les tokens
+	 * effectivement envoyés au modèle = remplissage du contexte au dernier tour).
+	 * Sert à afficher un « % de contexte consommé » façon Claude Code.
+	 */
+	ipcMain.handle(
+		"costs:getContextUsage",
+		async (_, projectPath: string, provider: string) => {
+			try {
+				watchCostData(projectPath);
+				const data = loadCostData(projectPath);
+
+				let latest: RawUsage | null = null;
+				for (const u of data.usages) {
+					if (u.provider !== provider) continue;
+					if (
+						latest === null ||
+						new Date(u.timestamp) > new Date(latest.timestamp)
+					) {
+						latest = u;
+					}
+				}
+
+				if (!latest) {
+					return { success: true, contextUsage: null };
+				}
+
+				return {
+					success: true,
+					contextUsage: {
+						provider: latest.provider,
+						model: latest.model,
+						contextTokens: latest.input_tokens,
+						outputTokens: latest.output_tokens,
+						timestamp: latest.timestamp,
+					},
+				};
+			} catch (err) {
+				logger.error("[costs] getContextUsage failed", err);
+				return { success: false, error: String(err) };
+			}
+		},
+	);
+
+	/**
 	 * costs:getBudget — returns budget info for the current period
 	 */
 	ipcMain.handle("costs:getBudget", async (_, projectPath: string) => {

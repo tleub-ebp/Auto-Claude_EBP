@@ -435,6 +435,10 @@ class AutoFixLoop:
             except asyncio.TimeoutError:
                 debug_error("auto_fix_loop", "Tests timed out")
                 proc.kill()
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
                 return AutoFixTestResult(
                     executed=True,
                     passed=False,
@@ -586,30 +590,52 @@ The automated tests have failed. Please analyze the test output below and apply 
         debug("auto_fix_loop", "Created fix request file", path=str(fix_request_file))
 
     async def _apply_fix(self, attempt_number: int) -> tuple[str, str]:
-        """Apply fix using QA fixer agent."""
+        """
+        Apply fix using QA fixer agent.
+
+        Wraps the session in the shared rate-limit shield: if the LLM call hits
+        a rate-limit, we pause until the quota window resets and retry the same
+        attempt rather than burning one of the limited attempts on a 429.
+        """
+        from services.rate_limit_shield import (
+            handle_prompt_too_long,
+            handle_rate_limit_pause,
+        )
+
         # Get model and thinking budget
         qa_model = get_phase_model(self.spec_dir, "qa", self.model)
         fixer_thinking_budget = get_phase_thinking_budget(self.spec_dir, "qa")
 
-        # Create client using the provider-agnostic factory
-        fix_client = create_agent_client(
-            project_dir=self.project_dir,
-            spec_dir=self.spec_dir,
-            model=qa_model,
-            agent_type="qa_fixer",
-            max_thinking_tokens=fixer_thinking_budget,
-        )
-
-        async with fix_client:
-            fix_status, fix_response = await run_qa_fixer_session(
-                fix_client,
-                self.spec_dir,
-                attempt_number,
-                self.verbose,
-                self.project_dir,
+        while True:
+            # Create client using the provider-agnostic factory
+            fix_client = create_agent_client(
+                project_dir=self.project_dir,
+                spec_dir=self.spec_dir,
+                model=qa_model,
+                agent_type="qa_fixer",
+                max_thinking_tokens=fixer_thinking_budget,
             )
 
-        return fix_status, fix_response
+            try:
+                async with fix_client:
+                    fix_status, fix_response = await run_qa_fixer_session(
+                        fix_client,
+                        self.spec_dir,
+                        attempt_number,
+                        self.verbose,
+                        self.project_dir,
+                    )
+                return fix_status, fix_response
+            except Exception as e:
+                # Prompt-too-long is a permanent failure; stop retrying and
+                # surface a "reset conversation / switch provider" choice
+                # to the user via the halt marker file.
+                if handle_prompt_too_long(e, self.spec_dir, "auto_fix"):
+                    raise
+                if await handle_rate_limit_pause(e, self.spec_dir, "auto_fix"):
+                    # Shield paused-and-resumed; retry the same attempt.
+                    continue
+                raise
 
     async def _load_memory_context(self) -> str:
         """Load memory context about common test failures."""

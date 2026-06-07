@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -287,6 +288,11 @@ class RateLimiter:
 
     _instance: RateLimiter | None = None
     _initialized: bool = False
+    # Class-level lock guards the get_instance / __init__ critical section.
+    # Without it, two threads racing into get_instance can both observe
+    # `_instance is None` and create two RateLimiter objects, defeating
+    # the singleton semantics (each gets its own token bucket → 2x rate).
+    _instance_lock: threading.Lock = threading.Lock()
 
     def __init__(
         self,
@@ -342,20 +348,25 @@ class RateLimiter:
         Returns:
             RateLimiter singleton instance
         """
+        # Double-checked locking: fast path (no lock) when already created,
+        # full lock only on the rare bootstrap race.
         if cls._instance is None:
-            cls._instance = RateLimiter(
-                github_limit=github_limit,
-                github_refill_rate=github_refill_rate,
-                cost_limit=cost_limit,
-                max_retry_delay=max_retry_delay,
-            )
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = RateLimiter(
+                        github_limit=github_limit,
+                        github_refill_rate=github_refill_rate,
+                        cost_limit=cost_limit,
+                        max_retry_delay=max_retry_delay,
+                    )
         return cls._instance
 
     @classmethod
     def reset_instance(cls) -> None:
         """Reset singleton (for testing)."""
-        cls._instance = None
-        cls._initialized = False
+        with cls._instance_lock:
+            cls._instance = None
+            cls._initialized = False
 
     async def acquire_github(self, timeout: float | None = None) -> bool:
         """

@@ -10,13 +10,20 @@ import { getClaudeProfileManager } from "./claude-profile-manager";
 
 /**
  * Regex patterns to detect Claude Code rate limit messages.
- * Claude CLI uses two known formats:
+ * Claude CLI uses three known shapes:
  *   1. "Limit reached · resets Dec 17 at 6am (Europe/Oslo)"
  *   2. "You've hit your limit · resets 10am (Europe/Paris)"
+ *   3. "You've hit your session limit · resets 3:20pm (Europe/Paris)"
+ *      (and the matching "weekly limit" variant)
+ *
+ * Shape 3 was added recently and used to slip through detection because the
+ * older regex literally required the word "limit" right after "your" — the new
+ * banner has "session" (or "weekly") between them, which broke parsing and
+ * caused the orchestrator to retry-with-summary until the prompt overflowed.
  */
 const RATE_LIMIT_PATTERNS = [
 	/Limit reached\s*[·•]\s*resets\s+(.+?)(?:\s*$|\n)/im,
-	/hit your limit\s*[·•]\s*resets\s+(.+?)(?:\s*$|\n)/im,
+	/hit your(?:\s+\w+)?\s+limit\s*[·•]\s*resets\s+(.+?)(?:\s*$|\n)/im,
 ];
 
 /** @deprecated Use RATE_LIMIT_PATTERNS instead — kept for backward compatibility */
@@ -31,9 +38,13 @@ const _RATE_LIMIT_PATTERN = RATE_LIMIT_PATTERNS[0];
  * Only match patterns that come from the Claude CLI/API itself.
  */
 const RATE_LIMIT_INDICATORS = [
-	/hit your limit/i,
+	// Match "hit your limit" AND the newer "hit your session limit" /
+	// "hit your weekly limit" variants without false-matching unrelated text.
+	/hit your(?:\s+\w+)?\s+limit/i,
 	/rate\s*limit/i,
 	/usage\s*limit/i,
+	/session\s*limit/i,
+	/weekly\s*limit/i,
 	/limit\s*reached/i,
 	/exceeded.*limit/i,
 	/too\s*many\s*requests/i,

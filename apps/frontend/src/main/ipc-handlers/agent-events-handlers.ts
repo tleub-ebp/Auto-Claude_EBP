@@ -225,6 +225,12 @@ export function registerAgenteventsHandlers(
 ): void {
 	taskStateManager.configure(getMainWindow);
 
+	// Track task IDs that have hit rate limits to prevent them from being
+	// incorrectly moved to human_review when the process exits non-zero.
+	// When a rate limit is detected, the sdk-rate-limit event fires before exit.
+	// We use this set to suppress handleProcessExited for rate-limited tasks.
+	const rateLimitedTaskIds = new Set<string>();
+
 	// ============================================
 	// Agent Manager Events → Renderer
 	// ============================================
@@ -264,6 +270,11 @@ export function registerAgenteventsHandlers(
 
 	// Handle SDK rate limit events from agent manager
 	agentManager.on("sdk-rate-limit", (rateLimitInfo: SDKRateLimitInfo) => {
+		// Track this task as rate-limited to prevent it from being moved to human_review
+		// when the process exits with a non-zero code
+		if (rateLimitInfo.taskId) {
+			rateLimitedTaskIds.add(rateLimitInfo.taskId);
+		}
 		safeSendToRenderer(
 			getMainWindow,
 			IPC_CHANNELS.CLAUDE_SDK_RATE_LIMIT,
@@ -338,7 +349,17 @@ export function registerAgenteventsHandlers(
 			);
 			const exitProjectId = exitProject?.id || projectId;
 
-			taskStateManager.handleProcessExited(taskId, code, exitTask, exitProject);
+			// Skip handleProcessExited for rate-limited tasks.
+			// The sdk-rate-limit event fires before exit for rate-limited processes.
+			// Without this guard, handleProcessExited sends PROCESS_EXITED { unexpected: true }
+			// which transitions the task to error → human_review, incorrectly moving the card
+			// to the Human Review column even though the task is just paused waiting for rate limit reset.
+			const isRateLimited = rateLimitedTaskIds.has(taskId);
+			if (!isRateLimited) {
+				taskStateManager.handleProcessExited(taskId, code, exitTask, exitProject);
+			} else {
+				rateLimitedTaskIds.delete(taskId);
+			}
 
 			// Send final plan state to renderer BEFORE unwatching
 			// This ensures the renderer has the final subtask data (fixes 0/0 subtask bug)

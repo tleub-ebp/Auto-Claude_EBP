@@ -227,6 +227,65 @@ def _make_guardrails_hook(project_dir: Path):
     return _hook
 
 
+def _make_pre_compact_hook(spec_dir: Path):
+    """
+    PreCompact hook — fires just before the SDK summarises older history to
+    free space. Currently logs the event so we can spot compaction in traces;
+    this is the canonical place to later archive the full transcript if needed.
+    Hooks run in our process, not the agent's context window — zero token cost.
+    """
+
+    async def _hook(
+        input_data: dict,
+        tool_use_id: str | None = None,
+        context: object | None = None,
+    ) -> dict:
+        try:
+            trigger = (
+                input_data.get("trigger", "auto")
+                if isinstance(input_data, dict)
+                else "auto"
+            )
+            session_id = (
+                input_data.get("session_id") if isinstance(input_data, dict) else None
+            )
+            logger.info(
+                "[hook:PreCompact] spec=%s session=%s trigger=%s",
+                spec_dir.name,
+                session_id,
+                trigger,
+            )
+        except Exception:
+            logger.debug("[hook:PreCompact] logging failed", exc_info=True)
+        return {}
+
+    return _hook
+
+
+def _make_stop_hook(spec_dir: Path):
+    """
+    Stop hook — fires when the agent loop ends (success or error). Used for
+    end-of-session observability; intentionally a no-op decision so the SDK
+    proceeds normally. Heavy work belongs in session.py's post-session block.
+    """
+
+    async def _hook(
+        input_data: dict,
+        tool_use_id: str | None = None,
+        context: object | None = None,
+    ) -> dict:
+        try:
+            session_id = (
+                input_data.get("session_id") if isinstance(input_data, dict) else None
+            )
+            logger.info("[hook:Stop] spec=%s session=%s", spec_dir.name, session_id)
+        except Exception:
+            logger.debug("[hook:Stop] logging failed", exc_info=True)
+        return {}
+
+    return _hook
+
+
 def _validate_custom_mcp_server(server: dict) -> bool:
     """
     Validate a custom MCP server configuration for security.
@@ -521,6 +580,48 @@ def load_claude_md(project_dir: Path) -> str | None:
     return None
 
 
+# Map AGENT_CONFIGS agent_type → DomainAgentFactory role enum value.
+# Kept here (rather than in feature_wiring) because it depends on the
+# specific agent_type vocabulary used in this client layer.
+_DOMAIN_ROLE_BY_AGENT_TYPE = {
+    "coder": "coder",
+    "planner": "planner",
+    "qa_reviewer": "reviewer",
+    "qa_fixer": "reviewer",
+    "documenter": "documenter",
+}
+
+
+def _inject_domain_addendum(
+    base_prompt: str,
+    agent_type: str,
+    spec_dir: Path | None,
+) -> str:
+    """Append the Domain Agents prompt addendum when the spec declares a
+    ``domain`` field in ``requirements.json``.
+
+    Best-effort. Returns the prompt unchanged if anything goes wrong (no
+    domain configured, unknown role, addendum module missing, etc).
+    Centralised so all four provider branches (Claude / Copilot / Windsurf /
+    OpenAI) get the addendum the same way.
+    """
+    if spec_dir is None:
+        return base_prompt
+    role = _DOMAIN_ROLE_BY_AGENT_TYPE.get(agent_type)
+    if not role:
+        return base_prompt
+    try:
+        from agents.feature_wiring import load_domain_addendum
+
+        addendum = load_domain_addendum(spec_dir, role=role)
+    except Exception:  # noqa: BLE001
+        return base_prompt
+    if not addendum:
+        return base_prompt
+    print(f"   - Domain addendum: injected ({len(addendum)} chars, role={role})")
+    return f"{base_prompt}\n\n# Domain-Specific Guidance\n\n{addendum}"
+
+
 def create_client(
     project_dir: Path,
     spec_dir: Path,
@@ -529,6 +630,7 @@ def create_client(
     max_thinking_tokens: int | None = None,
     output_format: dict | None = None,
     agents: dict | None = None,
+    resume: str | None = None,
 ) -> ClaudeSDKClient:
     """
     Create a Claude Agent SDK client with multi-layered security.
@@ -580,9 +682,52 @@ def create_client(
     # Collect env vars to pass to SDK (ANTHROPIC_BASE_URL, CLAUDE_CONFIG_DIR, etc.)
     sdk_env = get_sdk_env_vars()
 
+    # Token / context optimisations (docs: code.claude.com/docs/en/agent-sdk).
+    # `setdefault` keeps any explicit user override intact.
+    # - 1h prompt-cache TTL: Kanban runs many short cards back-to-back against
+    #   the same system prompt + CLAUDE.md; 1h TTL keeps the cache warm between
+    #   cards instead of paying full input price every 5 minutes.
+    # - tool-search auto:5: defers MCP tool schemas when their combined size
+    #   exceeds 5% of the context window. Activates only when there are enough
+    #   MCP servers to make deferral worthwhile.
+    sdk_env.setdefault("ENABLE_PROMPT_CACHING_1H", "1")
+    sdk_env.setdefault("ENABLE_TOOL_SEARCH", "auto:5")
+
+    # OpenTelemetry observability (opt-in). When AUTO_CLAUDE_OTEL_ENDPOINT is
+    # set (e.g. `http://localhost:4318` for a local OTLP collector / Jaeger),
+    # we flip on the CLI's built-in tracing so spans for each turn, tool call,
+    # and hook flow into the user's backend. Traces are in beta on the CLI
+    # side, so we gate them explicitly. The agent_type becomes the OTEL
+    # service name so multiple runner kinds (coder, planner, analyzer, …)
+    # appear as separate services in the dashboard.
+    # See: code.claude.com/docs/en/agent-sdk/observability
+    _otel_endpoint = os.environ.get("AUTO_CLAUDE_OTEL_ENDPOINT")
+    if _otel_endpoint:
+        sdk_env.setdefault("CLAUDE_CODE_ENABLE_TELEMETRY", "1")
+        sdk_env.setdefault("CLAUDE_CODE_ENHANCED_TELEMETRY_BETA", "1")
+        sdk_env.setdefault("OTEL_TRACES_EXPORTER", "otlp")
+        sdk_env.setdefault("OTEL_METRICS_EXPORTER", "otlp")
+        sdk_env.setdefault("OTEL_LOGS_EXPORTER", "otlp")
+        sdk_env.setdefault("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+        sdk_env.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", _otel_endpoint)
+        sdk_env.setdefault("OTEL_SERVICE_NAME", f"workpilot-{agent_type}")
+        # Tighter export intervals so short Kanban cards flush before exit.
+        sdk_env.setdefault("OTEL_METRIC_EXPORT_INTERVAL", "1000")
+        sdk_env.setdefault("OTEL_LOGS_EXPORT_INTERVAL", "1000")
+        sdk_env.setdefault("OTEL_TRACES_EXPORT_INTERVAL", "1000")
+
     # Get the config dir for profile-specific credential lookup
     # CLAUDE_CONFIG_DIR enables per-profile Keychain entries with SHA256-hashed service names
     config_dir = sdk_env.get("CLAUDE_CONFIG_DIR")
+
+    # Multi-profile hardening (docs: code.claude.com/docs/en/agent-sdk/secure-deployment).
+    # When a non-default CLAUDE_CONFIG_DIR is in use (i.e. the user is on a
+    # specific profile rather than the global ~/.claude), disable the SDK's
+    # auto-memory writer. Without this, prompts and learnings from profile A
+    # would seed the auto-memory file consulted by profile B on the same
+    # machine, leaking context across tenants/identities.
+    if config_dir:
+        sdk_env.setdefault("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1")
 
     # Configure SDK authentication (OAuth or API profile mode)
     configure_sdk_authentication(config_dir)
@@ -972,16 +1117,40 @@ def create_client(
         f"and build-progress.txt updates."
     )
 
-    # Include CLAUDE.md if enabled and present
+    # CLAUDE.md loading strategy: hybrid (setting_sources + manual fallback).
+    #
+    # Primary path: `setting_sources=["project","user","local"]` (added below to
+    # ClaudeAgentOptions) lets the SDK natively load <cwd>/CLAUDE.md,
+    # <cwd>/.claude/CLAUDE.md, project rules, and skills with proper prompt-cache
+    # prefix handling — no manual concatenation needed.
+    #
+    # Fallback: if the SDK can't find a CLAUDE.md (e.g. user disabled the
+    # "project" setting source, or CLAUDE.md lives at an unusual path), we
+    # still inject it manually into the system prompt when USE_CLAUDE_MD=true.
+    # This preserves the historical behavior for projects that rely on it.
     if should_use_claude_md():
-        claude_md_content = load_claude_md(project_dir)
-        if claude_md_content:
-            base_prompt = f"{base_prompt}\n\n# Project Instructions (from CLAUDE.md)\n\n{claude_md_content}"
-            print("   - CLAUDE.md: included in system prompt")
+        # SDK-native loading path expects CLAUDE.md at <cwd>/CLAUDE.md or
+        # <cwd>/.claude/CLAUDE.md. If found there, skip manual injection so
+        # the SDK can cache the prefix once across cards.
+        sdk_native_paths = [
+            project_dir / "CLAUDE.md",
+            project_dir / ".claude" / "CLAUDE.md",
+        ]
+        sdk_will_load = any(p.exists() for p in sdk_native_paths)
+        if sdk_will_load:
+            print("   - CLAUDE.md: loaded via setting_sources (SDK-native, cached)")
         else:
-            print("   - CLAUDE.md: not found in project root")
+            claude_md_content = load_claude_md(project_dir)
+            if claude_md_content:
+                base_prompt = f"{base_prompt}\n\n# Project Instructions (from CLAUDE.md)\n\n{claude_md_content}"
+                print("   - CLAUDE.md: injected manually (fallback)")
+            else:
+                print("   - CLAUDE.md: not found in project root")
     else:
         print("   - CLAUDE.md: disabled by project settings")
+
+    base_prompt = _inject_domain_addendum(base_prompt, agent_type, spec_dir)
+
     print()
 
     # Build options dict, conditionally including output_format
@@ -1006,10 +1175,22 @@ def create_client(
                     hooks=[_make_guardrails_hook(project_dir)],
                 ),
             ],
+            "PreCompact": [HookMatcher(hooks=[_make_pre_compact_hook(spec_dir)])],
+            "Stop": [HookMatcher(hooks=[_make_stop_hook(spec_dir)])],
         },
-        "max_turns": 1000,
+        "max_turns": int(os.environ.get("AUTO_CLAUDE_MAX_TURNS", "1000")),
+        # Budget cap as a meaningful runaway guard. The error path
+        # (`error_max_budget_usd`) is already handled in agents/session.py.
+        # Default tuned for typical Kanban cards; users can raise via env.
+        "max_budget_usd": float(os.environ.get("AUTO_CLAUDE_MAX_BUDGET_USD", "5.0")),
         "cwd": str(project_dir.resolve()),
         "settings": str(settings_file.resolve()),
+        # setting_sources auto-loads CLAUDE.md, project rules, skills, and
+        # filesystem-defined hooks from ~/.claude (user), <cwd>/.claude (project),
+        # and .claude/settings.local.json (local). The SDK handles prompt-cache
+        # prefixing automatically for these sources.
+        # See: code.claude.com/docs/en/agent-sdk/claude-code-features
+        "setting_sources": ["project", "user", "local"],
         "env": sdk_env,  # Pass ANTHROPIC_BASE_URL etc. to subprocess
         "max_thinking_tokens": max_thinking_tokens,  # Extended thinking budget
         "max_buffer_size": 10
@@ -1032,10 +1213,102 @@ def create_client(
     if output_format:
         options_kwargs["output_format"] = output_format
 
-    # Add subagent definitions if specified
-    # See: https://platform.claude.com/docs/en/agent-sdk/subagents
-    if agents:
-        options_kwargs["agents"] = agents
+    # Merge phase-appropriate default subagents with any caller-supplied ones.
+    # Caller wins on key collision so a specific run can override defaults.
+    # The set is chosen by agent_type so the planner doesn't waste context on
+    # QA subagents and vice versa.
+    # See: code.claude.com/docs/en/agent-sdk/subagents
+    try:
+        if agent_type in ("qa_reviewer", "qa_fixer", "qa"):
+            from agents.qa_subagents import (
+                merge_with_user_agents as _merge_phase_agents,
+            )
+        elif agent_type in ("planner", "architect"):
+            from agents.planner_subagents import (
+                merge_with_user_agents as _merge_phase_agents,
+            )
+        else:
+            from agents.kanban_subagents import (
+                merge_with_user_agents as _merge_phase_agents,
+            )
+
+        _merged_agents = _merge_phase_agents(agents)
+    except Exception:
+        _merged_agents = agents
+    if _merged_agents:
+        options_kwargs["agents"] = _merged_agents
+        # Subagents are invoked via the built-in "Agent" tool — it must be
+        # allowlisted, otherwise the SDK rejects the invocation. We mutate the
+        # allowed_tools list in-place because it's already inside options_kwargs.
+        _allowed = options_kwargs.get("allowed_tools") or []
+        if "Agent" not in _allowed:
+            _allowed.append("Agent")
+            options_kwargs["allowed_tools"] = _allowed
+
+    # Resume a prior SDK session if a session_id was provided. The SDK reads
+    # the on-disk transcript at ~/.claude/projects/<encoded-cwd>/<session_id>.jsonl
+    # and rehydrates context, saving the cost of replaying earlier turns.
+    # Resolution order: explicit kwarg > env var > none. The env var path is
+    # how the frontend's "Reprendre" button signals a session resume: it spawns
+    # the subprocess with AUTO_CLAUDE_RESUME_SESSION_ID set, and the value MUST
+    # be consumed exactly once for this client — leaving the env var set across
+    # iterations of the coder loop made every subsequent session re-rehydrate
+    # the same on-disk transcript, which is what caused the
+    # "Continuing implementation… / Prompt is too long" cascade once the
+    # transcript grew past the model's context window.
+    # See: code.claude.com/docs/en/agent-sdk/sessions
+    _resume_id = resume or os.environ.get("AUTO_CLAUDE_RESUME_SESSION_ID")
+    if _resume_id:
+        options_kwargs["resume"] = _resume_id
+        logger.info(f"Resuming Claude SDK session: {_resume_id}")
+        # Pop the env var so the NEXT iteration creates a fresh session instead
+        # of re-replaying the same transcript. Explicit `resume=` kwargs still
+        # work — they're per-call, not process-wide.
+        os.environ.pop("AUTO_CLAUDE_RESUME_SESSION_ID", None)
+
+    # Permission mode hardening for read-only phases. "plan" lets Claude
+    # explore and reason but refuses every write/exec tool call — a strong
+    # defense-in-depth complement to the tools allowlist. We only enable it
+    # for phases that have no business modifying files anyway.
+    # See: code.claude.com/docs/en/agent-sdk/permissions
+    _readonly_phases = {
+        "analyzer",
+        "spec_critic",
+        "spec_validation",
+        "spec_context",
+        "spec_discovery",
+        "pr_reviewer",
+        "pr_orchestrator_parallel",
+        "insights",
+    }
+    if agent_type in _readonly_phases and "permission_mode" not in options_kwargs:
+        options_kwargs["permission_mode"] = "plan"
+
+    # Reasoning effort, gated on Opus 4.x (only Opus models support this param).
+    # Docs recommend "xhigh" on Opus 4.7 for coding/agentic tasks; cheaper
+    # phases get "low" to save tokens. Env var override wins so a user can
+    # force a level for debugging.
+    # See: code.claude.com/docs/en/agent-sdk/agent-loop#effort-level
+    if "opus" in (model or "").lower():
+        _effort_map = {
+            "explorer": "low",
+            "spec_gatherer": "low",
+            "lint": "low",
+            "status": "low",
+            "documenter": "medium",
+            "qa_reviewer": "high",
+            "qa_fixer": "high",
+            "validation": "high",
+            "planner": "xhigh",
+            "architect": "xhigh",
+            "coder": "xhigh",
+            "dev": "xhigh",
+        }
+        _effort = os.environ.get("AUTO_CLAUDE_EFFORT") or _effort_map.get(
+            agent_type, "high"
+        )
+        options_kwargs["effort"] = _effort
+        print(f"   - Effort: {_effort} (agent_type={agent_type}, model=opus)")
 
     return ClaudeSDKClient(options=ClaudeAgentOptions(**options_kwargs))
 
@@ -1045,11 +1318,57 @@ def create_client(
 # =============================================================================
 
 
+# Filename for the single-shot "resume task X under provider Y" marker. The
+# frontend writes this when the user picks a different provider from the
+# paused-task modal. _get_active_provider() consumes it on the very next
+# session start and deletes the file so it doesn't keep overriding.
+RESUME_WITH_PROVIDER_FILE = "RESUME_WITH_PROVIDER"
+
+
+def _consume_resume_with_provider_marker(spec_dir: Path) -> str | None:
+    """Read and remove the RESUME_WITH_PROVIDER marker, returning the provider
+    name the user picked (or None if no marker exists).
+
+    The file can be either plain text containing the provider id
+    (``copilot``) or JSON ``{"provider": "copilot"}``. Anything else is
+    treated as no override and the file is left in place for inspection.
+
+    Failures here must NEVER prevent session startup — log and return None.
+    """
+    marker = spec_dir / RESUME_WITH_PROVIDER_FILE
+    if not marker.exists():
+        return None
+    try:
+        raw = marker.read_text(encoding="utf-8").strip()
+        if not raw:
+            marker.unlink(missing_ok=True)
+            return None
+        # Try JSON first, fall back to plain text.
+        provider: str | None
+        try:
+            import json as _json
+
+            data = _json.loads(raw)
+            provider = (
+                str(data.get("provider", "")).strip()
+                if isinstance(data, dict)
+                else None
+            )
+        except Exception:
+            provider = raw
+        marker.unlink(missing_ok=True)  # single-shot
+        return provider or None
+    except Exception as e:
+        logger.warning("[_get_active_provider] could not read %s: %s", marker, e)
+        return None
+
+
 def _get_active_provider(spec_dir: Path | None = None) -> str:
     """
     Determine the active AI provider from IPC selection, environment or project settings.
 
     Resolution order:
+    0. RESUME_WITH_PROVIDER marker file (single-shot, "Reprendre avec X")
     1. Provider selected via IPC (from frontend UI selection)
     2. AUTO_CLAUDE_PROVIDER environment variable
     3. Project-level _AUTO_CLAUDE_DIR/.env → AI_PROVIDER key
@@ -1078,6 +1397,22 @@ def _get_active_provider(spec_dir: Path | None = None) -> str:
         "cursor": "cursor",
         "custom": "custom",
     }
+
+    # 0. Highest priority: explicit "resume with X" marker written by the
+    # frontend when the user picked a different provider from the paused-task
+    # modal (Niveau 3b). Consumed once and removed so subsequent sessions
+    # for the same spec don't keep overriding.
+    if spec_dir:
+        override = _consume_resume_with_provider_marker(Path(spec_dir))
+        if override:
+            mapped_override = provider_mapping.get(override.lower(), override.lower())
+            logger.info(
+                "[_get_active_provider] Resolved from RESUME_WITH_PROVIDER marker: "
+                "'%s' -> '%s'",
+                override,
+                mapped_override,
+            )
+            return mapped_override
 
     # 1. Check provider selected via IPC (from frontend UI)
     try:
@@ -1205,6 +1540,7 @@ def create_agent_client(
     output_format: dict | None = None,
     agents: dict | None = None,
     provider: str | None = None,
+    resume: str | None = None,
 ) -> "AgentClient":  # noqa: F821
     """
     Create a provider-agnostic agent client for Kanban task execution.
@@ -1264,6 +1600,7 @@ def create_agent_client(
             f"your work through thorough testing. You communicate progress through Git commits "
             f"and build-progress.txt updates."
         )
+        base_prompt = _inject_domain_addendum(base_prompt, agent_type, spec_dir)
 
         # Convert agents dict to SubagentDefinition if provided
         copilot_agents: dict[str, SubagentDefinition] | None = None
@@ -1309,6 +1646,7 @@ def create_agent_client(
             max_thinking_tokens=max_thinking_tokens,
             output_format=output_format,
             agents=agents,
+            resume=resume,
         )
         return ClaudeAgentClient(sdk_client)
 
@@ -1337,6 +1675,9 @@ def create_agent_client(
             f"You MUST use the provided tools (read_file, write_file, list_files, run_command) "
             f"to interact with the filesystem and execute commands. Do not just describe what to do — "
             f"actually do it by calling the tools."
+        )
+        windsurf_system_prompt = _inject_domain_addendum(
+            windsurf_system_prompt, agent_type, spec_dir
         )
 
         logger.info(
@@ -1368,6 +1709,9 @@ def create_agent_client(
             f"You MUST use the provided tools (read_file, write_file, list_files, run_command) "
             f"to interact with the filesystem and execute commands. Do not just describe what to do — "
             f"actually do it by calling the tools."
+        )
+        openai_system_prompt = _inject_domain_addendum(
+            openai_system_prompt, agent_type, spec_dir
         )
 
         logger.info(

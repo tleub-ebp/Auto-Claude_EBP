@@ -23,6 +23,7 @@ vi.mock("react-i18next", () => ({
 			const parts = noNs.split(".");
 			return parts[parts.length - 1];
 		},
+		i18n: { language: "en" },
 	}),
 }));
 

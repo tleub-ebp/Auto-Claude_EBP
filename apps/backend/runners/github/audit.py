@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -192,6 +193,9 @@ class AuditLogger:
     """
 
     _instance: AuditLogger | None = None
+    # Lock prevents two threads from racing into get_instance() and each
+    # creating their own AuditLogger with its own log file handle.
+    _instance_lock: threading.Lock = threading.Lock()
 
     def __init__(
         self,
@@ -225,15 +229,18 @@ class AuditLogger:
         log_dir: Path | None = None,
         **kwargs,
     ) -> AuditLogger:
-        """Get or create singleton instance."""
+        """Get or create singleton instance (thread-safe)."""
         if cls._instance is None:
-            cls._instance = cls(log_dir=log_dir, **kwargs)
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls(log_dir=log_dir, **kwargs)
         return cls._instance
 
     @classmethod
     def reset_instance(cls) -> None:
         """Reset singleton (for testing)."""
-        cls._instance = None
+        with cls._instance_lock:
+            cls._instance = None
 
     def _get_log_file_path(self) -> Path:
         """Get path for current day's log file."""

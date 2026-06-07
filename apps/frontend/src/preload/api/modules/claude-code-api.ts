@@ -28,6 +28,20 @@ export interface ClaudeCodeInstallResult {
 }
 
 /**
+ * Result of a silent (background) Claude Code update.
+ * `success: false` with `error` starting with `silent_install_unavailable`
+ * means the caller should fall back to the terminal-based install flow.
+ */
+export interface ClaudeCodeSilentInstallResult {
+	success: boolean;
+	data?: {
+		stdout: string;
+		stderr: string;
+	};
+	error?: string;
+}
+
+/**
  * Result of version check
  */
 export interface ClaudeCodeVersionResult {
@@ -94,6 +108,14 @@ export interface ClaudeCodeAPI {
 	installClaudeCode: () => Promise<ClaudeCodeInstallResult>;
 
 	/**
+	 * Update Claude Code CLI in the background, no terminal opened.
+	 * Only works when Claude is already installed (self-update via
+	 * `claude install --force latest`). For fresh installs, fall back
+	 * to `installClaudeCode()`.
+	 */
+	installClaudeCodeSilent: () => Promise<ClaudeCodeSilentInstallResult>;
+
+	/**
 	 * Get available Claude Code CLI versions
 	 * Returns list of versions sorted newest first
 	 */
@@ -131,6 +153,9 @@ export const createClaudeCodeAPI = (): ClaudeCodeAPI => ({
 
 	installClaudeCode: (): Promise<ClaudeCodeInstallResult> =>
 		invokeIpc(IPC_CHANNELS.CLAUDE_CODE_INSTALL),
+
+	installClaudeCodeSilent: (): Promise<ClaudeCodeSilentInstallResult> =>
+		invokeIpc(IPC_CHANNELS.CLAUDE_CODE_INSTALL_SILENT),
 
 	getClaudeCodeVersions: (): Promise<ClaudeCodeVersionsResult> =>
 		invokeIpc(IPC_CHANNELS.CLAUDE_CODE_GET_VERSIONS),

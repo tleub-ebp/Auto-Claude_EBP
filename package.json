@@ -20,6 +20,7 @@
 		"lint": "cd apps/frontend && pnpm run lint",
 		"test": "cd apps/frontend && pnpm test",
 		"test:backend": "node scripts/test-backend.js",
+		"test:all": "node scripts/pre-push.js",
 		"package": "cd apps/frontend && pnpm run package",
 		"package:mac": "cd apps/frontend && pnpm run package:mac",
 		"package:win": "cd apps/frontend && pnpm run package:win",
@@ -34,6 +35,7 @@
 		"node": ">=20.0.0",
 		"pnpm": ">=8.0.0"
 	},
+	"packageManager": "pnpm@10.27.0",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/tleub-ebp/WorkPilot-AI.git"
@@ -58,6 +60,8 @@
 	},
 	"pnpm": {
 		"overrides": {
+			"electron-builder-squirrel-windows": "^26.8.2",
+			"dmg-builder": "^26.8.2",
 			"@electron/rebuild": "4.0.3",
 			"vite": ">= 8.0.8",
 			"esbuild": ">= 0.25.0",
@@ -66,6 +70,7 @@
 			"brace-expansion": ">= 2.0.3",
 			"picomatch": ">= 4.0.4",
 			"yaml": ">= 2.8.3",
+			"tar": ">= 7.5.11",
 			"ajv": "^6.14.0",
 			"rollup": ">= 4.59.0"
 		}

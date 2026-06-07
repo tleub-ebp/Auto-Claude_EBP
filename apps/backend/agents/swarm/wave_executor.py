@@ -121,8 +121,12 @@ class WaveExecutor:
             },
         )
 
-        # Create tasks for all subtasks in the wave
-        tasks = []
+        # Create tasks for all subtasks in the wave. Track the originating
+        # subtask_id alongside each task so an exception path can recover the
+        # id — `asyncio.gather(..., return_exceptions=True)` returns
+        # `Exception` objects with no association back to which task raised.
+        tasks: list[Any] = []
+        scheduled_ids: list[str] = []
         for subtask_id in wave.subtask_ids:
             node = nodes.get(subtask_id)
             if not node:
@@ -136,17 +140,20 @@ class WaveExecutor:
                     on_log=on_subtask_log,
                 )
             )
+            scheduled_ids.append(subtask_id)
 
         # Execute all subtasks concurrently
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Collect results
+        # Collect results — pair each result with its scheduled subtask_id so
+        # retry logic in `_retry_failed_subtasks` can locate the failed node
+        # via `nodes.get(sr.subtask_id)` instead of silently dropping.
         wave_result = WaveResult(wave_index=wave.index)
-        for result in results:
+        for subtask_id, result in zip(scheduled_ids, results, strict=True):
             if isinstance(result, Exception):
                 wave_result.results.append(
                     SubtaskResult(
-                        subtask_id="unknown",
+                        subtask_id=subtask_id,
                         success=False,
                         error=str(result),
                     )
@@ -286,12 +293,26 @@ class WaveExecutor:
             self._running_processes[subtask_id] = process
             node.process_pid = process.pid
 
-            # Stream stdout and capture output
-            last_output = ""
+            # Drain stderr concurrently with stdout. Reading stdout to EOF
+            # before touching stderr deadlocks once the child writes more
+            # than the OS pipe buffer (~64KB on Linux) to stderr — the kernel
+            # blocks the write, the child can't progress, stdout never closes,
+            # we wait forever. Spawn a background task that consumes stderr
+            # in parallel.
+            stderr_chunks: list[bytes] = []
+
+            async def _drain_stderr() -> None:
+                if process.stderr is None:
+                    return
+                async for line in process.stderr:
+                    stderr_chunks.append(line)
+
+            stderr_task = asyncio.create_task(_drain_stderr())
+
+            # Stream stdout
             if process.stdout:
                 async for line_bytes in process.stdout:
                     line = line_bytes.decode("utf-8", errors="replace").rstrip()
-                    last_output = line
                     if on_log:
                         on_log(subtask_id, line)
                     # Forward phase events with subtask prefix
@@ -304,14 +325,24 @@ class WaveExecutor:
                             },
                         )
 
-            await process.wait()
+            # Bound the wait so a wedged child cannot stall the entire swarm.
+            try:
+                await asyncio.wait_for(
+                    process.wait(), timeout=self.config.subtask_timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                stderr_task.cancel()
+                raise RuntimeError(
+                    f"Subtask {subtask_id} timed out after "
+                    f"{self.config.subtask_timeout_seconds}s and was killed"
+                )
+
+            await stderr_task
             duration = time.time() - start
 
-            # Read stderr for error info
-            stderr_output = ""
-            if process.stderr:
-                stderr_bytes = await process.stderr.read()
-                stderr_output = stderr_bytes.decode("utf-8", errors="replace")
+            stderr_output = b"".join(stderr_chunks).decode("utf-8", errors="replace")
 
             success = process.returncode == 0
             error = None

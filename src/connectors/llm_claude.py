@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 from .llm_base import BaseLLMProvider
 
@@ -7,7 +7,7 @@ class ClaudeProvider(BaseLLMProvider):
     def __init__(self, api_key: str, model: str = "claude-3-sonnet-20240229"):
         self.api_key = api_key
         self.model = model
-        self._client = None
+        self._client: Optional[Any] = None
 
     def connect(self) -> None:
         try:
@@ -21,7 +21,7 @@ class ClaudeProvider(BaseLLMProvider):
         try:
             self.connect()
             # There is no public 'list models' endpoint, so just check API key format
-            return self.api_key.startswith("sk-")
+            return self.api_key.startswith("sk-ant-")
         except Exception:
             return False
 

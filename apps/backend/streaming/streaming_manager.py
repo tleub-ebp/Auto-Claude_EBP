@@ -312,30 +312,58 @@ class StreamingManager:
         await self._broadcast_event(event)
 
     async def _broadcast_event(self, event: StreamingEvent) -> None:
-        """Broadcast event to all subscribers of the session."""
+        """Broadcast event to all subscribers of the session.
+
+        Sends in parallel with a per-subscriber timeout. The previous
+        sequential `await ws.send(...)` blocked the entire broadcast loop
+        when any single subscriber was slow (laptop sleeping with an open
+        browser tab) — every subsequent event was held back indefinitely
+        for ALL viewers.
+        """
         session_id = event.session_id
 
         # Update event count
         if session_id in self._active_sessions:
             self._active_sessions[session_id]["event_count"] += 1
 
-        # Get subscribers for this session
-        subscribers = self._subscribers.get(session_id, set())
+        # Snapshot subscribers — set may be mutated during iteration via
+        # disconnect callbacks.
+        subscribers = list(self._subscribers.get(session_id, set()))
+        if not subscribers:
+            return
 
-        # Broadcast to all subscribers
-        event_dict = event.to_dict()
-        disconnected = set()
+        payload = json.dumps(event.to_dict())
 
-        for ws in subscribers:
+        async def _send_one(ws: Any) -> tuple[Any, bool]:
             try:
-                await ws.send(json.dumps(event_dict))
-            except Exception as e:
-                print(f"Failed to send to subscriber: {e}")
-                disconnected.add(ws)
+                await asyncio.wait_for(ws.send(payload), timeout=5.0)
+                return ws, True
+            except Exception:
+                return ws, False
 
-        # Remove disconnected subscribers
-        for ws in disconnected:
-            subscribers.discard(ws)
+        results = await asyncio.gather(
+            *(_send_one(ws) for ws in subscribers),
+            return_exceptions=False,
+        )
+
+        # Drop subscribers that failed or timed out.
+        # Cancelling ws.send mid-flight can leave the framing in an
+        # indeterminate state — close the underlying websocket so the
+        # client cannot keep receiving partially-framed messages.
+        live_set = self._subscribers.get(session_id)
+        if live_set is None:
+            return
+        for ws, ok in results:
+            if not ok:
+                live_set.discard(ws)
+                close = getattr(ws, "close", None)
+                if close is not None:
+                    try:
+                        result = close(code=1011)
+                        if asyncio.iscoroutine(result):
+                            asyncio.create_task(result)
+                    except Exception:
+                        pass
 
     def subscribe(self, session_id: str, websocket: Any) -> None:
         """Subscribe a websocket to a session."""

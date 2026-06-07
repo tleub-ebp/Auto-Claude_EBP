@@ -7,6 +7,9 @@
 	"merge": {
 		"buildReadyForReview": "Build prêt pour révision",
 		"view": "Voir",
+		"viewPR": "Voir la PR",
+		"prStatusMessage": "Les modifications de cette tâche sont disponibles dans la demande de fusion ci-dessus.",
+		"notMergeable": "Impossible de fusionner",
 		"checkForConflicts": "Vérifier les conflits",
 		"checkingForConflicts": "Vérification des conflits...",
 		"commits": "commits",
@@ -69,6 +72,10 @@
 	"pr": {
 		"title": "Créer une Pull Request",
 		"description": "Pousser la branche et créer une pull request pour \"{{taskTitle}}\"",
+		"updateTitle": "Mettre à jour la Pull Request",
+		"updateDescription": "Une PR existe déjà pour \"{{taskTitle}}\". Pousser un nouveau commit sur la PR existante.",
+		"updateTooltip": "Une PR existe déjà : un nouveau commit y sera ajouté plutôt que d'en créer une autre.",
+		"existingNotice": "Une pull request existe déjà pour cette tâche. La validation poussera simplement un nouveau commit dessus.",
 		"logs": {
 			"waitingForLogs": "En attente des logs...",
 			"reviewStarting": "La révision démarre",
@@ -104,10 +111,25 @@
 			"created": "Pull request créée avec succès !",
 			"alreadyExists": "Une pull request existe déjà pour cette branche"
 		},
+		"visualProof": {
+			"title": "Preuve visuelle",
+			"openComment": "Ouvrir le commentaire de preuve",
+			"retry": "Relancer la preuve visuelle",
+			"screenshots": "{{count}} capture ajoutée à la PR",
+			"screenshots_other": "{{count}} captures ajoutées à la PR",
+			"status": {
+				"pending": "en attente",
+				"passed": "réussie",
+				"failed": "échouée",
+				"skipped": "ignorée"
+			}
+		},
 		"actions": {
 			"retry": "Réessayer",
 			"creating": "Création en cours...",
-			"create": "Créer la Pull Request"
+			"create": "Créer la Pull Request",
+			"update": "Mettre à jour la PR",
+			"updating": "Mise à jour en cours..."
 		},
 		"labels": {
 			"sourceBranch": "Branche source",
@@ -121,6 +143,20 @@
 		"hints": {
 			"targetBranch": "Laissez vide pour utiliser la branche par défaut",
 			"prTitle": "Laissez vide pour utiliser le titre de la tâche"
+		},
+		"impact": {
+			"title": "Analyse d'impact",
+			"analyzing": "Analyse en cours...",
+			"analysisFailed": "L'analyse d'impact a échoué",
+			"analysisFailedHint": "L'analyse automatique a échoué — le bloc sera rempli avec « N/A » dans la PR.",
+			"aiFilledHint": "Ces champs sont renseignés automatiquement par l'IA et ne sont pas modifiables.",
+			"ratingLabel": "Note de l'impact (1 à 5)",
+			"ratingHint": "1 = pas trop d'impact · 5 = énorme impact",
+			"rating1": "pas trop d'impact",
+			"rating5": "énorme impact",
+			"featuresLabel": "Fonctionnalité(s) impactée(s)",
+			"featuresPlaceholder": "Ex : Fiche véhicule, doc de vente, ...",
+			"featuresHint": "Liste courte, séparée par des virgules"
 		}
 	},
 	"mergeProgress": {
@@ -156,6 +192,25 @@
 		"flatList": "Liste plate",
 		"treeView": "Vue arborescente",
 		"backToList": "Retour à la liste",
+		"edit": "Modifier",
+		"editFile": "Modifier le fichier",
+		"addFile": "Ajouter un fichier",
+		"addingNewFile": "Ajout d'un nouveau fichier",
+		"filePath": "Chemin du fichier",
+		"fileContent": "Contenu du fichier",
+		"filesSelected": "fichiers sélectionnés",
+		"deleteSelected": "Abandonner les modifications",
+		"deleting": "Abandon des modifications en cours...",
+		"save": "Enregistrer",
+		"saving": "Enregistrement en cours...",
+		"cancel": "Annuler",
+		"create": "Créer",
+		"creating": "Création en cours...",
+		"loading": "Chargement...",
+		"selectAll": "Sélectionner tout",
+		"expandAll": "Tout développer",
+		"collapseAll": "Tout réduire",
+		"error": "Erreur",
 		"status": {
 			"added": "ajouté",
 			"deleted": "supprimé",

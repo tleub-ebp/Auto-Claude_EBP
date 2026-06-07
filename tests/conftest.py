@@ -63,6 +63,7 @@ if _BACKEND_ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 _MODULES_TO_PRESERVE = [
     "core",
+    "core.agent_client",
     "core.platform",
     "core.auth",
     "review",
@@ -688,8 +689,14 @@ pytest_plugins = ('pytest_asyncio',)
 
 # Configure asyncio mode for pytest
 def pytest_configure(config):
-    """Configure pytest-asyncio"""
+    """Configure pytest-asyncio and register markers"""
     config.option.asyncio_mode = "auto"
+    # Register markers to avoid PytestUnknownMarkWarning
+    config.addinivalue_line("markers", "unit: Unit tests")
+    config.addinivalue_line("markers", "integration: Integration tests")
+    config.addinivalue_line("markers", "e2e: End-to-end tests")
+    config.addinivalue_line("markers", "streaming: Streaming-specific tests")
+    config.addinivalue_line("markers", "performance: Performance tests")
 
 
 # ---------------------------------------------------------------------------

@@ -299,6 +299,14 @@ AGENT_CONFIGS = {
         # If using Sonnet/Opus models, override max_thinking_tokens in create_simple_client()
         "thinking_default": "none",
     },
+    # AI Analyzer (runners/ai_analyzer) — project-wide read-only inspection.
+    # No MCP servers: it's a pure code-walk that writes nothing.
+    "analyzer": {
+        "tools": BASE_READ_TOOLS,
+        "mcp_servers": [],
+        "auto_claude_tools": [],
+        "thinking_default": "low",
+    },
     "merge_resolver": {
         "tools": [],  # Text-only analysis
         "mcp_servers": [],

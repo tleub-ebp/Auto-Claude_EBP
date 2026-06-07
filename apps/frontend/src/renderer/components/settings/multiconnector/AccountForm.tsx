@@ -276,17 +276,20 @@ const AccountForm: React.FC<Props> = ({ provider, onSave, onCancel }) => {
 	const [formState, setFormState] = useState<Record<string, string>>({});
 
 	useEffect(() => {
-		fetch(`/providers/models/${provider}`)
+		const controller = new AbortController();
+		fetch(`/providers/models/${provider}`, { signal: controller.signal })
 			.then((res) => {
 				if (!res.ok) throw new Error(`HTTP ${res.status}`);
 				return res.json();
 			})
 			.then((data) => setModels(data.models || []))
 			.catch((err) => {
+				if ((err as { name?: string })?.name === "AbortError") return;
 				console.error("Failed to fetch provider models:", err);
 				setModels([]);
 			});
 		setFormState({}); // reset form on provider change
+		return () => controller.abort();
 	}, [provider]);
 
 	const fields = getFieldsForProvider(provider);

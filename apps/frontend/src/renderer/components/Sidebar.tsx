@@ -262,27 +262,28 @@ const navGroups: NavGroup[] = [
 				shortcut: "WK",
 			},
 			{
-				id: "mission-control",
-				labelKey: "navigation:items.missionControl",
-				icon: Rocket,
-				shortcut: "WM",
-			},
-			{
-				id: "phase35-hub",
-				labelKey: "navigation:items.phase35Hub",
-				icon: Sparkles,
-			},
-			{
 				id: "dashboard",
 				labelKey: "navigation:items.dashboard",
 				icon: BarChart3,
 				shortcut: "WD",
 			},
 			{
+				id: "mission-control",
+				labelKey: "navigation:items.missionControl",
+				icon: Rocket,
+				shortcut: "WM",
+			},
+			{
 				id: "session-history",
 				labelKey: "navigation:items.sessionHistory",
 				icon: History,
 				shortcut: "WS",
+			},
+			{
+				id: "phase35-hub",
+				labelKey: "navigation:items.phase35Hub",
+				icon: Sparkles,
+				shortcut: "WA",
 			},
 		],
 		defaultExpanded: true,
@@ -793,6 +794,7 @@ export function Sidebar({
 		reorderItems,
 		toggleGroupExpanded,
 		setFavoritesExpanded,
+		clearAllFavorites,
 		reset: resetSidebarPrefs,
 		mergeOrder,
 	} = useSidebarPrefs();
@@ -1090,7 +1092,7 @@ export function Sidebar({
 
 			// Check if this letter is a known prefix (first letter of any shortcut)
 			const isPrefix = visibleNavItems.some(
-				(item) => item.shortcut?.length === 2 && item.shortcut[0] === key,
+				(item) => item.shortcut?.length === 2 && item.shortcut.startsWith(key),
 			);
 			if (isPrefix) {
 				e.preventDefault();
@@ -1339,6 +1341,41 @@ export function Sidebar({
 		setActiveDragId(String(event.active.id));
 	}, []);
 
+	// Helper function to handle dropping on favorites
+	const handleFavoritesDrop = useCallback((activeInfo: any, overInfo: any) => {
+		if (activeInfo.kind === "item" && !pinnedItemsSet.has(activeInfo.id)) {
+			toggleItemPin(activeInfo.id);
+			return true;
+		}
+		if (activeInfo.kind === "group" && !pinnedGroupsSet.has(activeInfo.id)) {
+			toggleGroupPin(activeInfo.id);
+			return true;
+		}
+		return false;
+	}, [pinnedItemsSet, pinnedGroupsSet, toggleItemPin, toggleGroupPin]);
+
+	// Helper function to handle group reordering
+	const handleGroupReorder = useCallback((activeInfo: any, overInfo: any) => {
+		if (activeInfo.id === overInfo.id) return true;
+		const actualOrder = visibleNavGroups.map((g) => g.id);
+		reorderGroups(activeInfo.id, overInfo.id, actualOrder);
+		return true;
+	}, [visibleNavGroups, reorderGroups]);
+
+	// Helper function to handle item reordering within groups
+	const handleItemReorder = useCallback((activeInfo: any, overInfo: any) => {
+		if (activeInfo.id === overInfo.id) return true;
+		const group = visibleNavGroups.find(
+			(g) =>
+				g.items.some((i) => i.id === activeInfo.id) &&
+				g.items.some((i) => i.id === overInfo.id),
+		);
+		if (!group) return false;
+		const actualOrder = group.items.map((i) => i.id);
+		reorderItems(group.id, activeInfo.id, overInfo.id, actualOrder);
+		return true;
+	}, [visibleNavGroups, reorderItems]);
+
 	// Drag-end router. A drop's effect depends on the decoded "kind" of both
 	// active and over ids — group-onto-group reorders, item-onto-item reorders
 	// within the same group (cross-group drops are ignored to keep the mental
@@ -1355,36 +1392,19 @@ export function Sidebar({
 
 			// Dropped on the favorites drop zone -> pin the item/group
 			if (overInfo.kind === "fav-group" || over.id === "__fav_drop__") {
-				if (activeInfo.kind === "item" && !pinnedItemsSet.has(activeInfo.id)) {
-					toggleItemPin(activeInfo.id);
-				} else if (
-					activeInfo.kind === "group" &&
-					!pinnedGroupsSet.has(activeInfo.id)
-				) {
-					toggleGroupPin(activeInfo.id);
-				}
+				handleFavoritesDrop(activeInfo, overInfo);
 				return;
 			}
 
 			// Reorder groups (same kind, both "group")
 			if (activeInfo.kind === "group" && overInfo.kind === "group") {
-				if (activeInfo.id === overInfo.id) return;
-				const actualOrder = visibleNavGroups.map((g) => g.id);
-				reorderGroups(activeInfo.id, overInfo.id, actualOrder);
+				handleGroupReorder(activeInfo, overInfo);
 				return;
 			}
 
 			// Reorder items within the same group
 			if (activeInfo.kind === "item" && overInfo.kind === "item") {
-				if (activeInfo.id === overInfo.id) return;
-				const group = visibleNavGroups.find(
-					(g) =>
-						g.items.some((i) => i.id === activeInfo.id) &&
-						g.items.some((i) => i.id === overInfo.id),
-				);
-				if (!group) return;
-				const actualOrder = group.items.map((i) => i.id);
-				reorderItems(group.id, activeInfo.id, overInfo.id, actualOrder);
+				handleItemReorder(activeInfo, overInfo);
 			}
 		},
 		[
@@ -1395,6 +1415,9 @@ export function Sidebar({
 			reorderItems,
 			toggleItemPin,
 			toggleGroupPin,
+			handleFavoritesDrop,
+			handleGroupReorder,
+			handleItemReorder,
 		],
 	);
 
@@ -1526,20 +1549,32 @@ export function Sidebar({
 		return subGroups;
 	};
 
-	const renderTooltipSubGroupItem = (item: NavItem) => (
-		<div
-			key={item.id}
-			className="flex items-center gap-2 text-xs p-1 rounded hover:bg-accent/50"
-		>
-			<item.icon className="h-3 w-3 shrink-0" />
-			<span className="truncate">{t(item.labelKey)}</span>
-			{item.shortcut && (
-				<kbd className="rounded border border-border bg-secondary px-1 font-mono text-[9px] ml-auto">
-					{item.shortcut}
-				</kbd>
-			)}
-		</div>
-	);
+	const renderTooltipSubGroupItem = (item: NavItem) => {
+		const isActive = activeView === item.id;
+		return (
+			<button
+				key={item.id}
+				type="button"
+				onClick={() => handleNavClick(item.id)}
+				disabled={!selectedProjectId}
+				aria-keyshortcuts={item.shortcut}
+				className={cn(
+					"w-full flex items-center gap-2 text-xs p-1 rounded text-left",
+					"hover:bg-accent hover:text-accent-foreground",
+					"disabled:pointer-events-none disabled:opacity-50",
+					isActive && "bg-accent text-accent-foreground",
+				)}
+			>
+				<item.icon className="h-3 w-3 shrink-0" />
+				<span className="flex-1 truncate">{t(item.labelKey)}</span>
+				{item.shortcut && (
+					<kbd className="rounded border border-border bg-secondary px-1 font-mono text-[9px]">
+						{item.shortcut}
+					</kbd>
+				)}
+			</button>
+		);
+	};
 
 	const renderTooltipItems = (items: NavItem[]) => {
 		const hasSubGroups = items.some((item) => item.subGroup);
@@ -1611,6 +1646,39 @@ export function Sidebar({
 		);
 	};
 
+	// Helper function to render sub-group items with proper indexing
+	const renderSubGroupItems = (items: NavItem[], context: "default" | "favorites") => {
+		let itemIndex = 0;
+		return items.map((item) => {
+			const delay = itemIndex * 50;
+			itemIndex++;
+			return renderExpandedSubGroupItem(item, delay, context);
+		});
+	};
+
+	// Helper function to render sub-groups
+	const renderSubGroups = (items: NavItem[], context: "default" | "favorites") => {
+		const subGroups = groupItemsBySubGroup(items);
+		return subGroups.map((sg, sgIndex) => (
+			<div
+				key={sg.key}
+				className={cn(
+					"rounded-lg overflow-hidden bg-white/4 border border-white/8 px-1.5 py-1.5",
+					sgIndex > 0 && "mt-2",
+				)}
+			>
+				{sg.key && (
+					<div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+						{t(sg.key)}
+					</div>
+				)}
+				<div className="space-y-0.5">
+					{renderSubGroupItems(sg.items, context)}
+				</div>
+			</div>
+		));
+	};
+
 	const renderExpandedItems = (
 		items: NavItem[],
 		context: "default" | "favorites" = "default",
@@ -1618,39 +1686,14 @@ export function Sidebar({
 		const hasSubGroups = items.some((item) => item.subGroup);
 		const sortableIds = items.map((i) => encodeSortableId("item", i.id));
 
-		const content = !hasSubGroups ? (
+		const content = hasSubGroups ? (
+			renderSubGroups(items, context)
+		) : (
 			<div className="rounded-lg overflow-hidden bg-white/4 border border-white/8 px-1.5 py-1.5 space-y-0.5">
 				{items.map((item, index) =>
 					renderExpandedSubGroupItem(item, index * 50, context),
 				)}
 			</div>
-		) : (
-			(() => {
-				const subGroups = groupItemsBySubGroup(items);
-				let itemIndex = 0;
-				return subGroups.map((sg, sgIndex) => (
-					<div
-						key={sg.key}
-						className={cn(
-							"rounded-lg overflow-hidden bg-white/4 border border-white/8 px-1.5 py-1.5",
-							sgIndex > 0 && "mt-2",
-						)}
-					>
-						{sg.key && (
-							<div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-								{t(sg.key)}
-							</div>
-						)}
-						<div className="space-y-0.5">
-							{sg.items.map((item) => {
-								const delay = itemIndex * 50;
-								itemIndex++;
-								return renderExpandedSubGroupItem(item, delay, context);
-							})}
-						</div>
-					</div>
-				));
-			})()
 		);
 
 		if (context === "favorites") return content;
@@ -1664,54 +1707,147 @@ export function Sidebar({
 		);
 	};
 
+	// Helper function to determine if a group is expanded
+	const getGroupExpandedState = (group: NavGroup, isFavorites: boolean): boolean => {
+		if (searchQuery.trim()) {
+			return true;
+		}
+		if (isFavorites) {
+			return sidebarPrefs.favoritesExpanded;
+		}
+		return expandedGroups.has(group.id);
+	};
+
+	// Helper function to get icon container className
+	const getIconContainerClassName = (isFavorites: boolean, hasActiveItem: boolean): string => {
+		if (isFavorites) {
+			return "bg-amber-400/10 text-amber-400";
+		}
+		if (hasActiveItem) {
+			return "bg-primary/10 text-primary";
+		}
+		return "text-muted-foreground";
+	};
+
+	// Helper function to render collapsed group
+	const renderCollapsedGroup = (group: NavGroup, hasActiveItem: boolean) => {
+		const GroupIcon = group.icon;
+		const isFavorites = group.id === "__favorites__";
+		
+		return (
+			<Tooltip key={group.id}>
+				<TooltipTrigger asChild>
+					<div className="flex flex-col items-center gap-1 py-2">
+						<div
+							className={cn(
+								"flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200 hover:scale-105",
+								hasActiveItem
+									? "bg-accent text-accent-foreground shadow-sm"
+									: "hover:bg-accent hover:text-accent-foreground",
+								isFavorites && "ring-1 ring-amber-400/40",
+							)}
+						>
+							<GroupIcon
+								className={cn(
+									"h-4 w-4",
+									isFavorites && "fill-amber-400 text-amber-400",
+								)}
+							/>
+						</div>
+					</div>
+				</TooltipTrigger>
+				<TooltipContent side="right" className="max-w-xs">
+					<div className="space-y-2">
+						<p className="font-medium text-sm">{t(group.labelKey)}</p>
+						<div className="space-y-1">{renderTooltipItems(group.items)}</div>
+					</div>
+				</TooltipContent>
+			</Tooltip>
+		);
+	};
+
 	const renderNavGroup = (
 		group: NavGroup,
 		context: "default" | "favorites" = "default",
 	) => {
 		const isFavorites = group.id === "__favorites__";
-		const isExpanded = searchQuery.trim()
-			? true
-			: isFavorites
-				? sidebarPrefs.favoritesExpanded
-				: expandedGroups.has(group.id);
-		const GroupIcon = group.icon;
+		const isExpanded = getGroupExpandedState(group, isFavorites);
 		const hasActiveItem = group.items.some((item) => activeView === item.id);
 		const isPinned = pinnedGroupsSet.has(group.id);
 
 		if (isCollapsed) {
 			// In collapsed mode, show group icon with tooltip containing all items
-			return (
-				<Tooltip key={group.id}>
-					<TooltipTrigger asChild>
-						<div className="flex flex-col items-center gap-1 py-2">
-							<div
-								className={cn(
-									"flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200 hover:scale-105",
-									hasActiveItem
-										? "bg-accent text-accent-foreground shadow-sm"
-										: "hover:bg-accent hover:text-accent-foreground",
-									isFavorites && "ring-1 ring-amber-400/40",
-								)}
-							>
-								<GroupIcon
-									className={cn(
-										"h-4 w-4",
-										isFavorites && "fill-amber-400 text-amber-400",
-									)}
-								/>
-							</div>
-						</div>
-					</TooltipTrigger>
-					<TooltipContent side="right" className="max-w-xs">
-						<div className="space-y-2">
-							<p className="font-medium text-sm">{t(group.labelKey)}</p>
-							<div className="space-y-1">{renderTooltipItems(group.items)}</div>
-						</div>
-					</TooltipContent>
-				</Tooltip>
-			);
+			return renderCollapsedGroup(group, hasActiveItem);
 		}
 
+		// Helper function to render the pin button
+	const renderPinButton = (group: NavGroup, isPinned: boolean, context: "default" | "favorites") => {
+		const isFavorites = group.id === "__favorites__";
+		
+		if (context === "favorites" || isFavorites) {
+			return null;
+		}
+
+		return (
+			<button
+				type="button"
+				onClick={(e) => {
+					e.stopPropagation();
+					toggleGroupPin(group.id);
+				}}
+				aria-label={
+					isPinned
+						? t("navigation:actions.unpinGroup")
+						: t("navigation:actions.pinGroup")
+				}
+				aria-pressed={isPinned}
+				className={cn(
+					"flex items-center justify-center w-5 h-5 shrink-0 rounded",
+					"transition-all duration-200",
+					"hover:bg-accent/60 hover:scale-110",
+					isPinned
+						? "text-amber-400 opacity-100"
+						: "text-muted-foreground/40 hover:text-amber-400 opacity-0 group-hover/nav-group:opacity-100 focus-visible:opacity-100",
+				)}
+			>
+				<Star
+					className={cn("h-3.5 w-3.5", isPinned && "fill-amber-400")}
+				/>
+			</button>
+		);
+	};
+
+	// Helper function to render the clear favorites button
+	const renderClearFavoritesButton = (isFavorites: boolean) => {
+		if (!isFavorites) {
+			return null;
+		}
+
+		return (
+			<button
+				type="button"
+				onClick={(e) => {
+					e.stopPropagation();
+					clearAllFavorites();
+				}}
+				aria-label={t("navigation:actions.clearAllFavorites")}
+				title={t("navigation:actions.clearAllFavorites")}
+				className={cn(
+					"flex items-center justify-center w-5 h-5 shrink-0 rounded",
+					"transition-all duration-200",
+					"text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 hover:scale-110",
+				)}
+			>
+				<X className="h-3.5 w-3.5" />
+			</button>
+		);
+	};
+
+	// Helper function to render the main group button
+	const renderGroupButton = (group: NavGroup, isExpanded: boolean, hasActiveItem: boolean) => {
+		const isFavorites = group.id === "__favorites__";
+		const GroupIcon = group.icon;
+		
 		const toggleExpand = () => {
 			if (isFavorites) {
 				setFavoritesExpanded(!isExpanded);
@@ -1719,6 +1855,55 @@ export function Sidebar({
 				toggleGroupExpansion(group.id);
 			}
 		};
+
+		return (
+			<button
+				type="button"
+				onClick={toggleExpand}
+				className={cn(
+					"flex flex-1 min-w-0 items-center rounded-lg text-sm transition-all duration-200 hover:scale-[1.02]",
+					"hover:bg-accent hover:text-accent-foreground hover:shadow-sm",
+					hasActiveItem && "bg-accent/50 text-accent-foreground shadow-sm",
+					"gap-3 px-3 py-2.5",
+				)}
+			>
+				<div
+					className={cn(
+						"flex items-center justify-center w-8 h-8 rounded-md transition-colors shrink-0",
+						getIconContainerClassName(isFavorites, hasActiveItem),
+					)}
+				>
+					<GroupIcon
+						className={cn(
+							"h-4 w-4",
+							isFavorites && "fill-amber-400 text-amber-400",
+						)}
+					/>
+				</div>
+				<span className="flex-1 text-left font-medium truncate">
+					{t(group.labelKey)}
+				</span>
+				<div className="flex items-center gap-1 shrink-0">
+					<span
+						className={cn(
+							"text-xs px-1.5 py-0.5 rounded-full",
+							isFavorites
+								? "text-amber-400 bg-amber-400/10"
+								: "text-muted-foreground bg-muted",
+						)}
+					>
+						{group.items.length}
+					</span>
+					<ChevronRight
+						className={cn(
+							"h-4 w-4 shrink-0 transition-transform duration-300 text-muted-foreground",
+							isExpanded && "rotate-90",
+						)}
+					/>
+				</div>
+			</button>
+		);
+	};
 
 		return (
 			<div
@@ -1730,82 +1915,9 @@ export function Sidebar({
 				)}
 			>
 				<div className="flex items-center gap-1 pr-1">
-					<button
-						type="button"
-						onClick={toggleExpand}
-						className={cn(
-							"flex flex-1 min-w-0 items-center rounded-lg text-sm transition-all duration-200 hover:scale-[1.02]",
-							"hover:bg-accent hover:text-accent-foreground hover:shadow-sm",
-							hasActiveItem && "bg-accent/50 text-accent-foreground shadow-sm",
-							"gap-3 px-3 py-2.5",
-						)}
-					>
-						<div
-							className={cn(
-								"flex items-center justify-center w-8 h-8 rounded-md transition-colors shrink-0",
-								isFavorites
-									? "bg-amber-400/10 text-amber-400"
-									: hasActiveItem
-										? "bg-primary/10 text-primary"
-										: "text-muted-foreground",
-							)}
-						>
-							<GroupIcon
-								className={cn(
-									"h-4 w-4",
-									isFavorites && "fill-amber-400 text-amber-400",
-								)}
-							/>
-						</div>
-						<span className="flex-1 text-left font-medium truncate">
-							{t(group.labelKey)}
-						</span>
-						<div className="flex items-center gap-1 shrink-0">
-							<span
-								className={cn(
-									"text-xs px-1.5 py-0.5 rounded-full",
-									isFavorites
-										? "text-amber-400 bg-amber-400/10"
-										: "text-muted-foreground bg-muted",
-								)}
-							>
-								{group.items.length}
-							</span>
-							<ChevronRight
-								className={cn(
-									"h-4 w-4 shrink-0 transition-transform duration-300 text-muted-foreground",
-									isExpanded && "rotate-90",
-								)}
-							/>
-						</div>
-					</button>
-					{context !== "favorites" && !isFavorites && (
-						<button
-							type="button"
-							onClick={(e) => {
-								e.stopPropagation();
-								toggleGroupPin(group.id);
-							}}
-							aria-label={
-								isPinned
-									? t("navigation:actions.unpinGroup")
-									: t("navigation:actions.pinGroup")
-							}
-							aria-pressed={isPinned}
-							className={cn(
-								"flex items-center justify-center w-5 h-5 shrink-0 rounded",
-								"transition-all duration-200",
-								"hover:bg-accent/60 hover:scale-110",
-								isPinned
-									? "text-amber-400 opacity-100"
-									: "text-muted-foreground/40 hover:text-amber-400 opacity-0 group-hover/nav-group:opacity-100 focus-visible:opacity-100",
-							)}
-						>
-							<Star
-								className={cn("h-3.5 w-3.5", isPinned && "fill-amber-400")}
-							/>
-						</button>
-					)}
+					{renderGroupButton(group, isExpanded, hasActiveItem)}
+					{renderPinButton(group, isPinned, context)}
+					{renderClearFavoritesButton(isFavorites)}
 				</div>
 
 				{isExpanded && (
@@ -2092,20 +2204,22 @@ export function Sidebar({
 					<Collapsible
 						open={isCliPanelExpanded}
 						onOpenChange={setIsCliPanelExpanded}
+						className={isCollapsed ? "flex flex-col" : undefined}
 					>
 						<CollapsibleTrigger asChild>
 							<Button
 								variant="ghost"
-								size="sm"
-								className={cn(
-									"w-full justify-start gap-2 text-xs font-medium",
-									isCollapsed ? "h-8 w-8 p-0" : "h-8",
-								)}
+								size={isCollapsed ? "icon" : "sm"}
+								className={
+									isCollapsed
+										? "self-center"
+										: "w-full h-8 justify-start gap-2 text-xs font-medium"
+								}
 							>
 								<Wrench className="h-4 w-4" />
 								{!isCollapsed && (
 									<>
-										<span>{t("common:actions.cliToolsAndSettings")}</span>
+										<span>{t("common:actions.cliTools")}</span>
 										<ChevronRight
 											className={cn(
 												"h-3 w-3 ml-auto transition-transform duration-200",
@@ -2130,55 +2244,55 @@ export function Sidebar({
 									onNavigateToTerminals={() => onViewChange?.("terminals", true)}
 								/>
 							</div>
-
-							{/* Settings and Help row */}
-							<div
-								className={cn(
-									"flex items-center rounded-lg bg-white/4 border border-white/8 p-1.5",
-									isCollapsed ? "flex-col gap-1" : "gap-2",
-								)}
-							>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button
-											variant="ghost"
-											size={isCollapsed ? "icon" : "sm"}
-											className={
-												isCollapsed ? "" : "flex-1 justify-start gap-2"
-											}
-											onClick={onSettingsClick}
-										>
-											<Settings className="h-4 w-4" />
-											{!isCollapsed && t("actions.settings")}
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent side={isCollapsed ? "right" : "top"}>
-										{t("tooltips.settings")}
-									</TooltipContent>
-								</Tooltip>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button
-											variant="ghost"
-											size="icon"
-											onClick={() =>
-												globalThis.open(
-													"https://github.com/tleub-ebp/WorkPilot-AI/issues",
-													"_blank",
-												)
-											}
-											aria-label={t("tooltips.help")}
-										>
-											<HelpCircle className="h-4 w-4" />
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent side={isCollapsed ? "right" : "top"}>
-										{t("tooltips.help")}
-									</TooltipContent>
-								</Tooltip>
-							</div>
 						</CollapsibleContent>
 					</Collapsible>
+
+					{/* Settings and Help row — always visible, outside the CLI collapsible */}
+					<div
+						className={cn(
+							"flex items-center rounded-lg bg-white/4 border border-white/8 p-1.5",
+							isCollapsed ? "flex-col gap-1" : "gap-2",
+						)}
+					>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="ghost"
+									size={isCollapsed ? "icon" : "sm"}
+									className={
+										isCollapsed ? "" : "flex-1 justify-start gap-2"
+									}
+									onClick={onSettingsClick}
+								>
+									<Settings className="h-4 w-4" />
+									{!isCollapsed && t("actions.settings")}
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side={isCollapsed ? "right" : "top"}>
+								{t("tooltips.settings")}
+							</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="ghost"
+									size="icon"
+									onClick={() =>
+										globalThis.open(
+											"https://github.com/tleub-ebp/WorkPilot-AI/issues",
+											"_blank",
+										)
+									}
+									aria-label={t("tooltips.help")}
+								>
+									<HelpCircle className="h-4 w-4" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side={isCollapsed ? "right" : "top"}>
+								{t("tooltips.help")}
+							</TooltipContent>
+						</Tooltip>
+					</div>
 
 					{/* New Task button */}
 					<Tooltip>

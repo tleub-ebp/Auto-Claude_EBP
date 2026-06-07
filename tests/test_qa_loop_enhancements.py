@@ -249,12 +249,13 @@ class TestHasRecurringIssues:
     def test_recurring_detected(self):
         """Test detection of recurring issues."""
         current = [{"title": "Same error", "file": "app.py"}]
+        # On construit explicitement assez d'historique pour atteindre le seuil
+        # par défaut (auparavant 3, maintenant 8).
         history = [
-            {"issues": [{"title": "Same error", "file": "app.py"}]},
-            {"issues": [{"title": "Same error", "file": "app.py"}]},
+            {"issues": [{"title": "Same error", "file": "app.py"}]}
+            for _ in range(RECURRING_ISSUE_THRESHOLD - 1)
         ]
 
-        # Current + 2 history = 3 occurrences >= threshold
         has_recurring, recurring = has_recurring_issues(current, history)
 
         assert has_recurring is True
@@ -509,7 +510,8 @@ class TestConfiguration:
 
     def test_recurring_threshold_default(self):
         """Test default recurring issue threshold."""
-        assert RECURRING_ISSUE_THRESHOLD == 3
+        # Le défaut a été remonté de 3 à 8 (cf. apps/backend/qa/report.py).
+        assert RECURRING_ISSUE_THRESHOLD == 8
 
     def test_similarity_threshold_default(self):
         """Test default similarity threshold."""

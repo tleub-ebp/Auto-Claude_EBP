@@ -8,12 +8,20 @@ import {
 	writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { type BrowserWindow, ipcMain } from "electron";
+
+// ESM doesn't expose __dirname out of the box. The main process is bundled
+// as ESM (apps/frontend/package.json sets "type": "module"), so we have to
+// derive the directory of this module from import.meta.url ourselves.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import {
 	AUTO_BUILD_PATHS,
 	getSpecsDir,
 	IPC_CHANNELS,
 } from "../../../shared/constants";
+import { isAnthropicNativeVersionedModelId } from "../../../shared/constants/models";
 import type { TaskEvent } from "../../../shared/state-machines/task-machine";
 import type {
 	ImageAttachment,
@@ -43,10 +51,14 @@ import { readSettingsFile } from "../../settings-utils";
 import { taskStateManager } from "../../task-state-manager";
 import { getIsolatedGitEnv } from "../../utils/git-isolation";
 import { findTaskWorktree } from "../../worktree-paths";
+import { cleanupWorktree } from "../../utils/worktree-cleanup";
 import {
 	createPlanIfNotExists,
 	getPlanPath,
 	persistPlanStatus,
+	updatePlanSubtasks,
+	getModifiedFilesFromWorktree,
+	generateSubtasksFromModifiedFiles,
 } from "./plan-file-utils";
 import { findTaskAndProject } from "./shared";
 
@@ -85,6 +97,7 @@ function convertTaskMetadataToSpecCreation(metadata?: any): any {
 		thinkingLevel: metadata.thinkingLevel,
 		useWorktree: metadata.useWorktree,
 		useLocalBranch: metadata.useLocalBranch,
+		tddMode: metadata.tddMode,
 	};
 }
 
@@ -277,13 +290,18 @@ function persistProviderToMetadata(
 		// versioned model ID (e.g. "claude-sonnet-4-5-20250929") from the single
 		// model field so the backend falls back to PROVIDER_DEFAULT_MODELS for the
 		// new provider instead of sending an invalid model ID to the API.
+		//
+		// IMPORTANT: Copilot exposes Claude models in dot notation (e.g.
+		// "claude-opus-4.8", "claude-sonnet-4.6") which ARE valid and must be
+		// preserved. Only dash-versioned Anthropic-native IDs are cleared — see
+		// isAnthropicNativeVersionedModelId.
 		const isNonAnthropicProvider =
 			projectProvider &&
 			projectProvider !== "anthropic" &&
 			projectProvider !== "claude";
 		const hasAnthropicVersionedModel =
 			typeof meta.model === "string" &&
-			/^claude-(opus|sonnet|haiku)-\d/.test(meta.model);
+			isAnthropicNativeVersionedModelId(meta.model);
 		if (isNonAnthropicProvider && hasAnthropicVersionedModel) {
 			delete meta.model;
 		}
@@ -578,6 +596,7 @@ export function registerTaskExecutionHandlers(
 			baseBranch,
 			useWorktree: task.metadata?.useWorktree,
 			useLocalBranch: task.metadata?.useLocalBranch,
+			tddMode: task.metadata?.tddMode,
 			enableStreaming: options?.enableStreaming ?? true,
 			streamingSessionId: options?.streamingSessionId ?? taskId,
 		};
@@ -703,6 +722,82 @@ export function registerTaskExecutionHandlers(
 				needsImplementation,
 				options,
 			);
+		},
+	);
+
+	/**
+	 * Resume a Claude SDK session for a task that hit max_turns or max_budget_usd.
+	 *
+	 * Reads the session_id persisted by the Python backend in
+	 * `<specDir>/.session.json` and re-spawns the build subprocess with
+	 * AUTO_CLAUDE_RESUME_SESSION_ID set. The backend's create_client()
+	 * picks it up and passes it to ClaudeAgentOptions(resume=...), so the
+	 * SDK rehydrates the prior transcript instead of replaying from scratch.
+	 *
+	 * Distinct from TASK_RESUME_PAUSED which handles rate-limit/auth pauses.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_RESUME_SESSION,
+		async (_, taskId: string): Promise<IPCResult> => {
+			const { task, project } = findTaskAndProject(taskId);
+			if (!task || !project) {
+				return { success: false, error: "Task not found" };
+			}
+
+			const specsBaseDir = getSpecsDir(project.autoBuildPath);
+			const specDir = path.join(project.path, specsBaseDir, task.specId);
+			const sessionFile = path.join(specDir, ".session.json");
+
+			if (!existsSync(sessionFile)) {
+				return {
+					success: false,
+					error: "No persisted SDK session found for this task — run it once first.",
+				};
+			}
+
+			let sessionId: string | undefined;
+			try {
+				const raw = readFileSync(sessionFile, "utf-8");
+				const parsed = JSON.parse(raw) as { session_id?: string };
+				sessionId = parsed.session_id;
+			} catch (err) {
+				return {
+					success: false,
+					error: `Could not read .session.json: ${(err as Error).message}`,
+				};
+			}
+
+			if (!sessionId) {
+				return {
+					success: false,
+					error: ".session.json is missing the session_id field.",
+				};
+			}
+
+			// Spawn the build subprocess with the resume flag carried in env.
+			// Reuse startTaskExecution so the same auth/path checks fire.
+			const executionOptions = {
+				parallel: false,
+				workers: 1,
+				baseBranch: task.metadata?.baseBranch || project.settings?.mainBranch,
+				useWorktree: task.metadata?.useWorktree,
+				useLocalBranch: task.metadata?.useLocalBranch,
+				enableStreaming: true,
+				streamingSessionId: taskId,
+				resumeSessionId: sessionId,
+			};
+			agentManager.startTaskExecution(
+				taskId,
+				project.path,
+				task.specId,
+				executionOptions,
+				project.id,
+			);
+
+			appLog.info(
+				`[TASK_RESUME_SESSION] Resumed task ${task.specId} with session_id=${sessionId}`,
+			);
+			return { success: true };
 		},
 	);
 
@@ -965,17 +1060,143 @@ export function registerTaskExecutionHandlers(
 					};
 				}
 
-				// Restart QA process - use worktree path if it exists, otherwise main project
-				// The QA process needs to run where the implementation_plan.json with completed subtasks is
+				// Generate subtasks from modified files and feedback
+				// This creates new subtasks in the implementation plan with the modified files attached
+				if (hasWorktree && worktreePath) {
+					try {
+						console.warn("[TASK_REVIEW] Generating subtasks from modified files...");
+
+						// Get modified files from the worktree
+						const modifiedFiles = getModifiedFilesFromWorktree(worktreePath);
+
+						if (modifiedFiles.length > 0) {
+							// Generate subtasks grouped by directory
+							const newSubtasks = generateSubtasksFromModifiedFiles(
+								modifiedFiles,
+								feedback || "Needs fixes based on user feedback",
+							);
+
+							// Load the current implementation plan
+							const planPath = path.join(
+								worktreeSpecDir || specDir,
+								AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
+							);
+
+							try {
+								const planContent = readFileSync(planPath, "utf-8");
+								const plan = JSON.parse(planContent);
+
+								// Add new subtasks to the Implementation phase or create it
+								if (!plan.phases) {
+									plan.phases = [];
+								}
+
+								let implPhase = plan.phases.find(
+									(p: Record<string, unknown>) => p.name === "Implementation",
+								);
+								if (!implPhase) {
+									implPhase = { name: "Implementation", subtasks: [] };
+									plan.phases.push(implPhase);
+								}
+
+								// Add the new subtasks
+								if (!Array.isArray(implPhase.subtasks)) {
+									implPhase.subtasks = [];
+								}
+								implPhase.subtasks.push(...newSubtasks);
+
+								// Update the plan file
+								writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf-8");
+
+								console.warn(
+									`[TASK_REVIEW] Added ${newSubtasks.length} new subtasks to implementation plan`,
+								);
+								appLog.info(
+									`[TASK_REVIEW] Generated ${newSubtasks.length} subtasks from ${modifiedFiles.length} modified files`,
+								);
+							} catch (planError) {
+								console.warn(
+									"[TASK_REVIEW] Could not update implementation plan with subtasks:",
+									planError,
+								);
+								// Log but don't fail - the QA process will still run
+								appLog.warn(
+									`[TASK_REVIEW] Failed to generate subtasks from modified files: ${planError instanceof Error ? planError.message : String(planError)}`,
+								);
+							}
+						} else {
+							console.warn(
+								"[TASK_REVIEW] No modified files detected in worktree",
+							);
+						}
+					} catch (subtaskError) {
+						console.warn(
+							"[TASK_REVIEW] Error generating subtasks:",
+							subtaskError,
+						);
+						// Don't fail the review - continue with QA process
+						appLog.warn(
+							`[TASK_REVIEW] Failed to generate subtasks: ${subtaskError instanceof Error ? subtaskError.message : String(subtaskError)}`,
+						);
+					}
+				}
+
+				// Reset existing subtasks to "pending" in the implementation plan
+				// so the full pipeline (planning → coding → QA) will re-process them
+				const resetPlanPath = path.join(
+					hasWorktree && worktreeSpecDir ? worktreeSpecDir : specDir,
+					AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
+				);
+				try {
+					const resetPlanContent = readFileSync(resetPlanPath, "utf-8");
+					const resetPlan = JSON.parse(resetPlanContent);
+					if (resetPlan.phases) {
+						for (const phase of resetPlan.phases) {
+							if (Array.isArray(phase.subtasks)) {
+								for (const subtask of phase.subtasks) {
+									// Only reset completed/failed subtasks back to pending
+									if (subtask.status === "completed" || subtask.status === "failed") {
+										subtask.status = "pending";
+									}
+								}
+							}
+						}
+					}
+					// Reset QA signoff so the full pipeline runs again
+					if (resetPlan.qa_signoff) {
+						resetPlan.qa_signoff.status = "pending";
+					}
+					resetPlan.status = "in_progress";
+					resetPlan.planStatus = "in_progress";
+					resetPlan.updated_at = new Date().toISOString();
+					writeFileSync(resetPlanPath, JSON.stringify(resetPlan, null, 2), "utf-8");
+					appLog.info("[TASK_REVIEW] Reset subtasks to pending for full pipeline re-execution");
+				} catch (resetError) {
+					appLog.warn(
+						`[TASK_REVIEW] Could not reset subtasks in plan: ${resetError instanceof Error ? resetError.message : String(resetError)}`,
+					);
+				}
+
+				// Start full pipeline (planning → coding → QA) instead of QA-only
+				// This ensures changes requested by the user go through the complete workflow
 				const qaProjectPath = hasWorktree ? worktreePath : project.path;
+				const baseBranch =
+					task.metadata?.baseBranch || project.settings?.mainBranch;
 				console.warn(
-					"[TASK_REVIEW] Starting QA process with projectPath:",
+					"[TASK_REVIEW] Starting full pipeline with projectPath:",
 					qaProjectPath,
 				);
-				agentManager.startQAProcess(
+				agentManager.startTaskExecution(
 					taskId,
 					qaProjectPath,
 					task.specId,
+					{
+						baseBranch,
+						useWorktree: task.metadata?.useWorktree,
+						useLocalBranch: task.metadata?.useLocalBranch,
+						enableStreaming: true,
+						streamingSessionId: taskId,
+					},
 					project.id,
 				);
 
@@ -1016,11 +1237,22 @@ export function registerTaskExecutionHandlers(
 			// Validate status transition - 'done' creates a PR for human review
 			// A worktree must exist with uncommitted or unpushed changes
 			if (status === "done") {
+				// If a PR already exists for this task, skip PR creation
+				// (e.g. task moved out of "done" column and back in)
+				const existingPrUrl =
+					task.prUrl || task.metadata?.prUrl;
+				if (existingPrUrl) {
+					console.warn(
+						`[TASK_UPDATE_STATUS] PR already exists for task ${taskId}: ${existingPrUrl} — skipping creation`,
+					);
+					status = "pr_created";
+				}
+
 				// Check if worktree exists (task.specId matches worktree folder name)
 				const worktreePath = findTaskWorktree(project.path, task.specId);
 				const hasWorktree = worktreePath !== null;
 
-				if (hasWorktree) {
+				if (!existingPrUrl && hasWorktree) {
 					// Worktree exists - create PR for human validation
 					console.warn(
 						`[TASK_UPDATE_STATUS] Creating PR for task ${taskId} (status: done)`,
@@ -1047,12 +1279,9 @@ export function registerTaskExecutionHandlers(
 
 						// Prepare the script to call the task completion service
 						const scriptContent = `
-import sys
 import json
+import sys
 from pathlib import Path
-
-# Add backend to path
-sys.path.insert(0, '${backendPath.replaceAll("\\", "\\\\")}')
 
 from services.task_completion_service import create_task_completion_service
 
@@ -1090,6 +1319,8 @@ print(json.dumps(result))
 							"develop";
 
 						// Execute Python script to create PR
+						// Run from backendPath so Python resolves all
+						// internal imports (core.*, debug, services.*) correctly.
 						const result = execFileSync(
 							pythonExecutable,
 							[
@@ -1101,10 +1332,14 @@ print(json.dumps(result))
 								baseBranch,
 							],
 							{
-								cwd: project.path,
+								cwd: backendPath,
 								encoding: "utf-8",
 								timeout: 60000, // 60 seconds timeout for PR creation
-								env: { ...process.env, APP_LANGUAGE: getAppLanguage() },
+								env: {
+									...process.env,
+									APP_LANGUAGE: getAppLanguage(),
+									PYTHONPATH: backendPath,
+								},
 							},
 						);
 
@@ -1134,6 +1369,41 @@ print(json.dumps(result))
 								);
 							}
 
+							// Clean up worktree after successful PR creation
+							const worktreePath = findTaskWorktree(project.path, task.specId);
+							if (worktreePath && existsSync(worktreePath)) {
+								try {
+									console.warn(
+										`[TASK_UPDATE_STATUS] Cleaning up worktree after PR creation: ${worktreePath}`,
+									);
+									const cleanupResult = await cleanupWorktree({
+										worktreePath,
+										projectPath: project.path,
+										specId: task.specId,
+										commitMessage: "Auto-save before cleanup after PR creation",
+										logPrefix: "[TASK_UPDATE_STATUS]",
+										deleteBranch: true,
+									});
+
+									if (cleanupResult.success) {
+										console.warn(
+											`[TASK_UPDATE_STATUS] Worktree cleaned up after PR creation`,
+										);
+									} else {
+										console.warn(
+											`[TASK_UPDATE_STATUS] Worktree cleanup had warnings:`,
+											cleanupResult.warnings,
+										);
+									}
+								} catch (cleanupError) {
+									console.error(
+										`[TASK_UPDATE_STATUS] Error during worktree cleanup:`,
+										cleanupError,
+									);
+									// Non-fatal - PR was created successfully
+								}
+							}
+
 							// Transition to pr_created status
 							status = "pr_created";
 						} else {
@@ -1152,8 +1422,8 @@ print(json.dumps(result))
 							error: `Error creating PR: ${prError instanceof Error ? prError.message : String(prError)}`,
 						};
 					}
-				} else {
-					// No worktree - allow marking as done (limbo state recovery)
+				} else if (!existingPrUrl) {
+					// No worktree and no existing PR - allow marking as done (limbo state recovery)
 					console.warn(
 						`[TASK_UPDATE_STATUS] Allowing status 'done' for task ${taskId} (no worktree found - limbo state)`,
 					);
@@ -1457,6 +1727,210 @@ print(json.dumps(result))
 
 			// Same provider — write RESUME file to signal existing subprocess
 			return await writeResumeFile(task, project, specDir, specsBaseDir);
+		},
+	);
+
+	/**
+	 * Resume a paused task under a different LLM provider (Niveau 3b).
+	 *
+	 * Writes a RESUME_WITH_PROVIDER marker file in the task's spec dir,
+	 * then triggers the same restart flow as a provider-change resume. The
+	 * Python backend reads the marker on the next session start via
+	 * core.client._consume_resume_with_provider_marker() and switches the
+	 * active provider for that one session (the marker is single-shot).
+	 *
+	 * The persisted conversation log (conversation.jsonl) is replayed into
+	 * the new provider's client so context is preserved across the switch.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_RESUME_WITH_PROVIDER,
+		async (
+			_,
+			taskId: string,
+			providerName: string,
+			model?: string,
+		): Promise<IPCResult> => {
+			const { task, project } = findTaskAndProject(taskId);
+			if (!task || !project) {
+				return { success: false, error: "Task not found" };
+			}
+			if (!providerName || typeof providerName !== "string") {
+				return {
+					success: false,
+					error: "Missing or invalid providerName argument",
+				};
+			}
+
+			const provider = providerName.trim();
+			const chosenModel = model?.trim() || undefined;
+			const specPaths = getSpecPaths(task, project);
+
+			// Distinct spec dirs (worktree + main) that may hold a backend copy.
+			const specDirs = [
+				specPaths.specDir,
+				specPaths.mainSpecDir,
+				specPaths.worktreeSpecDir,
+			].filter(
+				(d, i, arr): d is string =>
+					!!d && existsSync(d) && arr.indexOf(d) === i,
+			);
+
+			try {
+				// 1. Clear the pause flag on every plan copy so the restarted
+				//    backend doesn't immediately re-pause at the next iteration.
+				const planPaths = getPlanPaths(specPaths, project);
+				for (const planFile of planPaths.all) {
+					if (!existsSync(planFile)) continue;
+					try {
+						const plan = JSON.parse(readFileSync(planFile, "utf-8"));
+						plan.paused = {
+							enabled: false,
+							paused_at: null,
+							paused_subtask_id: null,
+							provider,
+							...(chosenModel ? { model: chosenModel } : {}),
+						};
+						writeFileSync(planFile, JSON.stringify(plan, null, 2));
+					} catch (err) {
+						appLog.warn(
+							`[TASK_RESUME_WITH_PROVIDER] Could not clear pause in ${planFile}:`,
+							err,
+						);
+					}
+				}
+
+				// 2. Persist provider + model to task_metadata.json so the backend
+				//    resolves the chosen model (phase_config._resolve_single_model
+				//    reads metadata.model). isAutoProfile:false forces the single
+				//    model to win over any leftover phase-model config.
+				for (const dir of specDirs) {
+					const metadataPath = path.join(dir, "task_metadata.json");
+					try {
+						const existing = existsSync(metadataPath)
+							? JSON.parse(safeReadFileSync(metadataPath) || "{}")
+							: {};
+						existing.provider = provider;
+						if (chosenModel) {
+							existing.model = chosenModel;
+							existing.isAutoProfile = false;
+						}
+						atomicWriteFileSync(
+							metadataPath,
+							JSON.stringify(existing, null, 2),
+						);
+					} catch (err) {
+						appLog.warn(
+							`[TASK_RESUME_WITH_PROVIDER] Could not update ${metadataPath}:`,
+							err,
+						);
+					}
+				}
+
+				// 3. Write the single-shot provider marker the backend consumes on
+				//    the next session start (core.client._consume_resume_with_provider_marker).
+				const markerPayload = JSON.stringify({
+					provider,
+					...(chosenModel ? { model: chosenModel } : {}),
+				});
+				for (const dir of specDirs) {
+					writeFileSync(
+						path.join(dir, "RESUME_WITH_PROVIDER"),
+						markerPayload,
+						"utf-8",
+					);
+				}
+
+				// Keep in-memory metadata + cache in sync for the UI.
+				if (!task.metadata) task.metadata = {};
+				task.metadata.provider = provider;
+				if (chosenModel) task.metadata.model = chosenModel;
+				if (task.metadata.paused) task.metadata.paused.enabled = false;
+				projectStore.invalidateTasksCache(project.id);
+
+				appLog.info(
+					`[TASK_RESUME_WITH_PROVIDER] Resuming task ${taskId} with ` +
+						`provider=${provider}${chosenModel ? `, model=${chosenModel}` : ""} ` +
+						`(${specDirs.length} spec dir(s)). Conversation log will be replayed.`,
+				);
+			} catch (err) {
+				appLog.error(
+					`[TASK_RESUME_WITH_PROVIDER] Failed to prepare resume for task ${taskId}:`,
+					err,
+				);
+				return {
+					success: false,
+					error:
+						err instanceof Error
+							? err.message
+							: "Failed to write provider override marker",
+				};
+			}
+
+			// Restart the subprocess so the next session boots with the new
+			// provider/model (and replays the conversation log).
+			return await restartTaskWithNewProvider(
+				task,
+				project,
+				specPaths.specDir,
+				provider,
+			);
+		},
+	);
+
+	/**
+	 * Reset the persisted conversation log for a task.
+	 *
+	 * Use case: the LLM returned a "prompt too long" error (HTTP 400) and
+	 * the task is parked in human_review with reviewReason="prompt_too_long".
+	 * Retrying with the same conversation log will fail identically, so the
+	 * user explicitly wipes the transcript and the halt marker, then restarts
+	 * the task with a fresh context.
+	 *
+	 * Removed:
+	 *   - {spec_dir}/conversation.jsonl  (the replay log)
+	 *   - {spec_dir}/PROMPT_TOO_LONG_HALT (the backend halt marker)
+	 *
+	 * The user's plan, subtasks, code, etc. are left untouched.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_RESET_CONVERSATION,
+		async (_, taskId: string): Promise<IPCResult> => {
+			const { task, project } = findTaskAndProject(taskId);
+			if (!task || !project) {
+				return { success: false, error: "Task not found" };
+			}
+
+			const specsBaseDir = getSpecsDir(project.autoBuildPath);
+			const specDir =
+				task.specsPath || path.join(project.path, specsBaseDir, task.specId);
+
+			try {
+				const conversationLog = path.join(specDir, "conversation.jsonl");
+				const haltMarker = path.join(specDir, "PROMPT_TOO_LONG_HALT");
+				let removed = 0;
+				for (const target of [conversationLog, haltMarker]) {
+					if (existsSync(target)) {
+						unlinkSync(target);
+						removed++;
+					}
+				}
+				appLog.info(
+					`[TASK_RESET_CONVERSATION] task=${taskId} removed=${removed} files in ${specDir}`,
+				);
+				return { success: true };
+			} catch (err) {
+				appLog.error(
+					`[TASK_RESET_CONVERSATION] failed for task ${taskId}:`,
+					err,
+				);
+				return {
+					success: false,
+					error:
+						err instanceof Error
+							? err.message
+							: "Failed to reset conversation log",
+				};
+			}
 		},
 	);
 
@@ -2255,4 +2729,187 @@ print(json.dumps(result))
 			},
 		};
 	}
+
+	/**
+	 * Update plan phases and subtasks
+	 * Allows modifying pending subtasks or adding new ones
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_UPDATE_PLAN,
+		async (
+			_,
+			taskId: string,
+			phases: Array<Record<string, unknown>>,
+		): Promise<IPCResult> => {
+			const { task, project } = findTaskAndProject(taskId);
+			if (!task || !project) {
+				return { success: false, error: "Task not found" };
+			}
+
+			const planPath = getPlanPath(project, task);
+			const updatedPlan = await updatePlanSubtasks(
+				planPath,
+				phases,
+				project.id,
+			);
+
+			if (!updatedPlan) {
+				return {
+					success: false,
+					error:
+						"Failed to update plan - file may not exist or be corrupted",
+				};
+			}
+
+			appLog.info(`[TASK_UPDATE_PLAN] Successfully updated plan for task ${taskId}`);
+			return { success: true };
+		},
+	);
+
+	/**
+	 * Pause task execution
+	 * Saves current state so execution can resume later
+	 */
+	ipcMain.handle(
+		"TASK_PAUSE",
+		async (
+			_,
+			taskId: string,
+			subtaskId?: string,
+		): Promise<IPCResult> => {
+			try {
+				const { task, project } = findTaskAndProject(taskId);
+				if (!task || !project) {
+					return { success: false, error: "Task not found" };
+				}
+
+				// The running backend reads the pause flag from its own plan copy.
+				// For worktree tasks that's the worktree's implementation_plan.json,
+				// NOT the main repo's — so we must write the flag to every existing
+				// copy or the cooperative stop in the coder loop never fires.
+				const specPaths = getSpecPaths(task, project);
+				const planPaths = getPlanPaths(specPaths, project);
+
+				const pausedState = {
+					enabled: true,
+					paused_at: new Date().toISOString(),
+					paused_subtask_id: subtaskId || null,
+					provider: task.metadata?.provider || "anthropic",
+					model: task.metadata?.model || "claude-opus-4-7",
+				};
+
+				let written = 0;
+				for (const planFile of planPaths.all) {
+					if (!existsSync(planFile)) continue;
+					try {
+						const plan = JSON.parse(readFileSync(planFile, "utf-8"));
+						plan.paused = pausedState;
+						writeFileSync(planFile, JSON.stringify(plan, null, 2));
+						written++;
+					} catch (err) {
+						appLog.warn(
+							`[TASK_PAUSE] Could not update plan copy ${planFile}:`,
+							err,
+						);
+					}
+				}
+
+				if (written === 0) {
+					return {
+						success: false,
+						error: "Implementation plan not found",
+					};
+				}
+
+				// Re-scan so the scanner surfaces plan.paused on task.metadata; the
+				// UI uses that to switch the controls into the paused state.
+				projectStore.invalidateTasksCache(project.id);
+
+				appLog.info(
+					`[TASK_PAUSE] Pause requested for task ${taskId} at subtask ` +
+						`${subtaskId || "none"} (${written} plan cop[y/ies]). The backend ` +
+						`finishes the current step, then stops.`,
+				);
+
+				return {
+					success: true,
+					data: {
+						taskId,
+						paused: true,
+						pausedAt: pausedState.paused_at,
+						planCopies: written,
+					},
+				};
+			} catch (error) {
+				appLog.error("[TASK_PAUSE] Error:", error);
+				return { success: false, error: String(error) };
+			}
+		},
+	);
+
+	/**
+	 * Resume task execution
+	 * Continues from the paused checkpoint
+	 */
+	ipcMain.handle(
+		"TASK_RESUME",
+		async (_, taskId: string): Promise<IPCResult> => {
+			try {
+				const { task, project } = findTaskAndProject(taskId);
+				if (!task || !project) {
+					return { success: false, error: "Task not found" };
+				}
+
+				const planPath = getPlanPath(project, task);
+				if (!existsSync(planPath)) {
+					return { success: false, error: "Implementation plan not found" };
+				}
+
+				const planContent = readFileSync(planPath, "utf-8");
+				const plan = JSON.parse(planContent);
+
+				// Clear pause state
+				plan.paused = {
+					enabled: false,
+					paused_at: null,
+					paused_subtask_id: null,
+					provider: plan.paused?.provider || "anthropic",
+					model: plan.paused?.model || "claude-opus-4-7",
+				};
+
+				writeFileSync(planPath, JSON.stringify(plan, null, 2));
+				appLog.info(`[TASK_RESUME] Task ${taskId} resumed`);
+
+				// Start execution from pause checkpoint
+				const baseBranch = task.metadata?.baseBranch || project.settings?.mainBranch;
+
+				agentManager.startTaskExecution(
+					taskId,
+					project.path,
+					task.specId,
+					{
+						parallel: false,
+						workers: 1,
+						baseBranch,
+						useWorktree: task.metadata?.useWorktree,
+						useLocalBranch: task.metadata?.useLocalBranch,
+					},
+					project.id,
+				);
+
+				return {
+					success: true,
+					data: { taskId, resumed: true },
+				};
+			} catch (error) {
+				appLog.error("[TASK_RESUME] Error:", error);
+				return { success: false, error: String(error) };
+			}
+		},
+	);
+
+	// Provider switching mid-task is handled by TASK_RESUME_WITH_PROVIDER
+	// (marker + conversation replay). The former TASK_SWITCH_PROVIDER handler
+	// only wrote a flag with a hardcoded model list and never restarted the
+	// run, so it was removed in favour of the single source of truth.
 }

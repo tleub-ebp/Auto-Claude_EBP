@@ -87,6 +87,8 @@ export const taskMock = {
 
 	resumePausedTask: async () => ({ success: true }),
 
+	resumeTaskSession: async () => ({ success: true }),
+
 	// Image operations
 	loadImageThumbnail: async (
 		_projectPath: string,
@@ -130,6 +132,26 @@ export const taskMock = {
 		/* noop */
 	},
 	onMergeProgress: () => () => {
+		/* noop */
+	},
+	runVisualProof: async () => ({
+		success: true as const,
+		data: {
+			id: "mock",
+			status: "skipped" as const,
+			taskId: "mock",
+			specId: "mock",
+			prUrl: "",
+			screenshots: [],
+			startedAt: new Date().toISOString(),
+			completedAt: new Date().toISOString(),
+		},
+	}),
+	getVisualProofStatus: async () => ({
+		success: true as const,
+		data: { running: false },
+	}),
+	onVisualProofRunning: () => () => {
 		/* noop */
 	},
 };

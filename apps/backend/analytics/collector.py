@@ -7,8 +7,18 @@ and build results to populate the analytics database.
 
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+
+
+def _utcnow_naive() -> datetime:
+    """Tz-naive UTC datetime (replaces deprecated `_utcnow_naive()`).
+
+    DB stores naive UTC; using a tz-aware value would break comparisons
+    with stored columns.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 from core.phase_event import ExecutionPhase, emit_phase
 from sqlalchemy.orm import Session
@@ -55,7 +65,7 @@ class AnalyticsCollector:
         """
         build_id = str(uuid.uuid4())
         self.current_build = build_id
-        self.build_start_time = datetime.utcnow()
+        self.build_start_time = _utcnow_naive()
         self.build_tokens = 0
         self.build_cost = 0.0
 
@@ -97,7 +107,7 @@ class AnalyticsCollector:
             self.end_phase(success=True)
 
         self.current_phase = str(uuid.uuid4())
-        self.phase_start_time = datetime.utcnow()
+        self.phase_start_time = _utcnow_naive()
         self.phase_tokens = 0
         self.phase_cost = 0.0
 
@@ -140,7 +150,7 @@ class AnalyticsCollector:
             )
 
             if phase:
-                phase.completed_at = datetime.utcnow()
+                phase.completed_at = _utcnow_naive()
                 phase.duration_seconds = (
                     phase.completed_at - phase.started_at
                 ).total_seconds()
@@ -208,7 +218,7 @@ class AnalyticsCollector:
                 operation_type=operation_type,
                 llm_provider=llm_provider,
                 llm_model=llm_model,
-                timestamp=datetime.utcnow(),
+                timestamp=_utcnow_naive(),
             )
             db.add(token_usage)
             db.commit()
@@ -255,8 +265,8 @@ class AnalyticsCollector:
                 success=success,
                 feedback_summary=feedback_summary,
                 detailed_feedback=detailed_feedback,
-                started_at=datetime.utcnow(),
-                completed_at=datetime.utcnow(),
+                started_at=_utcnow_naive(),
+                completed_at=_utcnow_naive(),
             )
             db.add(qa_result)
             db.commit()
@@ -291,7 +301,7 @@ class AnalyticsCollector:
                 line_number=line_number,
                 function_name=function_name,
                 stack_trace=stack_trace,
-                occurred_at=datetime.utcnow(),
+                occurred_at=_utcnow_naive(),
             )
             db.add(error)
             db.commit()
@@ -312,7 +322,7 @@ class AnalyticsCollector:
             if build:
                 build.status = status
                 if status in [BuildStatus.COMPLETE, BuildStatus.FAILED]:
-                    build.completed_at = datetime.utcnow()
+                    build.completed_at = _utcnow_naive()
                 db.commit()
 
                 # Emit phase event for frontend
@@ -331,7 +341,7 @@ class AnalyticsCollector:
 
         # Set completion status
         build.status = BuildStatus.COMPLETE
-        build.completed_at = datetime.utcnow()
+        build.completed_at = _utcnow_naive()
 
         # Calculate total duration
         if build.completed_at and build.started_at:

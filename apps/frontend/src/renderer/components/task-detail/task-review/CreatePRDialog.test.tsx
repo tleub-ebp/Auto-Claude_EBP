@@ -25,9 +25,19 @@ vi.mock("../../../../preload/api", () => ({}));
 
 // Mock window.electronAPI
 const mockOpenExternal = vi.fn();
+const mockAnalyzeWorktreeImpact = vi.fn().mockResolvedValue({
+	success: true,
+	data: {
+		success: true,
+		body: "## Summary\n\nMocked body.",
+		rating: "2",
+		features: "Mocked feature",
+	},
+});
 Object.defineProperty(window, "electronAPI", {
 	value: {
 		openExternal: mockOpenExternal,
+		analyzeWorktreeImpact: mockAnalyzeWorktreeImpact,
 	},
 	writable: true,
 });
@@ -187,11 +197,13 @@ describe("CreatePRDialog", () => {
 		fireEvent.click(createButton);
 
 		await waitFor(() => {
-			expect(mockOnCreatePR).toHaveBeenCalledWith({
-				targetBranch: "develop",
-				title: "Implement user authentication",
-				draft: false,
-			});
+			expect(mockOnCreatePR).toHaveBeenCalledWith(
+				expect.objectContaining({
+					targetBranch: "develop",
+					title: "Implement user authentication",
+					draft: false,
+				}),
+			);
 		});
 	});
 
@@ -221,11 +233,13 @@ describe("CreatePRDialog", () => {
 		fireEvent.click(createButton);
 
 		await waitFor(() => {
-			expect(mockOnCreatePR).toHaveBeenCalledWith({
-				targetBranch: "develop",
-				title: "Custom PR Title",
-				draft: false,
-			});
+			expect(mockOnCreatePR).toHaveBeenCalledWith(
+				expect.objectContaining({
+					targetBranch: "develop",
+					title: "Custom PR Title",
+					draft: false,
+				}),
+			);
 		});
 	});
 
@@ -384,11 +398,13 @@ describe("CreatePRDialog", () => {
 		fireEvent.click(createButton);
 
 		await waitFor(() => {
-			expect(mockOnCreatePR).toHaveBeenCalledWith({
-				targetBranch: "develop",
-				title: "Implement user authentication",
-				draft: true,
-			});
+			expect(mockOnCreatePR).toHaveBeenCalledWith(
+				expect.objectContaining({
+					targetBranch: "develop",
+					title: "Implement user authentication",
+					draft: true,
+				}),
+			);
 		});
 	});
 
@@ -448,6 +464,38 @@ describe("CreatePRDialog", () => {
 			expect(screen.getByText(/created/i)).toBeInTheDocument();
 			// Should not have any PR link button (no prUrl to display)
 			expect(screen.queryByTestId("pr-link-button")).not.toBeInTheDocument();
+		});
+	});
+
+	// Régression : l'URL de la PR est stockée dans metadata.prUrl. Le dialog
+	// doit détecter la PR existante même si task.prUrl (legacy) est absent.
+	describe("existing PR detection via metadata.prUrl", () => {
+		it("should switch to update mode when only metadata.prUrl is set", async () => {
+			const azurePrUrl =
+				"https://dev.azure.com/org/project/_git/repo/pullrequest/109169";
+			const taskWithMetadataPr: Task = {
+				...mockTask,
+				metadata: { prUrl: azurePrUrl },
+			};
+
+			render(
+				<CreatePRDialog
+					open={true}
+					task={taskWithMetadataPr}
+					worktreeStatus={mockWorktreeStatus}
+					onOpenChange={mockOnOpenChange}
+					onCreatePR={mockOnCreatePR}
+				/>,
+			);
+
+			await waitFor(() => {
+				expect(
+					screen.getByRole("heading", { name: /update pull request/i }),
+				).toBeInTheDocument();
+			});
+
+			// Le lien vers la PR existante doit être affiché.
+			expect(screen.getByText(azurePrUrl)).toBeInTheDocument();
 		});
 	});
 });

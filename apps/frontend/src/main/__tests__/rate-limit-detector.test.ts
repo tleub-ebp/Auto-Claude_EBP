@@ -65,6 +65,33 @@ describe("Rate Limit Detector", () => {
 			expect(result.limitType).toBe("session");
 		});
 
+		it('should detect "You\'ve hit your session limit" CLI banner', async () => {
+			// Regression: the newer CLI emits "session limit" / "weekly limit"
+			// between "your" and "limit". The original regex required "limit"
+			// to come right after "your" and missed this shape — the caller
+			// then retried with a continuation summary appended every time,
+			// growing the prompt until "Prompt is too long" fired.
+			const { detectRateLimit } = await import("../rate-limit-detector");
+
+			const output =
+				"You've hit your session limit · resets 3:20pm (Europe/Paris)";
+			const result = detectRateLimit(output);
+
+			expect(result.isRateLimited).toBe(true);
+			expect(result.resetTime).toBe("3:20pm (Europe/Paris)");
+		});
+
+		it('should detect "You\'ve hit your weekly limit" CLI banner', async () => {
+			const { detectRateLimit } = await import("../rate-limit-detector");
+
+			const output =
+				"You've hit your weekly limit · resets Dec 17 at 6am (Europe/Oslo)";
+			const result = detectRateLimit(output);
+
+			expect(result.isRateLimited).toBe(true);
+			expect(result.resetTime).toBe("Dec 17 at 6am (Europe/Oslo)");
+		});
+
 		it("should detect secondary rate limit indicators", async () => {
 			const { detectRateLimit } = await import("../rate-limit-detector");
 

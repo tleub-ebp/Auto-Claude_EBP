@@ -6,6 +6,7 @@ import {
 	Clock,
 	FileCode,
 	FileText,
+	FlaskConical,
 	Gauge,
 	GitMerge,
 	GitPullRequest,
@@ -13,6 +14,7 @@ import {
 	Monitor,
 	MoreVertical,
 	Palette,
+	Pause,
 	Play,
 	RotateCcw,
 	Shield,
@@ -28,6 +30,7 @@ import { useFormatRelativeTime } from "@/hooks/useFormatRelativeTime";
 import {
 	EXECUTION_PHASE_BADGE_COLORS,
 	EXECUTION_PHASE_LABELS,
+	isExecutionPhaseActive,
 	JSON_ERROR_PREFIX,
 	JSON_ERROR_TITLE_SUFFIX,
 	TASK_CATEGORY_COLORS,
@@ -48,14 +51,16 @@ import type {
 	TaskStatus,
 } from "../../shared/types";
 import { setPendingTaskDetailTab } from "../lib/task-detail-nav";
-import { cn, sanitizeMarkdownForDisplay } from "../lib/utils";
+import { cn, extractTextFromHtml, sanitizeMarkdownForDisplay } from "../lib/utils";
 import { useProjectStore } from "../stores/project-store";
 import {
 	archiveTasks,
 	checkTaskRunning,
 	hasRecentActivity,
 	isIncompleteHumanReview,
+	pauseTask,
 	recoverStuckTask,
+	resumeTask,
 	startTask,
 	stopTask,
 	useTaskStore,
@@ -243,6 +248,17 @@ const MetadataBadges: React.FC<MetadataBadgesProps> = ({
 					className="text-[10px] px-1.5 py-0.5"
 				>
 					{reviewReasonInfo.label}
+				</Badge>
+			)}
+
+			{/* TDD override badge - task-level strict TDD enabled */}
+			{task.metadata?.tddMode && (
+				<Badge
+					variant="outline"
+					className="text-[10px] px-1.5 py-0.5 flex items-center gap-1 bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+				>
+					<FlaskConical className="h-2.5 w-2.5" />
+					{t("labels.tdd")}
 				</Badge>
 			)}
 
@@ -787,11 +803,14 @@ export const TaskCard = memo(function TaskCard({
 
 	const isRunning = task.status === "in_progress";
 	const executionPhase = task.executionProgress?.phase;
-	const hasActiveExecution =
-		executionPhase &&
-		executionPhase !== "idle" &&
-		executionPhase !== "complete" &&
-		executionPhase !== "failed";
+	// La phase d'exécution (avec son spinner) ne doit être considérée comme
+	// active que lorsque la tâche tourne réellement (in_progress / ai_review).
+	// Sans ce garde-fou, une tâche terminée conservant une phase obsolète
+	// (ex. "qa_review") afficherait à tort le badge "AI Review" animé.
+	const hasActiveExecution = isExecutionPhaseActive(
+		task.status,
+		executionPhase,
+	);
 
 	// Check if task is in human_review but has no completed subtasks (crashed/incomplete)
 	const isIncomplete = isIncompleteHumanReview(task);
@@ -812,13 +831,19 @@ export const TaskCard = memo(function TaskCard({
 		return sanitizeMarkdownForDisplay(task.description, 120);
 	}, [task.description, t]);
 
-	// Memoize title with JSON error suffix handling
+	// Memoize title with JSON error suffix handling.
+	// Strip HTML tags too: tasks imported from Azure DevOps / Jira sometimes
+	// carry raw <div><span><b>Description:</b>… into the title field, which
+	// React would otherwise render verbatim as text.
 	const displayTitle = useMemo(() => {
-		if (task.title.endsWith(JSON_ERROR_TITLE_SUFFIX)) {
-			const baseName = task.title.slice(0, -JSON_ERROR_TITLE_SUFFIX.length);
+		const stripped = task.title.trim().startsWith("<")
+			? extractTextFromHtml(task.title) || task.title
+			: task.title;
+		if (stripped.endsWith(JSON_ERROR_TITLE_SUFFIX)) {
+			const baseName = stripped.slice(0, -JSON_ERROR_TITLE_SUFFIX.length);
 			return `${baseName} ${t("errors:task.jsonError.titleSuffix")}`;
 		}
-		return task.title;
+		return stripped;
 	}, [task.title, t]);
 
 	// Memoize relative time (recalculates only when updatedAt changes)
@@ -916,6 +941,16 @@ export const TaskCard = memo(function TaskCard({
 			// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
 			(globalThis as any).electronAPI.openExternal(task.metadata.prUrl);
 		}
+	};
+
+	const handlePause = async (e: React.MouseEvent) => {
+		e.stopPropagation();
+		await pauseTask(task.id);
+	};
+
+	const handleResume = async (e: React.MouseEvent) => {
+		e.stopPropagation();
+		await resumeTask(task.id);
 	};
 
 	const handleDelete = async (e: React.MouseEvent) => {
@@ -1103,8 +1138,8 @@ export const TaskCard = memo(function TaskCard({
 									t={t}
 								/>
 
-								{/* Move to menu for keyboard accessibility */}
-								{statusMenuItems && (
+								{/* More options menu - includes pause/resume and status changes */}
+								{(statusMenuItems || isRunning || task.metadata?.paused?.enabled) && (
 									<DropdownMenu>
 										<DropdownMenuTrigger asChild>
 											<Button
@@ -1121,6 +1156,33 @@ export const TaskCard = memo(function TaskCard({
 											align="end"
 											onClick={(e) => e.stopPropagation()}
 										>
+											{/* Pause/Resume - show when task is running or paused */}
+											{(isRunning || task.metadata?.paused?.enabled) && (
+												<>
+													{task.metadata?.paused?.enabled ? (
+														<DropdownMenuItem
+															onClick={(e) => {
+																e.stopPropagation();
+																handleResume(e as React.MouseEvent);
+															}}
+														>
+															<Play className="mr-2 h-4 w-4" />
+															{t("actions.resume")}
+														</DropdownMenuItem>
+													) : (
+														<DropdownMenuItem
+															onClick={(e) => {
+																e.stopPropagation();
+																handlePause(e as React.MouseEvent);
+															}}
+														>
+															<Pause className="mr-2 h-4 w-4" />
+															{t("actions.pause")}
+														</DropdownMenuItem>
+													)}
+													<DropdownMenuSeparator />
+												</>
+											)}
 											{task.status !== "done" && (
 												<>
 													<DropdownMenuItem
@@ -1136,11 +1198,15 @@ export const TaskCard = memo(function TaskCard({
 													<DropdownMenuSeparator />
 												</>
 											)}
-											<DropdownMenuLabel>
-												{t("actions.moveTo")}
-											</DropdownMenuLabel>
-											<DropdownMenuSeparator />
-											{statusMenuItems}
+											{statusMenuItems && (
+												<>
+													<DropdownMenuLabel>
+														{t("actions.moveTo")}
+													</DropdownMenuLabel>
+													<DropdownMenuSeparator />
+													{statusMenuItems}
+												</>
+											)}
 										</DropdownMenuContent>
 									</DropdownMenu>
 								)}

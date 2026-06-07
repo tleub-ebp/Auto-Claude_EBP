@@ -64,6 +64,7 @@ export function JiraSidePanel({
 	const [workItems, setWorkItems] = useState<JiraWorkItem[]>([]);
 	const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 	const [searchQuery, setSearchQuery] = useState("");
+	const [isSearchingRemote, setIsSearchingRemote] = useState(false);
 	const panelRef = useRef<HTMLDivElement>(null);
 
 	// G�rer la fermeture par clic en dehors du panel
@@ -276,6 +277,61 @@ export function JiraSidePanel({
 			return true;
 		});
 	}, [workItems, searchQuery, filters]);
+
+	// When the user searches a specific issue key (or a bare number when a
+	// project key is known) that is not in the loaded list, fetch it directly
+	// from Jira. This makes any issue findable by key — including sub-tasks,
+	// custom types, and issues outside the (capped) listed window.
+	useEffect(() => {
+		const trimmed = searchQuery.trim();
+		if (!trimmed || !syncStatus?.connected) return;
+
+		let issueKey: string | null = null;
+		if (/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(trimmed)) {
+			issueKey = trimmed.toUpperCase();
+		} else if (/^\d+$/.test(trimmed) && syncStatus?.projectKey) {
+			issueKey = `${syncStatus.projectKey}-${trimmed}`;
+		}
+		if (!issueKey) return;
+		const targetKey = issueKey;
+		if (workItems.some((item) => item.id.toUpperCase() === targetKey)) return;
+
+		let cancelled = false;
+		const handle = setTimeout(async () => {
+			setIsSearchingRemote(true);
+			try {
+				const result = await globalThis.electronAPI.getJiraIssue(
+					projectId,
+					targetKey,
+				);
+				if (cancelled) return;
+				if (result.success && result.data) {
+					const fetched = result.data;
+					setWorkItems((prev) =>
+						prev.some((item) => item.id === fetched.id)
+							? prev
+							: [fetched, ...prev],
+					);
+				}
+			} catch {
+				// Best-effort: ignore lookup failures (invalid key, no access…).
+			} finally {
+				if (!cancelled) setIsSearchingRemote(false);
+			}
+		}, 400);
+
+		return () => {
+			cancelled = true;
+			clearTimeout(handle);
+			setIsSearchingRemote(false);
+		};
+	}, [
+		searchQuery,
+		workItems,
+		projectId,
+		syncStatus?.connected,
+		syncStatus?.projectKey,
+	]);
 
 	// Get unique values for filters
 	const uniqueTypes = useMemo(() => {
@@ -536,11 +592,20 @@ export function JiraSidePanel({
 		if (filteredItems.length === 0) {
 			return (
 				<div className="text-center py-12 text-muted-foreground px-4">
-					<p>No Jira issues found</p>
-					{(searchQuery ||
-						filters.workItemType !== "all" ||
-						filters.state !== "all") && (
-						<p className="text-sm mt-2">Try adjusting your filters</p>
+					{isSearchingRemote ? (
+						<div className="flex items-center justify-center gap-2">
+							<RefreshCw className="h-4 w-4 animate-spin" />
+							<span>{t("jiraImport.searchingByKey")}</span>
+						</div>
+					) : (
+						<>
+							<p>No Jira issues found</p>
+							{(searchQuery ||
+								filters.workItemType !== "all" ||
+								filters.state !== "all") && (
+								<p className="text-sm mt-2">Try adjusting your filters</p>
+							)}
+						</>
 					)}
 				</div>
 			);
@@ -648,6 +713,12 @@ export function JiraSidePanel({
 		);
 	};
 
+	// Include the Jira project key in the title (the bug-tracker equivalent of
+	// the Azure DevOps repository name), falling back to the generic label.
+	const panelTitle = syncStatus?.projectKey
+		? t("jiraImport.titleWithProject", { project: syncStatus.projectKey })
+		: t("jiraImport.title");
+
 	if (!open) return null;
 
 	return (
@@ -667,7 +738,7 @@ export function JiraSidePanel({
 				<div className="flex items-center justify-between p-4 border-b border-border">
 					<div className="flex items-center gap-2">
 						<Download className="h-5 w-5 text-primary" />
-						<h2 className="text-lg font-semibold">Jira Import</h2>
+						<h2 className="text-lg font-semibold">{panelTitle}</h2>
 					</div>
 					<div className="flex items-center gap-1">
 						<Button

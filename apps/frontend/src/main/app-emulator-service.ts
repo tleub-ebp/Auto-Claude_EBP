@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
 	existsSync,
+	mkdirSync,
 	readdirSync,
 	readFileSync,
 	statSync,
@@ -12,10 +13,55 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
+import {
+	buildPowerShellKnownMsBuildArray,
+	LEGACY_MSBUILD_UNAVAILABLE_MESSAGE,
+	quotePowerShellSingle,
+	WINDOWS_RUNTIME_UNAVAILABLE_MESSAGE,
+} from "./dotnet-msbuild";
+import {
+	createLegacyPackageReferencesTarget,
+	ensureLegacyWorktreeBuildAssets,
+	LEGACY_RESOURCE_PROPERTY,
+} from "./legacy-dotnet-build";
 
 // ESM-compatible __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const IIS_EXPRESS_ENV = "WORKPILOT_IIS_EXPRESS_PATH";
+const IIS_EXPRESS_UNAVAILABLE_MESSAGE =
+	"IIS Express/xsp was not found. Set WORKPILOT_IIS_EXPRESS_PATH, install IIS Express on Windows or Mono xsp on Linux/macOS, or configure a remote/VM runner.";
+
+/** Nombre maximum de lignes de sortie conservées pour diagnostiquer une sortie en échec. */
+export const SERVER_OUTPUT_BUFFER_LIMIT = 200;
+
+/** Motifs identifiant une ligne de sortie porteuse d'un message d'erreur exploitable. */
+const SERVER_ERROR_LINE_PATTERN =
+	/\b(?:error|erreur|exception|fatal|MSB\d{3,}|CS\d{3,}|échec|failed|cannot|could not|n'a pas pu)\b/i;
+
+/**
+ * Construit un message d'erreur lisible à partir du code de sortie et des dernières
+ * lignes de sortie du serveur. Privilégie les lignes contenant un message d'erreur
+ * réel (ex. MSB3086) plutôt que de n'afficher que le code de sortie brut.
+ */
+export function formatServerExitError(
+	code: number | null,
+	recentOutput: readonly string[],
+): string {
+	const header = `Server exited with code ${code ?? "unknown"}`;
+	const lines = recentOutput.map((line) => line.trim()).filter(Boolean);
+	if (lines.length === 0) return header;
+
+	const errorLines = lines.filter((line) => SERVER_ERROR_LINE_PATTERN.test(line));
+	const selected = (errorLines.length > 0 ? errorLines : lines.slice(-15)).slice(-15);
+	const deduped = [...new Set(selected)];
+
+	return `${header}\n\n${deduped.join("\n")}`;
+}
+
+function quoteWindowsShellArgument(value: string): string {
+	return `"${value.replaceAll('"', '\\"')}"`;
+}
 
 /**
  * A single runnable service within a fullstack project (e.g. .NET backend, Angular frontend).
@@ -195,6 +241,137 @@ export class AppEmulatorService extends EventEmitter {
 		return false;
 	}
 
+	private isLikelyTestProjectPath(candidatePath: string): boolean {
+		const segments = candidatePath
+			.toLowerCase()
+			.split(/[\\/]+/)
+			.map((segment) => segment.replace(/\.csproj$/i, ""));
+		return segments.some(
+			(segment) =>
+				segment === "tests" ||
+				segment === "test" ||
+				segment === "unittests" ||
+				segment === "automatedtests" ||
+				segment.endsWith(".tests") ||
+				segment.endsWith(".test") ||
+				segment.endsWith(".testapplication") ||
+				segment.includes("testapplication"),
+		);
+	}
+
+	private findSolutionStartupCsprojFile(solutionDir: string): string | null {
+		let entries: string[];
+		try {
+			entries = readdirSync(solutionDir);
+		} catch {
+			return null;
+		}
+
+		const solutionFiles = entries
+			.filter((entry) => entry.endsWith(".sln"))
+			.filter((entry) => !this.isLikelyTestProjectPath(entry))
+			.sort((left, right) => left.localeCompare(right));
+
+		for (const solutionFile of solutionFiles) {
+			const solutionPath = path.join(solutionDir, solutionFile);
+			let content: string;
+			try {
+				content = readFileSync(solutionPath, "utf-8");
+			} catch {
+				continue;
+			}
+
+			const matches = content.matchAll(
+				/Project\("[^"]+"\)\s*=\s*"[^"]+",\s*"([^"]+\.csproj)"/gi,
+			);
+			for (const match of matches) {
+				const relativeProjectPath = match[1];
+				const csprojPath = path.resolve(solutionDir, relativeProjectPath);
+				if (
+					this.isLikelyTestProjectPath(csprojPath) ||
+					!existsSync(csprojPath) ||
+					this.isCsprojLibrary(csprojPath)
+				) {
+					continue;
+				}
+				return csprojPath;
+			}
+		}
+
+		return null;
+	}
+
+	private findNestedProjectDir(rootDir: string, maxDepth: number): string | null {
+		const skipDirs = new Set([
+			".git",
+			".workpilot",
+			".vs",
+			"bin",
+			"obj",
+			"node_modules",
+			"packages",
+			"TestResults",
+			"dist",
+			"build",
+		]);
+		const preferredNames = new Set(["src", "source", "sources", "app", "web"]);
+		const queue: Array<{ dir: string; depth: number }> = [
+			{ dir: rootDir, depth: 0 },
+		];
+		const candidates: Array<{ dir: string; score: number }> = [];
+
+		while (queue.length > 0) {
+			const current = queue.shift();
+			if (!current || current.depth > maxDepth) continue;
+
+			let entries: string[];
+			try {
+				entries = readdirSync(current.dir);
+			} catch {
+				continue;
+			}
+
+			if (current.dir !== rootDir && this.hasProjectMarkers(current.dir)) {
+				const baseName = path.basename(current.dir).toLowerCase();
+				const hasSolution = entries.some((entry) => entry.endsWith(".sln"));
+				const hasCsproj = entries.some((entry) => entry.endsWith(".csproj"));
+				const score =
+					current.depth * 10 +
+					(hasSolution ? 0 : hasCsproj ? 1 : 3) +
+					(preferredNames.has(baseName) ? -2 : 0);
+				candidates.push({ dir: current.dir, score });
+				continue;
+			}
+
+			const directories = entries
+				.filter(
+					(entry) =>
+						!entry.startsWith(".") &&
+						!skipDirs.has(entry) &&
+						!this.isLikelyTestProjectPath(entry),
+				)
+				.sort((left, right) => {
+					const leftPreferred = preferredNames.has(left.toLowerCase()) ? 0 : 1;
+					const rightPreferred = preferredNames.has(right.toLowerCase()) ? 0 : 1;
+					return leftPreferred - rightPreferred || left.localeCompare(right);
+				});
+
+			for (const entry of directories) {
+				const fullPath = path.join(current.dir, entry);
+				try {
+					if (statSync(fullPath).isDirectory()) {
+						queue.push({ dir: fullPath, depth: current.depth + 1 });
+					}
+				} catch {
+					/* ignore */
+				}
+			}
+		}
+
+		candidates.sort((left, right) => left.score - right.score);
+		return candidates[0]?.dir ?? null;
+	}
+
 	/**
 	 * If `projectDir` is a WorkPilot workspace stub (contains .workpilot/ but no
 	 * actual source), try the parent and its sibling directories (preferring ones
@@ -202,6 +379,9 @@ export class AppEmulatorService extends EventEmitter {
 	 */
 	private resolveSourceDir(projectDir: string): string {
 		if (this.hasProjectMarkers(projectDir)) return projectDir;
+
+		const nestedProjectDir = this.findNestedProjectDir(projectDir, 5);
+		if (nestedProjectDir) return nestedProjectDir;
 
 		const hasWorkpilot = existsSync(path.join(projectDir, ".workpilot"));
 		if (!hasWorkpilot) return projectDir;
@@ -516,51 +696,26 @@ export class AppEmulatorService extends EventEmitter {
 			};
 		}
 
-		// .NET projects (*.sln at root)
+		// .NET projects (*.sln or *.csproj at root)
 		try {
 			const rootFiles = readdirSync(projectDir);
-			if (rootFiles.some((f) => f.endsWith(".sln"))) {
+			const rootCsproj = rootFiles.find((file) => file.endsWith(".csproj"));
+			if (rootFiles.some((f) => f.endsWith(".sln")) || rootCsproj) {
 				// Find the .NET project directory (contains *.csproj) and read its HTTP port.
 				// findDotnetProjectDir looks for a dir with a .csproj + Program.cs/Startup.cs.
 				// If it returns null (e.g. multiple .csproj without a clear entry point), fall back
 				// to locating any .csproj file and using its parent directory.
-				let dotnetDir = this.findDotnetProjectDir(projectDir, 4);
-				if (!dotnetDir) {
-					const csprojFile = this.findFirstCsprojFile(projectDir, 5);
-					dotnetDir = csprojFile ? path.dirname(csprojFile) : projectDir;
-				}
-				const dotnetPort = this.readDotnetPort(dotnetDir) ?? 5000;
-				const frontendResult = this.findFrontendInSubdirs(projectDir, 3);
-
-				if (frontendResult) {
-					// Fullstack: launch .NET backend AND frontend separately so both are reachable.
-					// The backend port becomes the API Studio base URL; the frontend runs in parallel.
-					const frontendDir = frontendResult.projectDir ?? projectDir;
-					return this.buildFullstackConfig(
-						{
-							framework: "dotnet",
-							startCommand: "dotnet run",
-							port: dotnetPort,
-							projectDir: dotnetDir,
-						},
-						{
-							framework: frontendResult.framework,
-							startCommand: frontendResult.startCommand,
-							port: frontendResult.port,
-							projectDir: frontendDir,
-						},
-					);
-				}
-
-				// Pure .NET backend — single service
-				return {
-					type: "web",
-					framework: "dotnet",
-					startCommand: "dotnet run",
-					port: dotnetPort,
-					isWeb: true,
-					projectDir: dotnetDir,
-				};
+				const solutionCsproj = this.findSolutionStartupCsprojFile(projectDir);
+				let dotnetDir = solutionCsproj
+					? path.dirname(solutionCsproj)
+					: this.findDotnetProjectDir(projectDir, 4);
+				const csprojFile =
+					solutionCsproj ??
+					(rootCsproj && dotnetDir === projectDir
+						? path.join(projectDir, rootCsproj)
+						: this.findFirstCsprojFile(projectDir, 5));
+				dotnetDir = dotnetDir ?? (csprojFile ? path.dirname(csprojFile) : projectDir);
+				return this.buildDotnetConfig(projectDir, dotnetDir, csprojFile);
 			}
 		} catch {
 			/* ignore */
@@ -735,6 +890,712 @@ export class AppEmulatorService extends EventEmitter {
 		}
 	}
 
+	private readCsprojContent(csprojPath: string): string {
+		try {
+			return readFileSync(csprojPath, "utf-8");
+		} catch {
+			return "";
+		}
+	}
+
+	private isLegacyDotnetFrameworkProject(csprojPath: string): boolean {
+		const content = this.readCsprojContent(csprojPath);
+		return (
+			/<TargetFrameworkVersion>\s*v4(?:\.\d+)?\s*<\/TargetFrameworkVersion>/i.test(
+				content,
+			) || /<TargetFramework>\s*net4\d+\s*<\/TargetFramework>/i.test(content)
+		);
+	}
+
+	private isLegacyWebProject(csprojPath: string): boolean {
+		const content = this.readCsprojContent(csprojPath);
+		const projectDir = path.dirname(csprojPath);
+		return (
+			/\{349c5851-65df-11da-9384-00065b846f21\}/i.test(content) ||
+			/Microsoft\.WebApplication\.targets/i.test(content) ||
+			existsSync(path.join(projectDir, "Web.config")) ||
+			existsSync(path.join(projectDir, "Global.asax"))
+		);
+	}
+
+	private buildIisExpressCommand(projectDir: string, port: number): string {
+		if (process.platform !== "win32") {
+			const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+			const root = shellQuote(projectDir);
+			const unavailable = shellQuote(IIS_EXPRESS_UNAVAILABLE_MESSAGE);
+			return [
+				"sh -lc",
+				shellQuote(
+					[
+						"set -e",
+						'IIS="$' + `{${IIS_EXPRESS_ENV}:-}"`,
+						'if [ -n "$IIS" ] && [ ! -x "$IIS" ] && command -v "$IIS" >/dev/null 2>&1; then IIS="$(command -v "$IIS")"; fi',
+						'if [ -z "$IIS" ] && command -v xsp4 >/dev/null 2>&1; then IIS="$(command -v xsp4)"; fi',
+						'if [ -z "$IIS" ] && command -v xsp >/dev/null 2>&1; then IIS="$(command -v xsp)"; fi',
+						`if [ -n "$IIS" ]; then "$IIS" --root ${root} --port ${port}; else echo ${unavailable} >&2; exit 127; fi`,
+					].join("; "),
+				),
+			].join(" ");
+		}
+
+		const candidates = [
+			process.env[IIS_EXPRESS_ENV],
+			process.env["PROGRAMFILES(X86)"]
+				? path.join(process.env["PROGRAMFILES(X86)"], "IIS Express", "iisexpress.exe")
+				: null,
+			process.env.ProgramFiles
+				? path.join(process.env.ProgramFiles, "IIS Express", "iisexpress.exe")
+				: null,
+		]
+			.filter((candidate): candidate is string => Boolean(candidate))
+			.map(quotePowerShellSingle)
+			.join(",");
+		const psProjectDir = quotePowerShellSingle(projectDir);
+		const psUnavailable = quotePowerShellSingle(IIS_EXPRESS_UNAVAILABLE_MESSAGE);
+		return [
+			"powershell",
+			"-NoProfile",
+			"-ExecutionPolicy Bypass",
+			"-Command",
+			`"$ErrorActionPreference='Stop'; $iis=$env:${IIS_EXPRESS_ENV}; if ($iis -and -not (Test-Path $iis)) { $cmd=Get-Command $iis -ErrorAction SilentlyContinue; if ($cmd) { $iis=$cmd.Source } }; if (-not $iis) { $known=@(${candidates}); $iis=$known | Where-Object { Test-Path $_ } | Select-Object -First 1 }; if (-not $iis) { $cmd=Get-Command iisexpress -ErrorAction SilentlyContinue; if ($cmd) { $iis=$cmd.Source } }; if (-not $iis) { $cmd=Get-Command xsp4 -ErrorAction SilentlyContinue; if ($cmd) { $iis=$cmd.Source } }; if (-not $iis) { $cmd=Get-Command xsp -ErrorAction SilentlyContinue; if ($cmd) { $iis=$cmd.Source } }; if (-not $iis) { throw ${psUnavailable} }; $hostName=[IO.Path]::GetFileNameWithoutExtension($iis); if ($hostName -ieq 'xsp' -or $hostName -ieq 'xsp4') { & $iis --root ${psProjectDir} --port ${port} } else { & $iis /path:${psProjectDir} /port:${port} }"`,
+		].join(" ");
+	}
+
+	private readAssemblyName(csprojPath: string): string {
+		const content = this.readCsprojContent(csprojPath);
+		const assemblyMatch = content.match(/<AssemblyName>\s*([^<]+)\s*<\/AssemblyName>/i);
+		if (assemblyMatch?.[1]) return assemblyMatch[1].trim();
+		return path.basename(csprojPath, path.extname(csprojPath));
+	}
+
+	private findContainingSolutionDir(csprojPath: string): string {
+		const normalizedCsprojPath = path.normalize(csprojPath).toLowerCase();
+		let currentDir = path.dirname(csprojPath);
+		for (let depth = 0; depth < 6; depth += 1) {
+			let entries: string[];
+			try {
+				entries = readdirSync(currentDir);
+			} catch {
+				return `${path.dirname(csprojPath)}${path.sep}`;
+			}
+			for (const entry of entries.filter((file) => file.endsWith(".sln"))) {
+				const content = this.readCsprojContent(path.join(currentDir, entry));
+				const matches = content.matchAll(
+					/Project\("[^"]+"\)\s*=\s*"[^"]+",\s*"([^"]+\.csproj)"/gi,
+				);
+				for (const match of matches) {
+					// Les chemins déclarés dans un .sln utilisent toujours le
+					// séparateur Windows "\". Sur POSIX, path.resolve ne le traite
+					// pas comme séparateur : on normalise donc vers path.sep.
+					const relativeFromSolution = match[1].split(/[\\/]+/).join(path.sep);
+					const candidatePath = path
+						.resolve(currentDir, relativeFromSolution)
+						.toLowerCase();
+					if (path.normalize(candidatePath) === normalizedCsprojPath) {
+						return `${currentDir}${path.sep}`;
+					}
+				}
+			}
+			const parentDir = path.dirname(currentDir);
+			if (!parentDir || parentDir === currentDir) break;
+			currentDir = parentDir;
+		}
+		return `${path.dirname(csprojPath)}${path.sep}`;
+	}
+
+	private writeLegacyDesktopPowerShellScript(
+		csprojPath: string,
+		assemblyName: string,
+		solutionDir: string,
+	): string {
+		const projectDir = path.dirname(csprojPath);
+		const scriptPath = path.join(projectDir, "obj", "workpilot-run-legacy-desktop.ps1");
+		mkdirSync(path.dirname(scriptPath), { recursive: true });
+		const script = String.raw`$ErrorActionPreference = 'Stop'
+$projectPath = ${quotePowerShellSingle(csprojPath)}
+$sourceProjectPath = ${quotePowerShellSingle(csprojPath)}
+$sourceSolutionDir = ${quotePowerShellSingle(solutionDir)}
+$relativeProjectPath = ${quotePowerShellSingle(path.relative(solutionDir, csprojPath))}
+$solutionDir = $sourceSolutionDir
+$binDir = ${quotePowerShellSingle(path.join(projectDir, "bin", "Debug"))}
+$assemblyFilter = ${quotePowerShellSingle(`${assemblyName}.exe`)}
+$knownMsbuild = @(${buildPowerShellKnownMsBuildArray()})
+$shortSolutionLink = $null
+
+try {
+	$shortRoot = Join-Path ([IO.Path]::GetTempPath()) 'workpilot-msbuild'
+	New-Item -ItemType Directory -Force -Path $shortRoot | Out-Null
+	$shortSolutionLink = Join-Path $shortRoot ([Guid]::NewGuid().ToString('N').Substring(0, 12))
+	New-Item -ItemType Junction -Path $shortSolutionLink -Target $sourceSolutionDir | Out-Null
+	$projectPath = Join-Path $shortSolutionLink $relativeProjectPath
+	$solutionDir = $shortSolutionLink + [IO.Path]::DirectorySeparatorChar
+} catch {
+	if ($shortSolutionLink -and (Test-Path $shortSolutionLink)) {
+		Remove-Item $shortSolutionLink -Force -ErrorAction SilentlyContinue
+	}
+	$shortSolutionLink = $null
+	$projectPath = $sourceProjectPath
+	Write-Output "WorkPilot could not create short legacy build path: $($_.Exception.Message)"
+}
+
+$buildArgs = @(
+	$projectPath,
+	'/t:Build',
+	'/nologo',
+	'/v:minimal',
+	'/clp:ErrorsOnly;Summary',
+	'/p:Configuration=Debug',
+	"/p:SolutionDir=$solutionDir",
+	'${LEGACY_RESOURCE_PROPERTY}'
+)
+
+function Escape-Xml([string]$value) {
+	return [System.Security.SecurityElement]::Escape($value)
+}
+
+function Compare-VersionLike([string]$left, [string]$right) {
+	$leftParts = $left -split '[.-]' | ForEach-Object {
+		$match = [regex]::Match($_, '^\d+')
+		if ($match.Success) { [int]$match.Value } else { 0 }
+	}
+	$rightParts = $right -split '[.-]' | ForEach-Object {
+		$match = [regex]::Match($_, '^\d+')
+		if ($match.Success) { [int]$match.Value } else { 0 }
+	}
+	$maxLength = [Math]::Max($leftParts.Count, $rightParts.Count)
+	for ($index = 0; $index -lt $maxLength; $index++) {
+		$leftPart = if ($index -lt $leftParts.Count) { $leftParts[$index] } else { 0 }
+		$rightPart = if ($index -lt $rightParts.Count) { $rightParts[$index] } else { 0 }
+		if ($leftPart -ne $rightPart) { return ($leftPart - $rightPart) }
+	}
+	return 0
+}
+
+function Add-LegacyReference(
+	[hashtable]$references,
+	[string]$include,
+	[string]$hintPath,
+	[string]$packageVersion,
+	[int]$frameworkScore
+) {
+	$key = $include.ToLowerInvariant()
+	if (-not $references.ContainsKey($key) -or
+		(Compare-VersionLike $packageVersion $references[$key].PackageVersion) -gt 0 -or
+		((Compare-VersionLike $packageVersion $references[$key].PackageVersion) -eq 0 -and
+			$frameworkScore -gt $references[$key].FrameworkScore)) {
+		$references[$key] = [PSCustomObject]@{
+			Include = $include
+			HintPath = $hintPath
+			PackageVersion = $packageVersion
+			FrameworkScore = $frameworkScore
+		}
+	}
+}
+
+function Get-LegacyReferenceScore([string]$hintPath) {
+	$parts = $hintPath.Replace('\', '/').Split('/')
+	$libIndex = -1
+	for ($index = 0; $index -lt $parts.Length; $index++) {
+		if ($parts[$index].ToLowerInvariant() -eq 'lib') {
+			$libIndex = $index
+			break
+		}
+	}
+	if ($libIndex -lt 0) { return 0 }
+	if ($libIndex + 1 -ge $parts.Length -or $parts[$libIndex + 1].ToLowerInvariant().EndsWith('.dll')) {
+		return 1600
+	}
+	$framework = $parts[$libIndex + 1].ToLowerInvariant()
+	if ($framework -match '^net(\d+)$') {
+		$version = $Matches[1]
+		if ($version.Length -eq 2) { return 1000 + ([int]$version * 10) }
+		return 1000 + [int]$version
+	}
+	if ($framework -match '^netstandard(\d+)(?:\.(\d+))?$') {
+		$minor = if ($Matches[2]) { [int]$Matches[2] } else { 0 }
+		return 700 + ([int]$Matches[1] * 10) + $minor
+	}
+	if ($framework.StartsWith('portable')) { return 600 }
+	if ($framework.StartsWith('netcoreapp')) { return 100 }
+	return 200
+}
+
+function Should-CopyRuntimeReference([string]$hintPath) {
+	$normalized = $hintPath.Replace('\', '/').ToLowerInvariant()
+	return -not $normalized.Contains('/reference assemblies/') -and
+		-not $normalized.Contains('/packs/netstandard.library.ref/')
+}
+
+function Find-NetStandardFacadePaths {
+	$results = New-Object System.Collections.Generic.List[string]
+	$candidates = @(
+		'C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\Facades\netstandard.dll',
+		'C:\Program Files\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\Facades\netstandard.dll',
+		'C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2\Facades\netstandard.dll',
+		'C:\Program Files\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.7.2\Facades\netstandard.dll'
+	)
+	foreach ($candidate in $candidates) {
+		if ((Test-Path $candidate) -and -not $results.Contains($candidate)) {
+			$results.Add($candidate)
+		}
+	}
+	$dotnetPackRoot = 'C:\Program Files\dotnet\packs\NETStandard.Library.Ref'
+	if (Test-Path $dotnetPackRoot) {
+		$pack = Get-ChildItem $dotnetPackRoot -Directory -ErrorAction SilentlyContinue |
+			Sort-Object Name -Descending |
+			Select-Object -First 1
+		if ($pack) {
+			$candidate = Join-Path $pack.FullName 'ref\netstandard2.1\netstandard.dll'
+			if ((Test-Path $candidate) -and -not $results.Contains($candidate)) {
+				$results.Add($candidate)
+			}
+		}
+	}
+	return $results
+}
+
+function Find-BuildToolAssemblyNames([string]$solutionDir) {
+	$results = @{}
+	Get-ChildItem -Path $solutionDir -Recurse -Include '*.licx','*.resx' -File -ErrorAction SilentlyContinue |
+		Where-Object { $_.FullName -notmatch '\\(bin|obj|packages)\\' } |
+		ForEach-Object {
+			$content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+			if ($content) {
+				[regex]::Matches($content, '(?:,\s*|name=")([A-Za-z_][A-Za-z0-9_.-]*)(?=\s*(?:,|"))') |
+					ForEach-Object {
+						$assemblyName = $_.Groups[1].Value.ToLowerInvariant()
+						if ($assemblyName) { $results[$assemblyName] = $true }
+					}
+			}
+			if ($_.Extension -ieq '.licx') {
+				Get-Content $_.FullName -ErrorAction SilentlyContinue |
+				ForEach-Object {
+					$parts = $_.Split(',')
+					if ($parts.Length -gt 1) {
+						$assemblyName = $parts[1].Trim().ToLowerInvariant()
+						if ($assemblyName) { $results[$assemblyName] = $true }
+					}
+				}
+			}
+		}
+	return $results
+}
+
+function New-LegacyPackageReferencesTarget([string]$projectPath) {
+	$projectDir = Split-Path $projectPath
+	$assetsFiles = New-Object System.Collections.Generic.List[string]
+	$primaryAssets = Join-Path $projectDir 'obj\project.assets.json'
+	if (Test-Path $primaryAssets) { $assetsFiles.Add($primaryAssets) }
+	Get-ChildItem -Path $solutionDir -Recurse -Filter 'project.assets.json' -File -ErrorAction SilentlyContinue |
+		Where-Object { $_.FullName -notmatch '\\packages\\' } |
+		ForEach-Object {
+			if (-not $assetsFiles.Contains($_.FullName)) { $assetsFiles.Add($_.FullName) }
+		}
+	if ($assetsFiles.Count -eq 0) { return $null }
+
+	$references = @{}
+	foreach ($assets in $assetsFiles) {
+		$json = Get-Content $assets -Raw | ConvertFrom-Json
+		$packagesRoot = $json.project.restore.packagesPath
+		if (-not $packagesRoot) { continue }
+		foreach ($target in $json.targets.PSObject.Properties) {
+			foreach ($package in $target.Value.PSObject.Properties) {
+				$parts = $package.Name.Split('/')
+				if ($parts.Length -lt 2) { continue }
+				$packageRoot = Join-Path (Join-Path $packagesRoot $parts[0].ToLowerInvariant()) $parts[1]
+				$libRoot = Join-Path $packageRoot 'lib'
+				if ($parts[0].ToLowerInvariant().StartsWith('ebp.') -and (Test-Path $libRoot)) {
+					Get-ChildItem -Path $libRoot -Recurse -Filter '*.dll' -File -ErrorAction SilentlyContinue |
+						ForEach-Object {
+							Add-LegacyReference $references ([IO.Path]::GetFileNameWithoutExtension($_.FullName)) $_.FullName $parts[1] (Get-LegacyReferenceScore $_.FullName)
+						}
+				}
+				if ($null -ne $package.Value.compile) {
+					foreach ($compile in $package.Value.compile.PSObject.Properties) {
+						$relative = $compile.Name
+						if ($relative -eq '_._' -or -not $relative.EndsWith('.dll')) { continue }
+						$hintPath = Join-Path $packageRoot ($relative -replace '/', [IO.Path]::DirectorySeparatorChar)
+						if (-not (Test-Path $hintPath)) { continue }
+						Add-LegacyReference $references ([IO.Path]::GetFileNameWithoutExtension($hintPath)) $hintPath $parts[1] (Get-LegacyReferenceScore $hintPath)
+					}
+				}
+			}
+		}
+	}
+	if ($references.Count -eq 0) { return $null }
+	foreach ($facadePath in Find-NetStandardFacadePaths) {
+		Add-LegacyReference $references 'netstandard' $facadePath '0' 2000
+	}
+
+	$lines = New-Object System.Collections.Generic.List[string]
+	$lines.Add('<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">')
+	$lines.Add('  <Target Name="WorkPilotSkipLegacyLicxResources" BeforeTargets="SplitResourcesByCulture">')
+	$lines.Add('    <ItemGroup>')
+	$lines.Add('      <EmbeddedResource Remove="@(EmbeddedResource)" Condition="''%(EmbeddedResource.Extension)'' == ''.licx''" />')
+	$lines.Add('    </ItemGroup>')
+	$lines.Add('  </Target>')
+	$buildToolAssemblyNames = Find-BuildToolAssemblyNames $solutionDir
+	$buildToolReferences = New-Object System.Collections.Generic.List[object]
+	foreach ($reference in $references.Values) {
+		if ($buildToolAssemblyNames.ContainsKey($reference.Include.ToLowerInvariant())) {
+			$buildToolReferences.Add($reference)
+		}
+	}
+	if ($buildToolReferences.Count -gt 0) {
+		$lines.Add('  <Target Name="WorkPilotLegacyBuildToolReferencePath" BeforeTargets="CoreResGen;CompileLicxFiles">')
+		$lines.Add('    <ItemGroup>')
+		foreach ($reference in $buildToolReferences | Sort-Object HintPath) {
+			$lines.Add('      <ReferencePath Include="' + (Escape-Xml $reference.HintPath) + '" />')
+		}
+		$lines.Add('    </ItemGroup>')
+		$lines.Add('  </Target>')
+	}
+	$runtimeReferences = New-Object System.Collections.Generic.List[object]
+	foreach ($reference in $references.Values) {
+		if (Should-CopyRuntimeReference $reference.HintPath) {
+			$runtimeReferences.Add($reference)
+		}
+	}
+	if ($runtimeReferences.Count -gt 0) {
+		$lines.Add('  <Target Name="WorkPilotCopyLegacyRuntimeDependencies" AfterTargets="CopyFilesToOutputDirectory" Condition="''$(OutputType)'' == ''Exe'' or ''$(OutputType)'' == ''WinExe''">')
+		$lines.Add('    <ItemGroup>')
+		foreach ($reference in $runtimeReferences | Sort-Object HintPath) {
+			$lines.Add('      <_WorkPilotLegacyRuntimeDependency Include="' + (Escape-Xml $reference.HintPath) + '" />')
+		}
+		$lines.Add('      <_WorkPilotLegacyRuntimeDependency Include="%(ProjectReference.RootDir)%(ProjectReference.Directory)bin\$(Configuration)\%(ProjectReference.Filename).dll" Condition="Exists(''%(ProjectReference.RootDir)%(ProjectReference.Directory)bin\$(Configuration)\%(ProjectReference.Filename).dll'')" />')
+		$lines.Add('    </ItemGroup>')
+		$lines.Add('    <Copy SourceFiles="@(_WorkPilotLegacyRuntimeDependency)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" Condition="''$(TargetDir)'' != ''''" />')
+		$lines.Add('  </Target>')
+	}
+	$lines.Add('  <Target Name="WorkPilotLegacyReferencePath" BeforeTargets="CoreCompile">')
+	$lines.Add('    <ItemGroup>')
+	foreach ($reference in $references.Values | Sort-Object HintPath) {
+		$lines.Add('      <ReferencePath Include="' + (Escape-Xml $reference.HintPath) + '" />')
+	}
+	$lines.Add('      <ReferencePath Include="%(ProjectReference.RootDir)%(ProjectReference.Directory)bin\$(Configuration)\%(ProjectReference.Filename).dll" Condition="Exists(''%(ProjectReference.RootDir)%(ProjectReference.Directory)bin\$(Configuration)\%(ProjectReference.Filename).dll'')" />')
+	$lines.Add('    </ItemGroup>')
+	$lines.Add('  </Target>')
+	$lines.Add('</Project>')
+	$output = Join-Path $projectDir 'obj\workpilot-legacy-package-references.targets'
+	[IO.File]::WriteAllLines($output, $lines)
+	return $output
+}
+
+function Invoke-WithLegacyXmlNamespacePatch([scriptblock]$Action) {
+	$backups = @{}
+	Get-ChildItem -Path $solutionDir -Recurse -Filter '*.csproj' -File -ErrorAction SilentlyContinue |
+		Where-Object { $_.FullName -notmatch '\\(bin|obj|packages)\\' } |
+		ForEach-Object {
+			$content = [IO.File]::ReadAllText($_.FullName)
+			if ($content.Contains('xmlns=""')) {
+				$backups[$_.FullName] = $content
+				[IO.File]::WriteAllText($_.FullName, ($content -replace '\s+xmlns=""', ''))
+			}
+		}
+	try {
+		& $Action
+	} finally {
+		foreach ($path in $backups.Keys) {
+			[IO.File]::WriteAllText($path, [string]$backups[$path])
+		}
+	}
+}
+
+function Throw-CompatibleMsBuildRequired {
+	throw 'A compatible MSBuild 15+ / Roslyn C# compiler is required for this .NET Framework project. Install Visual Studio Build Tools 2017+ with MSBuild/.NET desktop build tools, set WORKPILOT_MSBUILD_PATH to that MSBuild.exe, or use a remote/VM runner. dotnet msbuild is disabled for this legacy desktop build because the installed .NET SDK fails on the AL task.'
+}
+
+function Find-LegacyMsBuild {
+	$msbuild = $env:WORKPILOT_MSBUILD_PATH
+	if ($msbuild -and -not (Test-Path $msbuild)) {
+		$cmd = Get-Command $msbuild -ErrorAction SilentlyContinue
+		if ($cmd) { $msbuild = $cmd.Source }
+	}
+	if ($msbuild -and [IO.Path]::GetFileNameWithoutExtension($msbuild) -ieq 'dotnet') {
+		$msbuild = $null
+	}
+	if (-not $msbuild) {
+		$vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+		if (Test-Path $vswhere) {
+			$msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\Current\Bin\MSBuild.exe' | Select-Object -First 1
+			if (-not $msbuild) {
+				$msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+			}
+		}
+	}
+	if (-not $msbuild) {
+		$msbuild = $knownMsbuild | Where-Object { Test-Path $_ } | Select-Object -First 1
+	}
+	if (-not $msbuild) {
+		$cmd = Get-Command msbuild -ErrorAction SilentlyContinue
+		if ($cmd) { $msbuild = $cmd.Source }
+	}
+	if ($msbuild -and [IO.Path]::GetFileNameWithoutExtension($msbuild) -ieq 'dotnet') {
+		return $null
+	}
+	return $msbuild
+}
+
+function Find-RoslynCscToolPath {
+	$configured = $env:WORKPILOT_CSC_TOOL_PATH
+	if ($configured -and (Test-Path (Join-Path $configured 'csc.exe'))) {
+		return $configured
+	}
+	$dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+	if (-not $dotnet) { return $null }
+	$sdkLines = & $dotnet.Source --list-sdks 2>$null
+	if (-not $sdkLines) { return $null }
+	$candidates = New-Object System.Collections.Generic.List[object]
+	foreach ($line in $sdkLines) {
+		if ($line -match '^(\S+)\s+\[(.+)\]$') {
+			$candidates.Add([PSCustomObject]@{
+				Version = $Matches[1]
+				Path = Join-Path (Join-Path $Matches[2] $Matches[1]) 'Roslyn\bincore'
+			})
+		}
+	}
+	foreach ($candidate in $candidates | Sort-Object Version -Descending) {
+		if (Test-Path (Join-Path $candidate.Path 'csc.exe')) {
+			return $candidate.Path
+		}
+	}
+	return $null
+}
+
+function Find-SdkToolsPath {
+	$configured = $env:WORKPILOT_SDK_TOOLS_PATH
+	if ($configured -and (Test-Path (Join-Path $configured 'al.exe'))) {
+		return $configured
+	}
+	$candidates = @(
+		'C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools',
+		'C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\x64',
+		'C:\Program Files\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools',
+		'C:\Program Files\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\x64',
+		'C:\Program Files (x86)\Microsoft SDKs\Windows\v8.1A\bin\NETFX 4.5.1 Tools',
+		'C:\Program Files (x86)\Microsoft SDKs\Windows\v8.1A\bin\NETFX 4.5.1 Tools\x64'
+	)
+	foreach ($candidate in $candidates) {
+		if (Test-Path (Join-Path $candidate 'al.exe')) {
+			return $candidate
+		}
+	}
+	return $null
+}
+
+function Should-UseExternalRoslynCompiler([string]$msbuild) {
+	$normalized = $msbuild.Replace('\', '/').ToLowerInvariant()
+	return $normalized.Contains('/windows/microsoft.net/framework') -or
+		$normalized.Contains('/msbuild/14.0/')
+}
+
+$exe = $null
+try {
+	$dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+	if ($dotnet) {
+		try {
+			& $dotnet.Source restore $projectPath "/p:SolutionDir=$solutionDir"
+		} catch {
+			Write-Output "WorkPilot legacy restore failed: $($_.Exception.Message)"
+		}
+	}
+	try {
+		$referencesTarget = New-LegacyPackageReferencesTarget $projectPath
+		if ($referencesTarget) {
+			$buildArgs += "/p:CustomBeforeMicrosoftCommonTargets=$referencesTarget"
+		}
+	} catch {
+		Write-Output "WorkPilot legacy import preparation failed: $($_.Exception.Message)"
+	}
+
+	$msbuild = Find-LegacyMsBuild
+	if ($msbuild) {
+		$roslynCscToolPath = Find-RoslynCscToolPath
+		if ($roslynCscToolPath -and (Should-UseExternalRoslynCompiler $msbuild)) {
+			$buildArgs += "/p:CscToolPath=$roslynCscToolPath"
+			$buildArgs += '/p:CscToolExe=csc.exe'
+		}
+		$sdkToolsPath = Find-SdkToolsPath
+		if ($sdkToolsPath -and (Should-UseExternalRoslynCompiler $msbuild)) {
+			$buildArgs += "/p:TargetFrameworkSDKToolsDirectory=$sdkToolsPath"
+		}
+		# Le patch xmlns="" est appliqué de façon proactive : les projets legacy
+		# EBP contiennent des éléments <Compile ... xmlns=""> qui déclenchent
+		# MSB4097. On nettoie avant le build pour éviter un double build.
+		$script:buildExit = 0
+		$output = Invoke-WithLegacyXmlNamespacePatch {
+			& $msbuild @buildArgs 2>&1
+			$script:buildExit = $LASTEXITCODE
+		}
+		$output | Write-Output
+		if ($script:buildExit -ne 0) {
+			if (($output -join [Environment]::NewLine) -match 'CS1617|Option .+ langversion|Invalid option.*/langversion') {
+				Throw-CompatibleMsBuildRequired
+			}
+			exit $script:buildExit
+		}
+	} else {
+		$exe = Get-ChildItem -Path $binDir -Recurse -Filter $assemblyFilter -ErrorAction SilentlyContinue | Select-Object -First 1
+		if (-not $exe) {
+			throw ${quotePowerShellSingle(LEGACY_MSBUILD_UNAVAILABLE_MESSAGE)}
+		}
+	}
+	$exe = Get-ChildItem -Path $binDir -Recurse -Filter $assemblyFilter -ErrorAction SilentlyContinue | Select-Object -First 1
+} finally {
+	if ($shortSolutionLink -and (Test-Path $shortSolutionLink)) {
+		[IO.Directory]::Delete($shortSolutionLink)
+	}
+}
+
+if (-not $exe) { throw 'No executable produced' }
+# Les applications client lourd EBP exigent les droits administrateur (réparation
+# de la base de registre). On élève via Start-Process -Verb RunAs (UAC).
+$launched = Start-Process -FilePath $exe.FullName -WorkingDirectory $exe.DirectoryName -Verb RunAs -PassThru
+$launched.WaitForExit()
+exit $launched.ExitCode
+`;
+		writeFileSync(scriptPath, script, "utf-8");
+		return scriptPath;
+	}
+
+	private buildLegacyDesktopCommand(csprojPath: string): string {
+		const projectDir = path.dirname(csprojPath);
+		const assemblyName = this.readAssemblyName(csprojPath);
+		const solutionDir = this.findContainingSolutionDir(csprojPath);
+		ensureLegacyWorktreeBuildAssets(solutionDir, (message) =>
+			this.emit("output", message),
+		);
+		const referencesTarget = createLegacyPackageReferencesTarget(csprojPath, solutionDir);
+		const buildArgs = [
+			"/t:Build",
+			"/nologo",
+			"/v:minimal",
+			"/clp:ErrorsOnly;Summary",
+			"/p:Configuration=Debug",
+			`/p:SolutionDir=${solutionDir}`,
+			LEGACY_RESOURCE_PROPERTY,
+			...(referencesTarget
+				? [`/p:CustomBeforeMicrosoftCommonTargets=${referencesTarget}`]
+				: []),
+		];
+		if (process.platform !== "win32") {
+			const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+			const shBuildPath = shellQuote(csprojPath);
+			const shBuildArgs = buildArgs.map(shellQuote).join(" ");
+			const shBinDir = shellQuote(path.join(projectDir, "bin", "Debug"));
+			const shAssemblyName = shellQuote(`${assemblyName}.exe`);
+			const shBuildError = shellQuote(LEGACY_MSBUILD_UNAVAILABLE_MESSAGE);
+			const shRuntimeError = shellQuote(WINDOWS_RUNTIME_UNAVAILABLE_MESSAGE);
+			return [
+				"sh -lc",
+				shellQuote(
+					[
+						"set -e",
+						'MSBUILD="$' + '{WORKPILOT_MSBUILD_PATH:-}"',
+						'if [ -n "$MSBUILD" ] && [ ! -x "$MSBUILD" ] && command -v "$MSBUILD" >/dev/null 2>&1; then MSBUILD="$(command -v "$MSBUILD")"; fi',
+						'if [ -z "$MSBUILD" ] && command -v msbuild >/dev/null 2>&1; then MSBUILD="$(command -v msbuild)"; fi',
+						'if [ -z "$MSBUILD" ] && command -v xbuild >/dev/null 2>&1; then MSBUILD="$(command -v xbuild)"; fi',
+						`EXE="$(find ${shBinDir} -name ${shAssemblyName} -print -quit)"`,
+						'if [ -n "$MSBUILD" ] && [ "$(basename "$MSBUILD" .exe)" = "dotnet" ] && [ -z "$EXE" ]; then echo ' +
+							`${shBuildError} >&2; exit 127; fi`,
+						`if [ -n "$MSBUILD" ] && [ "$(basename "$MSBUILD" .exe)" != "dotnet" ]; then set +e; BUILD_OUTPUT="$("$MSBUILD" ${shBuildPath} ${shBuildArgs} 2>&1)"; BUILD_EXIT=$?; set -e; printf '%s\\n' "$BUILD_OUTPUT"; if [ "$BUILD_EXIT" -ne 0 ]; then if printf '%s' "$BUILD_OUTPUT" | grep -q MSB4097; then echo "A compatible MSBuild/Mono build tool is required for this legacy .NET Framework project; dotnet msbuild is disabled for desktop legacy builds. Configure WORKPILOT_MSBUILD_PATH or use a remote/VM runner." >&2; fi; exit "$BUILD_EXIT"; fi; EXE="$(find ${shBinDir} -name ${shAssemblyName} -print -quit)"; fi`,
+						`if [ -z "$EXE" ] && [ -z "$MSBUILD" ]; then echo ${shBuildError} >&2; exit 127; fi`,
+						'if [ -z "$EXE" ]; then echo "No executable produced" >&2; exit 1; fi',
+						'if command -v mono >/dev/null 2>&1; then mono "$EXE"; elif command -v wine >/dev/null 2>&1; then wine "$EXE"; else echo ' +
+							`${shRuntimeError} >&2; exit 127; fi`,
+					].join("; "),
+				),
+			].join(" ");
+		}
+		const scriptPath = this.writeLegacyDesktopPowerShellScript(
+			csprojPath,
+			assemblyName,
+			solutionDir,
+		);
+		return [
+			"powershell",
+			"-NoProfile",
+			"-ExecutionPolicy Bypass",
+			"-File",
+			quoteWindowsShellArgument(scriptPath),
+		].join(" ");
+	}
+
+	private buildDotnetConfig(
+		rootDir: string,
+		dotnetDir: string,
+		csprojPath: string | null,
+	): AppEmulatorConfig {
+		if (csprojPath && this.isLegacyDotnetFrameworkProject(csprojPath)) {
+			const port = this.readDotnetPort(dotnetDir) ?? 8080;
+			if (this.isLegacyWebProject(csprojPath)) {
+				return {
+					type: "web",
+					framework: "dotnet-framework-iis-express",
+					startCommand: this.buildIisExpressCommand(dotnetDir, port),
+					port,
+					isWeb: true,
+					projectDir: dotnetDir,
+				};
+			}
+			return {
+				type: "desktop",
+				framework: "dotnet-framework-desktop",
+				startCommand: this.buildLegacyDesktopCommand(csprojPath),
+				port: 0,
+				isWeb: false,
+				projectDir: dotnetDir,
+			};
+		}
+
+		const dotnetPort = this.readDotnetPort(dotnetDir) ?? 5000;
+		const frontendResult = this.findFrontendInSubdirs(rootDir, 3);
+
+		if (frontendResult) {
+			const frontendDir = frontendResult.projectDir ?? rootDir;
+			return this.buildFullstackConfig(
+				{
+					framework: "dotnet",
+					startCommand: "dotnet run",
+					port: dotnetPort,
+					projectDir: dotnetDir,
+				},
+				{
+					framework: frontendResult.framework,
+					startCommand: frontendResult.startCommand,
+					port: frontendResult.port,
+					projectDir: frontendDir,
+				},
+			);
+		}
+
+		return {
+			type: "web",
+			framework: "dotnet",
+			startCommand: "dotnet run",
+			port: dotnetPort,
+			isWeb: true,
+			projectDir: dotnetDir,
+		};
+	}
+
+	private parseStartCommand(startCommand: string): {
+		cmd: string;
+		args: string[];
+		shell?: boolean;
+	} {
+		const useShell =
+			process.platform === "win32" ||
+			/["'|&;<>()$]/.test(startCommand) ||
+			startCommand.startsWith("sh -lc ") ||
+			startCommand.startsWith("bash -lc ");
+		if (useShell) {
+			return { cmd: startCommand, args: [], shell: true };
+		}
+		const [cmd, ...args] = startCommand.split(" ");
+		return { cmd, args };
+	}
+
 	/**
 	 * Find the directory that should be used as cwd for `dotnet run`.
 	 * Priority:
@@ -769,7 +1630,9 @@ export class AppEmulatorService extends EventEmitter {
 				return null;
 			}
 
-			const csprojsHere = entries.filter((f) => f.endsWith(".csproj"));
+			const csprojsHere = entries.filter(
+				(f) => f.endsWith(".csproj") && !this.isLikelyTestProjectPath(f),
+			);
 			if (csprojsHere.length > 0) {
 				// Tier 1 — has runtime entry point (Program.cs / Startup.cs)
 				const hasRuntime = entries.some(
@@ -792,7 +1655,12 @@ export class AppEmulatorService extends EventEmitter {
 			}
 
 			for (const entry of entries) {
-				if (entry.startsWith(".") || skipDirs.has(entry)) continue;
+				if (
+					entry.startsWith(".") ||
+					skipDirs.has(entry) ||
+					this.isLikelyTestProjectPath(entry)
+				)
+					continue;
 				const fullPath = path.join(dir, entry);
 				try {
 					if (!statSync(fullPath).isDirectory()) continue;
@@ -841,7 +1709,7 @@ export class AppEmulatorService extends EventEmitter {
 			}
 
 			const csprojs = entries.filter(
-				(f) => f.endsWith(".csproj") && !f.toLowerCase().includes("test"),
+				(f) => f.endsWith(".csproj") && !this.isLikelyTestProjectPath(f),
 			);
 			for (const csproj of csprojs) {
 				const fullPath = path.join(dir, csproj);
@@ -850,7 +1718,12 @@ export class AppEmulatorService extends EventEmitter {
 			}
 
 			for (const entry of entries) {
-				if (entry.startsWith(".") || skipDirs.has(entry)) continue;
+				if (
+					entry.startsWith(".") ||
+					skipDirs.has(entry) ||
+					this.isLikelyTestProjectPath(entry)
+				)
+					continue;
 				const fullPath = path.join(dir, entry);
 				try {
 					if (!statSync(fullPath).isDirectory()) continue;
@@ -966,11 +1839,14 @@ export class AppEmulatorService extends EventEmitter {
 		// .NET: check this dir AND one level of subdirs (covers nested project layouts)
 		try {
 			const entries = readdirSync(dir);
-			if (entries.some((f) => f.endsWith(".csproj"))) {
+			const csproj = entries.find((f) => f.endsWith(".csproj"));
+			if (csproj) {
+				const config = this.buildDotnetConfig(dir, dir, path.join(dir, csproj));
 				return {
-					framework: "dotnet",
-					startCommand: "dotnet run",
-					port: this.readDotnetPort(dir) ?? 5000,
+					framework: config.framework,
+					startCommand: config.startCommand,
+					port: config.port,
+					projectDir: config.projectDir,
 				};
 			}
 			// One level deeper (e.g. solution root → project subdir)
@@ -985,12 +1861,18 @@ export class AppEmulatorService extends EventEmitter {
 				const sub = path.join(dir, entry);
 				try {
 					if (!statSync(sub).isDirectory()) continue;
-					if (readdirSync(sub).some((f) => f.endsWith(".csproj"))) {
+					const subCsproj = readdirSync(sub).find((f) => f.endsWith(".csproj"));
+					if (subCsproj) {
+						const config = this.buildDotnetConfig(
+							dir,
+							sub,
+							path.join(sub, subCsproj),
+						);
 						return {
-							framework: "dotnet",
-							startCommand: "dotnet run",
-							port: this.readDotnetPort(sub) ?? 5000,
-							projectDir: sub,
+							framework: config.framework,
+							startCommand: config.startCommand,
+							port: config.port,
+							projectDir: config.projectDir,
 						};
 					}
 				} catch {
@@ -1523,10 +2405,7 @@ export class AppEmulatorService extends EventEmitter {
 
 			this.emit("status", `Starting: ${config.startCommand}`);
 
-			// Parse command
-			const isWindows = process.platform === "win32";
-			const shell = isWindows ? true : undefined;
-			const [cmd, ...args] = config.startCommand.split(" ");
+			const { cmd, args, shell } = this.parseStartCommand(config.startCommand);
 
 			const proc = spawn(cmd, args, {
 				cwd: projectDir,
@@ -1541,11 +2420,20 @@ export class AppEmulatorService extends EventEmitter {
 
 			this.activeServerProcess = proc;
 
+			const recentOutput: string[] = [];
+			const captureOutput = (line: string): void => {
+				recentOutput.push(line);
+				if (recentOutput.length > SERVER_OUTPUT_BUFFER_LIMIT) {
+					recentOutput.shift();
+				}
+				this.emit("output", line);
+			};
+
 			proc.stdout?.on("data", (data: Buffer) => {
 				const text = data.toString("utf-8");
 				for (const line of text.split("\n")) {
 					if (line.trim()) {
-						this.emit("output", line);
+						captureOutput(line);
 					}
 				}
 			});
@@ -1554,7 +2442,7 @@ export class AppEmulatorService extends EventEmitter {
 				const text = data.toString("utf-8");
 				for (const line of text.split("\n")) {
 					if (line.trim()) {
-						this.emit("output", line);
+						captureOutput(line);
 					}
 				}
 			});
@@ -1565,7 +2453,7 @@ export class AppEmulatorService extends EventEmitter {
 				// Release startingInProgress so a retry can start immediately
 				this.startingInProgress = false;
 				if (code !== null && code !== 0) {
-					this.emit("error", `Server exited with code ${code}`);
+					this.emit("error", formatServerExitError(code, recentOutput));
 				}
 				this.emit("stopped");
 			});
@@ -1616,9 +2504,6 @@ export class AppEmulatorService extends EventEmitter {
 		const services = config.services!;
 		const primary = services.find((s) => s.isPrimary) ?? services[0];
 		const secondaries = services.filter((s) => !s.isPrimary);
-
-		const isWindows = process.platform === "win32";
-		const shell = isWindows ? true : undefined;
 
 		// Resolve port conflicts for each service before spawning anything.
 		// Services whose port is already served by a live HTTP server are skipped entirely
@@ -1675,7 +2560,7 @@ export class AppEmulatorService extends EventEmitter {
 		for (const svc of secondaries) {
 			if (skipSpawn.has(svc.label)) continue;
 			this.emit("output", `[${svc.label}] Starting: ${svc.startCommand}`);
-			const [cmd, ...args] = svc.startCommand.split(" ");
+			const { cmd, args, shell } = this.parseStartCommand(svc.startCommand);
 			// Patch @ngtools/webpack to fix the %20 encoding bug (paths with spaces).
 			// Angular must run from the real path so TypeScript & webpack use the same paths.
 			if (svc.framework === "angular") {
@@ -1722,7 +2607,11 @@ export class AppEmulatorService extends EventEmitter {
 
 		// Spawn primary service — drives 'ready' and waitForPort checks
 		this.emit("status", `Starting: ${primary.startCommand}`);
-		const [primaryCmd, ...primaryArgs] = primary.startCommand.split(" ");
+		const {
+			cmd: primaryCmd,
+			args: primaryArgs,
+			shell,
+		} = this.parseStartCommand(primary.startCommand);
 		// Patch @ngtools/webpack for the %20 bug if primary is Angular.
 		if (primary.framework === "angular") {
 			await this.patchAngularWebpack(primary.projectDir);
@@ -1752,14 +2641,23 @@ export class AppEmulatorService extends EventEmitter {
 		this.activeServerProcess = primaryProc;
 		this.activeServiceProcesses.set(primary.label, primaryProc);
 
+		const primaryRecentOutput: string[] = [];
+		const capturePrimaryOutput = (line: string): void => {
+			primaryRecentOutput.push(line);
+			if (primaryRecentOutput.length > SERVER_OUTPUT_BUFFER_LIMIT) {
+				primaryRecentOutput.shift();
+			}
+			this.emit("output", `[${primary.label}] ${line}`);
+		};
+
 		primaryProc.stdout?.on("data", (data: Buffer) => {
 			for (const line of data.toString("utf-8").split("\n")) {
-				if (line.trim()) this.emit("output", `[${primary.label}] ${line}`);
+				if (line.trim()) capturePrimaryOutput(line);
 			}
 		});
 		primaryProc.stderr?.on("data", (data: Buffer) => {
 			for (const line of data.toString("utf-8").split("\n")) {
-				if (line.trim()) this.emit("output", `[${primary.label}] ${line}`);
+				if (line.trim()) capturePrimaryOutput(line);
 			}
 		});
 		primaryProc.on("close", (code) => {
@@ -1768,7 +2666,7 @@ export class AppEmulatorService extends EventEmitter {
 			this.startingInProgress = false;
 			this.activeServiceProcesses.delete(primary.label);
 			if (code !== null && code !== 0) {
-				this.emit("error", `Server exited with code ${code}`);
+				this.emit("error", formatServerExitError(code, primaryRecentOutput));
 			}
 			this.emit("stopped");
 		});
@@ -1822,9 +2720,12 @@ export class AppEmulatorService extends EventEmitter {
 		newPort: number,
 	): string {
 		return cmd.replaceAll(
-			new RegExp(String.raw`(--port\s+)${oldPort}|(\bPORT=)${oldPort}`, "g"),
-			(_m: string, p1: string, p2: string) =>
-				p1 ? `${p1}${newPort}` : `${p2}${newPort}`,
+			new RegExp(
+				String.raw`(--port\s+)${oldPort}|(\bPORT=)${oldPort}|(/port:)${oldPort}`,
+				"g",
+			),
+			(_m: string, p1: string, p2: string, p3: string) =>
+				p1 ? `${p1}${newPort}` : p2 ? `${p2}${newPort}` : `${p3}${newPort}`,
 		);
 	}
 

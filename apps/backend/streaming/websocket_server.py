@@ -83,13 +83,24 @@ def _kill_process_safely(proc: psutil.Process, pid: int, name: str) -> None:
     logger.info(f"Terminating process {pid} ({name})")
     proc.terminate()
 
-    # Wait for graceful termination
-    time.sleep(1)
+    # Wait for graceful termination — use psutil.wait so we actually reap
+    # the child instead of polling and leaving a zombie behind.
+    try:
+        proc.wait(timeout=1)
+        return
+    except psutil.TimeoutExpired:
+        pass
+    except psutil.NoSuchProcess:
+        return
 
     # Force kill if still running
     if proc.is_running():
         logger.warning(f"Force killing process {pid}")
         proc.kill()
+        try:
+            proc.wait(timeout=2)
+        except (psutil.TimeoutExpired, psutil.NoSuchProcess):
+            pass
 
 
 def _is_target_connection(conn, port: int) -> bool:
@@ -235,8 +246,61 @@ class StreamingWebSocketServer:
             await self._server.wait_closed()
             logger.info("Streaming WebSocket server stopped")
 
-    def _process_request(self, path, request_headers):
-        """Process incoming WebSocket connection requests."""
+    # Origins allowed to connect to the streaming WebSocket. Bound to
+    # localhost by default (see __init__), but a malicious page in any
+    # browser the user opens can still attempt cross-origin WS to localhost
+    # and subscribe to live coding sessions, exfiltrating file paths /
+    # command output / agent thinking. Restrict to known dev/prod URLs.
+    _ALLOWED_ORIGINS = frozenset(
+        os.environ.get(
+            "WORKPILOT_WS_ALLOWED_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173,"
+            "http://localhost:3000,http://127.0.0.1:3000,"
+            "file://",
+        ).split(",")
+    )
+
+    def _process_request(self, *args, **kwargs):
+        """Process incoming WebSocket connection requests.
+
+        Reject any handshake whose `Origin` header is not on the allowlist.
+        Variable signature handles multiple websockets-library versions:
+        v10-v12 pass `(path, headers)`, v13+ pass `(connection, request)`.
+        """
+        # Locate the headers regardless of which positional shape was used.
+        headers = None
+        for arg in args:
+            if hasattr(arg, "headers"):
+                headers = arg.headers
+                break
+            if hasattr(arg, "get"):
+                # Plain Headers / dict-like
+                headers = arg
+                break
+        if headers is None:
+            # Cannot identify headers — fail open ONLY for tests; in prod the
+            # signature should always match. Return None to accept (legacy
+            # behavior) so unknown library versions don't lock us out.
+            return None
+
+        origin = ""
+        try:
+            origin = headers.get("Origin", "") or headers.get("origin", "")
+        except Exception:
+            return None
+
+        if origin and origin not in self._ALLOWED_ORIGINS:
+            logger.warning(
+                "Rejecting WebSocket connection from disallowed origin: %s",
+                origin,
+            )
+            # Return a tuple/response to abort; library version-dependent.
+            try:
+                from http import HTTPStatus
+
+                return (HTTPStatus.FORBIDDEN, [], b"forbidden origin\n")
+            except Exception:
+                return None
         return None
 
     def _extract_websocket_path(self, websocket: WebSocketServerProtocol) -> str:
@@ -316,8 +380,16 @@ class StreamingWebSocketServer:
     def _cleanup_client(
         self, session_id: str, websocket: WebSocketServerProtocol
     ) -> None:
-        """Clean up client connection."""
-        self._clients[session_id].discard(websocket)
+        """Clean up client connection.
+
+        Tolerate the case where the session_id was never registered (e.g.,
+        an exception during `_setup_session` reaches the `finally` cleanup
+        before `_register_client` ran). Previously raised KeyError, which
+        masked the original setup error.
+        """
+        clients = self._clients.get(session_id)
+        if clients is not None:
+            clients.discard(websocket)
         self.streaming_manager.unsubscribe(session_id, websocket)
         logger.info(f"Client cleanup completed for session {session_id}")
 
@@ -416,6 +488,12 @@ class StreamingWebSocketServer:
         """
         try:
             data = json.loads(message)
+            # Reject non-object payloads early — `data.get(...)` below would
+            # raise AttributeError on a JSON string/array/number, producing
+            # error-level log spam (and no rate limit).
+            if not isinstance(data, dict):
+                logger.debug("Ignoring non-object WS message: %r", type(data).__name__)
+                return
             msg_type = data.get("type")
             session_id = ctx["session_id"]
 
@@ -431,7 +509,8 @@ class StreamingWebSocketServer:
             # Unknown message types are ignored gracefully
 
         except json.JSONDecodeError:
-            logger.error(f"Invalid JSON message: {message}")
+            # Don't echo the full message back to logs — it can be large.
+            logger.debug("Invalid JSON message dropped (size=%d)", len(message))
         except Exception as e:
             logger.error(f"Error handling message: {e}")
 

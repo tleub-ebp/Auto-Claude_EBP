@@ -55,6 +55,7 @@ import type {
 	AzureDevOpsWorkItem,
 	JiraWorkItem,
 } from "../../shared/types/integrations";
+import { parseAcceptanceCriteriaText } from "../../shared/utils/acceptance-criteria";
 // Import logos
 import AzureDevOpsLogo from "../assets/logos/azure-devops.svg";
 import JiraLogo from "../assets/logos/jira.svg";
@@ -90,6 +91,7 @@ import type { ImportableWorkItem } from "./azure-devops-import/ImportConfirmDial
 import { ImportConfirmDialog } from "./azure-devops-import/ImportConfirmDialog";
 import { BulkPRDialog } from "./BulkPRDialog";
 import { JiraSidePanel } from "./jira-import/JiraSidePanel";
+import { QuickCommandBar } from "./kanban/QuickCommandBar";
 import { PRFilesModal } from "./PRFilesModal";
 import { QueueSettingsModal } from "./QueueSettingsModal";
 import { SortableTaskCard } from "./SortableTaskCard";
@@ -1621,6 +1623,13 @@ export function KanbanBoard({
 						metadata.jiraType = jiraItem.workItemType;
 						metadata.importSource = "jira";
 
+						const jiraAc = parseAcceptanceCriteriaText(
+							jiraItem.acceptanceCriteria,
+						);
+						if (jiraAc.length > 0) {
+							metadata.acceptanceCriteria = jiraAc;
+						}
+
 						const jiraPriority = jiraItem.priority?.toLowerCase();
 						if (jiraPriority === "highest" || jiraPriority === "critical") {
 							metadata.priority = "urgent";
@@ -1650,6 +1659,13 @@ export function KanbanBoard({
 						metadata.azureDevOpsType = adoItem.workItemType;
 						metadata.importSource = "azure-devops";
 
+						const adoAc = parseAcceptanceCriteriaText(
+							adoItem.acceptanceCriteria,
+						);
+						if (adoAc.length > 0) {
+							metadata.acceptanceCriteria = adoAc;
+						}
+
 						if (adoItem.priority === 1) {
 							metadata.priority = "urgent";
 						} else if (adoItem.priority === 2) {
@@ -1675,6 +1691,10 @@ export function KanbanBoard({
 						metadata.requireReviewBeforeCoding = true;
 					}
 
+					// task.description = raw description from the tracker; the
+					// AcceptanceCriteriaSection component renders metadata.acceptanceCriteria
+					// in its own UI block. Concatenating them here would double the
+					// criteria the user sees (once in description, once in the AC list).
 					const result = await createTask(
 						projectId,
 						workItem.title,
@@ -2816,6 +2836,9 @@ export function KanbanBoard({
 							{t("tasks:kanban.expandAll")}
 						</Button>
 					)}
+					{/* Quick slash command bar — sends /<cmd> prompts to the SDK
+					    using .claude/commands/*.md from the active project. */}
+					<QuickCommandBar projectPath={project?.path} />
 				</div>
 				<div className="flex items-center gap-2">
 					{activeProjectId &&

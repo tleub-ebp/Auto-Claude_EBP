@@ -79,6 +79,7 @@ export interface AzureDevOpsWorkItem {
 	iterationPath?: string;
 	url?: string;
 	repository?: string; // Repository name where the work item is associated
+	acceptanceCriteria?: string; // HTML from Microsoft.VSTS.Common.AcceptanceCriteria
 }
 
 export interface AzureDevOpsProject {
@@ -130,6 +131,7 @@ export interface JiraWorkItem {
 	createdDate?: string;
 	projectKey?: string;
 	url?: string;
+	acceptanceCriteria?: string; // Plain text from autodetected Jira custom field
 }
 
 export interface JiraSyncStatus {

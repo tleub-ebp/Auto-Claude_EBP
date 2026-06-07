@@ -11,7 +11,17 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from ._naming import sanitize_name
 from .models import BaselineInfo, ComparisonResult
+
+
+def _sanitize_baseline_name(name: str, *, max_len: int = 128) -> str:
+    """Backwards-compatible wrapper around the shared sanitizer.
+
+    Kept as a thin alias so existing callers (and tests) keep working
+    while the canonical implementation lives in `_naming.sanitize_name`.
+    """
+    return sanitize_name(name, fallback="baseline", max_len=max_len)
 
 
 class VisualRegressionEngine:
@@ -34,7 +44,7 @@ class VisualRegressionEngine:
         if not screenshot_path.exists():
             raise FileNotFoundError(f"Screenshot not found: {screenshot_path}")
 
-        safe_name = name.replace(" ", "_").replace("/", "_")
+        safe_name = _sanitize_baseline_name(name)
         baseline_path = self.baselines_dir / f"{safe_name}.png"
         shutil.copy2(str(screenshot_path), str(baseline_path))
 
@@ -68,7 +78,7 @@ class VisualRegressionEngine:
     def compare(self, name: str, current_path: Path) -> ComparisonResult:
         """Compare a current screenshot against its baseline."""
         current_path = Path(current_path)
-        safe_name = name.replace(" ", "_").replace("/", "_")
+        safe_name = _sanitize_baseline_name(name)
         baseline_path = self.baselines_dir / f"{safe_name}.png"
 
         if not baseline_path.exists():
@@ -83,8 +93,14 @@ class VisualRegressionEngine:
         except ImportError:
             raise RuntimeError("Pillow is not installed. Run: pip install Pillow")
 
-        baseline_img = Image.open(baseline_path).convert("RGBA")
-        current_img = Image.open(current_path).convert("RGBA")
+        # PIL is lazy: `Image.open(...).convert(...)` returns a new image in
+        # memory but the underlying file handle of the source stays open
+        # until garbage-collected. On Windows that prevents the source
+        # file from being deleted or replaced. Use `with` to force close.
+        with Image.open(baseline_path) as src:
+            baseline_img = src.convert("RGBA")
+        with Image.open(current_path) as src:
+            current_img = src.convert("RGBA")
 
         # Resize current to match baseline if dimensions differ
         if current_img.size != baseline_img.size:
@@ -174,7 +190,7 @@ class VisualRegressionEngine:
 
     def delete_baseline(self, name: str) -> bool:
         """Delete a baseline by name."""
-        safe_name = name.replace(" ", "_").replace("/", "_")
+        safe_name = _sanitize_baseline_name(name)
         png_path = self.baselines_dir / f"{safe_name}.png"
         meta_path = self.baselines_dir / f"{safe_name}.json"
         diff_path = self.diffs_dir / f"{safe_name}_diff.png"
@@ -189,6 +205,6 @@ class VisualRegressionEngine:
 
     def get_diff_image(self, name: str) -> Path | None:
         """Get the diff image path for a given baseline name."""
-        safe_name = name.replace(" ", "_").replace("/", "_")
+        safe_name = _sanitize_baseline_name(name)
         diff_path = self.diffs_dir / f"{safe_name}_diff.png"
         return diff_path if diff_path.exists() else None

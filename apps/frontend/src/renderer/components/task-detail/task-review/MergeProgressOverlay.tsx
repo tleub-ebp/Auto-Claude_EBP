@@ -235,17 +235,14 @@ export function MergeProgressOverlay({
 						>
 							<div className="space-y-1">
 								{logEntries.map((entry, idx) => (
-									<>
-										{/* biome-ignore lint/suspicious/noArrayIndexKey: no stable key available */}
-										<div key={idx} className="flex gap-2 text-xs font-mono">
-											<span className="text-muted-foreground shrink-0">
-												{new Date(entry.timestamp).toLocaleTimeString()}
-											</span>
-											<span className={cn(LOG_TYPE_COLORS[entry.type])}>
-												{entry.message}
-											</span>
-										</div>
-									</>
+									<div key={idx} className="flex gap-2 text-xs font-mono">
+										<span className="text-muted-foreground shrink-0">
+											{new Date(entry.timestamp).toLocaleTimeString()}
+										</span>
+										<span className={cn(LOG_TYPE_COLORS[entry.type])}>
+											{entry.message}
+										</span>
+									</div>
 								))}
 							</div>
 						</div>

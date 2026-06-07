@@ -15,7 +15,7 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -112,7 +112,9 @@ def action_prune(
 
     if strategy == "oldest" or strategy == "lru":
         if max_age_days is not None:
-            cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+                days=max_age_days
+            )
             for f in files:
                 mtime = datetime.utcfromtimestamp(f.stat().st_mtime)
                 if mtime < cutoff:

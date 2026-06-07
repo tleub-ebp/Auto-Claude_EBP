@@ -25,10 +25,14 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Try to import yaml, fall back gracefully
 try:
@@ -230,6 +234,11 @@ class CIDiscovery:
                     result.environment_variables.extend(env.keys())
 
             except Exception:
+                logger.debug(
+                    "Failed to parse GitHub Actions workflow %s — skipping",
+                    wf_file,
+                    exc_info=True,
+                )
                 continue
 
         return result
@@ -300,7 +309,11 @@ class CIDiscovery:
                 result.environment_variables.extend(variables.keys())
 
         except Exception:
-            pass
+            logger.debug(
+                "Failed to parse GitLab CI config %s — returning partial result",
+                config_file,
+                exc_info=True,
+            )
 
         return result
 
@@ -358,7 +371,11 @@ class CIDiscovery:
                 )
 
         except Exception:
-            pass
+            logger.debug(
+                "Failed to parse CircleCI config %s — returning partial result",
+                config_file,
+                exc_info=True,
+            )
 
         return result
 
@@ -403,7 +420,11 @@ class CIDiscovery:
                 )
 
         except Exception:
-            pass
+            logger.debug(
+                "Failed to parse Jenkinsfile %s — returning partial result",
+                jenkinsfile,
+                exc_info=True,
+            )
 
         return result
 
@@ -491,6 +512,24 @@ class CIDiscovery:
 
 
 # =============================================================================
+# MODULE-LEVEL SINGLETON
+# =============================================================================
+
+_ci_discovery_instance: CIDiscovery | None = None
+_ci_discovery_lock = threading.Lock()
+
+
+def _get_ci_discovery() -> CIDiscovery:
+    """Return the module-level CIDiscovery singleton, creating it on first call."""
+    global _ci_discovery_instance
+    if _ci_discovery_instance is None:
+        with _ci_discovery_lock:
+            if _ci_discovery_instance is None:
+                _ci_discovery_instance = CIDiscovery()
+    return _ci_discovery_instance
+
+
+# =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 
@@ -505,8 +544,7 @@ def discover_ci(project_dir: Path) -> CIConfig | None:
     Returns:
         CIConfig if found, None otherwise
     """
-    discovery = CIDiscovery()
-    return discovery.discover(project_dir)
+    return _get_ci_discovery().discover(project_dir)
 
 
 def get_ci_test_commands(project_dir: Path) -> dict[str, str]:
@@ -519,11 +557,8 @@ def get_ci_test_commands(project_dir: Path) -> dict[str, str]:
     Returns:
         Dictionary of test type to command
     """
-    discovery = CIDiscovery()
-    result = discovery.discover(project_dir)
-    if result:
-        return result.test_commands
-    return {}
+    result = _get_ci_discovery().discover(project_dir)
+    return result.test_commands if result else {}
 
 
 def get_ci_system(project_dir: Path) -> str | None:
@@ -536,11 +571,8 @@ def get_ci_system(project_dir: Path) -> str | None:
     Returns:
         CI system name or None
     """
-    discovery = CIDiscovery()
-    result = discovery.discover(project_dir)
-    if result:
-        return result.ci_system
-    return None
+    result = _get_ci_discovery().discover(project_dir)
+    return result.ci_system if result else None
 
 
 # =============================================================================
