@@ -589,3 +589,90 @@ class TestJiraModels:
         assert transition.transition_id == "11"
         assert transition.name == "Start Progress"
         assert transition.to_status.name == "In Progress"
+
+
+# ── _extract_adf_text tests ─────────────────────────────────────
+
+
+class TestExtractAdfText:
+    """Tests for _extract_adf_text helper (ADF → plain text extraction)."""
+
+    _extract_adf_text = staticmethod(models_module._extract_adf_text)
+
+    def test_plain_text_node(self):
+        """Returns the text value for a leaf text node."""
+        adf = {"type": "text", "text": "Hello"}
+        assert self._extract_adf_text(adf) == "Hello"
+
+    def test_hard_break(self):
+        """hardBreak node returns a newline character."""
+        adf = {"type": "hardBreak"}
+        assert self._extract_adf_text(adf) == "\n"
+
+    def test_paragraph_joins_inline_with_spaces(self):
+        """Inline children inside a paragraph are space-joined."""
+        adf = {
+            "type": "paragraph",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": "world"},
+            ],
+        }
+        assert self._extract_adf_text(adf) == "Hello world"
+
+    def test_bullet_list_items_separated_by_newlines(self):
+        """List items inside a bulletList are newline-separated."""
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "bulletList",
+                    "content": [
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [{"type": "text", "text": "Criterion A"}],
+                                }
+                            ],
+                        },
+                        {
+                            "type": "listItem",
+                            "content": [
+                                {
+                                    "type": "paragraph",
+                                    "content": [{"type": "text", "text": "Criterion B"}],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        result = self._extract_adf_text(adf)
+        assert result == "Criterion A\nCriterion B"
+
+    def test_doc_with_multiple_paragraphs(self):
+        """Multiple paragraphs in a doc root are newline-separated."""
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "First paragraph"}],
+                },
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "Second paragraph"}],
+                },
+            ],
+        }
+        result = self._extract_adf_text(adf)
+        assert result == "First paragraph\nSecond paragraph"
+
+    def test_non_dict_input_returns_empty(self):
+        """Non-dict input returns empty string gracefully."""
+        assert self._extract_adf_text("not a dict") == ""  # type: ignore[arg-type]
+        assert self._extract_adf_text(None) == ""  # type: ignore[arg-type]
+        assert self._extract_adf_text([]) == ""  # type: ignore[arg-type]

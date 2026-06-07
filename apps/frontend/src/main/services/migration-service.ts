@@ -574,7 +574,7 @@ class MigrationService {
 
 			const childProcess = spawn(pythonPath, args, {
 				cwd: backendPath,
-				env: { ...process.env },
+				env: { ...process.env, PYTHONPATH: backendPath },
 			});
 
 			let output = "";

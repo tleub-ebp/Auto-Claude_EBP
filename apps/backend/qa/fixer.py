@@ -301,14 +301,14 @@ async def run_qa_fixer_session(
 
                         if inp:
                             if "file_path" in inp:
-                                fp = inp["file_path"]
-                                if len(fp) > 50:
-                                    fp = "..." + fp[-47:]
+                                fp = str(inp["file_path"])
+                                if len(fp) > 2000:
+                                    fp = "..." + fp[-1997:]
                                 tool_input_display = fp
                             elif "command" in inp:
-                                cmd = inp["command"]
-                                if len(cmd) > 50:
-                                    cmd = cmd[:47] + "..."
+                                cmd = str(inp["command"])
+                                if len(cmd) > 2000:
+                                    cmd = cmd[:1997] + "..."
                                 tool_input_display = cmd
 
                         debug(
@@ -556,14 +556,14 @@ async def _run_qa_fixer_agent_client_session(
 
                     if inp:
                         if "file_path" in inp:
-                            fp = inp["file_path"]
-                            if len(fp) > 50:
-                                fp = "..." + fp[-47:]
+                            fp = str(inp["file_path"])
+                            if len(fp) > 2000:
+                                fp = "..." + fp[-1997:]
                             tool_input_display = fp
                         elif "command" in inp:
-                            cmd = inp["command"]
-                            if len(cmd) > 50:
-                                cmd = cmd[:47] + "..."
+                            cmd = str(inp["command"])
+                            if len(cmd) > 2000:
+                                cmd = cmd[:1997] + "..."
                             tool_input_display = cmd
                         elif "pattern" in inp:
                             tool_input_display = f"pattern: {inp['pattern']}"

@@ -47,3 +47,34 @@ export function getOAuthModeClearVars(
 		ANTHROPIC_DEFAULT_OPUS_MODEL: "",
 	};
 }
+
+/**
+ * Apply a per-task strict-TDD override onto a combined environment map.
+ *
+ * The backend enables strict TDD when the `TDD_MODE` env var equals `"true"`.
+ * The project-level default is already baked into `env` by the caller; this
+ * function lets an individual task override that default:
+ *
+ * - `tddMode === true`  -> force `TDD_MODE=true`
+ * - `tddMode === false` -> force-disable (remove any inherited `TDD_MODE`)
+ * - `tddMode === undefined` -> inherit the project default (no-op)
+ *
+ * The input map is never mutated; a new object is returned.
+ *
+ * @param env - Combined environment variables (project default applied)
+ * @param tddMode - Per-task override flag (undefined to inherit)
+ * @returns A new env map with the override applied
+ */
+export function applyTddOverride(
+	env: Record<string, string>,
+	tddMode?: boolean,
+): Record<string, string> {
+	if (tddMode === true) {
+		return { ...env, TDD_MODE: "true" };
+	}
+	if (tddMode === false) {
+		const { TDD_MODE: _omit, ...rest } = env;
+		return rest;
+	}
+	return env;
+}

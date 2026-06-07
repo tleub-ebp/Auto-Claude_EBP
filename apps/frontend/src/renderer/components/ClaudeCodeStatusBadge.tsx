@@ -72,7 +72,6 @@ export function ClaudeCodeStatusBadge({
 	);
 
 	const [isOpen, setIsOpen] = useState(false);
-	const [showUpdateWarning, setShowUpdateWarning] = useState(false);
 	const [isInstalling, setIsInstalling] = useState(false);
 	const [installError, setInstallError] = useState<string | null>(null);
 
@@ -244,7 +243,6 @@ export function ClaudeCodeStatusBadge({
 	// exposed the IPC, fall back to opening an internal terminal.
 	const performInstall = async () => {
 		setIsInstalling(true);
-		setShowUpdateWarning(false);
 		setInstallError(null);
 		try {
 			const silentApi = globalThis.electronAPI?.installClaudeCodeSilent;
@@ -379,15 +377,12 @@ export function ClaudeCodeStatusBadge({
 		}
 	};
 
-	// Handle install/update button click
+	// Handle install/update button click. The silent path runs `claude install
+	// --force latest` in the background and does NOT close existing sessions,
+	// so no confirmation dialog is needed. If the silent path is unavailable
+	// (fresh install) performInstall falls back to a terminal on its own.
 	const handleInstall = () => {
-		if (status === "outdated") {
-			// Show warning for updates since it will close running Claude sessions
-			setShowUpdateWarning(true);
-		} else {
-			// Fresh install - no warning needed
-			performInstall();
-		}
+		performInstall();
 	};
 
 	// Handle installation selection
@@ -800,43 +795,6 @@ export function ClaudeCodeStatusBadge({
 					</Button>
 				</div>
 			</PopoverContent>
-
-			{/* Update warning dialog */}
-			<AlertDialog open={showUpdateWarning} onOpenChange={setShowUpdateWarning}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>
-							{t(
-								"navigation:claudeCode.updateWarningTitle",
-								"Update Claude Code?",
-							)}
-						</AlertDialogTitle>
-						<AlertDialogDescription>
-							{t(
-								"navigation:claudeCode.updateWarningDescription",
-								"Updating will close all running Claude Code sessions. Any unsaved work in those sessions may be lost. Make sure to save your work before proceeding.",
-							)}
-							<span className="block mt-2 font-semibold text-foreground">
-								{t(
-									"navigation:claudeCode.updateWarningTerminalNote",
-									"A terminal window will open to run the installation command. Please wait for the installation to complete before continuing.",
-								)}
-							</span>
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel>
-							{t("common:cancel", "Cancel")}
-						</AlertDialogCancel>
-						<AlertDialogAction onClick={performInstall}>
-							{t(
-								"navigation:claudeCode.updateAnyway",
-								"Open Terminal & Update",
-							)}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
 
 			{/* Version rollback warning dialog */}
 			<AlertDialog

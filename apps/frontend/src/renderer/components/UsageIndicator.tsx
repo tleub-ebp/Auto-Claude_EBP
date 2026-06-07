@@ -46,6 +46,7 @@ import { OpenAIUsageContent } from "./usage/OpenAIUsageContent";
 import { ProfileRenderer } from "./usage/ProfileRenderer";
 import { ReauthContent } from "./usage/ReauthContent";
 import { THRESHOLD_ELEVATED, THRESHOLD_WARNING } from "./usage/usageConstants";
+import { useContextUsage } from "../hooks/useContextUsage";
 
 // All provider keys from the canonical map (including both 'anthropic' and 'claude' aliases)
 const KNOWN_PROVIDERS = new Set(Object.keys(PROVIDER_MODELS_MAP));
@@ -63,6 +64,9 @@ export function UsageIndicator() {
 	const [providerProfile, setProviderProfile] = useState<ClaudeProfile | null>(null);
 	const [isRefreshing, setIsRefreshing] = useState(false);
 	const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+	// % de fenêtre de contexte consommée (façon Claude Code), basé sur les
+	// tokens réels du dernier tour. `null` si indisponible → fallback affichage.
+	const contextUsage = useContextUsage(usage?.providerName ?? null);
 	const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 	const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 	// Deduplication: track in-flight fetch to prevent concurrent API calls (429 rate limits)
@@ -960,14 +964,49 @@ export function UsageIndicator() {
 		}
 
 		if (isCopilot) {
+			// Priorité : % de fenêtre de contexte consommée (façon Claude Code),
+			// calculé sur les tokens réels du dernier tour.
+			if (contextUsage) {
+				const pct = contextUsage.percentUsed;
+				const colorClass =
+					pct >= THRESHOLD_WARNING
+						? "text-red-500"
+						: pct >= THRESHOLD_ELEVATED
+							? "text-orange-500"
+							: "text-blue-500";
+				return (
+					<div className="flex items-center gap-0.5 text-xs font-semibold font-mono">
+						<span
+							className={colorClass}
+							title={t("common:usage.copilotContextTitle", {
+								model: contextUsage.model,
+							})}
+						>
+							{pct.toFixed(0)}
+							<span className="ml-0.5 text-[10px] font-normal opacity-80">
+								%
+							</span>
+						</span>
+					</div>
+				);
+			}
+
+			// Fallback : affichage tokens/quota Copilot existant.
+			const tokens = formatUsageValue(
+				usage.copilotUsageDetails?.totalTokens,
+				i18n.language,
+			);
+
 			return (
 				<div className="flex items-center gap-0.5 text-xs font-semibold font-mono">
-					<span className="text-blue-500" title="Copilot Cost">
-						{formatUsageValue(
-							usage.copilotUsageDetails?.totalTokens,
-							i18n.language,
-						)}
-						T
+					<span
+						className="text-blue-500"
+						title={t("common:usage.copilotTokensTitle")}
+					>
+						{tokens ?? "0"}
+						<span className="ml-0.5 text-[10px] font-normal opacity-80">
+							{t("common:usage.copilotTokensSuffix")}
+						</span>
 					</span>
 				</div>
 			);

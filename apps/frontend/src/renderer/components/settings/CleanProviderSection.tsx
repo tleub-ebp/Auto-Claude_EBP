@@ -151,7 +151,7 @@ export function CleanProviderSection({
 		// Update props for backward compatibility
 		propsOnSettingsChange(newSettings);
 		// Update store for real-time sync across components
-		updateSettings(newSettings as AppSettings);
+		updateSettings(newSettings);
 		// Persist to disk so settings survive app restart
 		await saveSettingsToDisk(newSettings);
 	};
@@ -265,16 +265,25 @@ export function CleanProviderSection({
 		// Passing 'anthropic' forces getUsageForProvider() which makes a real OAuth API call,
 		// unlike requestUsageUpdate() with no args which only returns the cached currentUsage.
 		// The result is emitted as usage-updated → handleUsageUpdated overwrites stale data.
-		try {
-			const freshResult =
-				await globalThis.electronAPI?.requestUsageUpdate?.("anthropic");
-			const freshSnapshot = freshResult?.data ?? null;
-			if (freshResult?.success && freshSnapshot) {
-				handleUsageUpdated(freshSnapshot);
-			}
-		} catch (err) {
-			console.warn("[CleanProviderSection] Failed to fetch fresh usage:", err);
-		}
+		// Also fetch Copilot Premium Requests so the card shows real consumption.
+		const providersWithLiveUsage = ["anthropic", "copilot"] as const;
+		await Promise.all(
+			providersWithLiveUsage.map(async (provider) => {
+				try {
+					const freshResult =
+						await globalThis.electronAPI?.requestUsageUpdate?.(provider);
+					const freshSnapshot = freshResult?.data ?? null;
+					if (freshResult?.success && freshSnapshot) {
+						handleUsageUpdated(freshSnapshot);
+					}
+				} catch (err) {
+					console.warn(
+						`[CleanProviderSection] Failed to fetch fresh usage for ${provider}:`,
+						err,
+					);
+				}
+			}),
+		);
 	};
 
 	// Load usage data from CredentialManager (Windsurf, etc.)
@@ -642,10 +651,14 @@ export function CleanProviderSection({
 
 			// Get API key info for this provider
 			const apiKeyInfo = getApiKeyInfo(provider.name);
-			const apiKeyField = getProviderApiKeyField(provider.name);
-			const isEnabled = apiKeyField
-				? (settings as AppSettings & Record<string, unknown>)[`${apiKeyField}Enabled`] as boolean | undefined !== false
-				: true;
+			// The toggle persists into `settings.disabledAutoSwitchProviders`
+			// (see handleToggle). Reading from the same source keeps the
+			// switch in sync after re-renders for every provider — including
+			// OAuth ones like Copilot / Claude that have no apiKeyField.
+			const disabledProviders =
+				(settings as AppSettings & Record<string, unknown>)
+					.disabledAutoSwitchProviders as string[] | undefined;
+			const isEnabled = !(disabledProviders?.includes(provider.name) ?? false);
 
 			const mappedProvider = {
 				id: provider.name,
@@ -679,7 +692,6 @@ export function CleanProviderSection({
 		providerTestResults,
 		t,
 		getApiKeyInfo,
-		getProviderApiKeyField,
 		settings,
 	]);
 

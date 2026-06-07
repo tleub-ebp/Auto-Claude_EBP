@@ -36,6 +36,45 @@ import { getEffectiveSourcePath } from "../updater/path-resolver";
 // ============================================
 
 /**
+ * Walk up from `start` looking for a directory containing `.git`.
+ * Returns the absolute path of the Git root, or null if none found.
+ */
+function findGitRootAbove(start: string): string | null {
+	let current = path.resolve(start);
+	while (true) {
+		if (existsSync(path.join(current, ".git"))) {
+			return current;
+		}
+		const parent = path.dirname(current);
+		if (parent === current) return null;
+		current = parent;
+	}
+}
+
+/**
+ * If the given path is a Git sub-folder (i.e. not itself the Git root,
+ * but a Git root exists above it), return a warning message suggesting
+ * the user reconfigure to the actual root. Returns null otherwise.
+ *
+ * This protects against a misconfiguration we've seen in practice: pointing
+ * the project at e.g. `MeCa/meca/` when the actual repo root (containing
+ * `Sources/`, `Build/`, etc.) is `MeCa/`. Plans then emit `../Sources/...`
+ * paths that escape project_dir and fail validation.
+ */
+function checkProjectDirIsGitRoot(projectPath: string): string | null {
+	const resolved = path.resolve(projectPath);
+	const gitRoot = findGitRootAbove(resolved);
+	if (!gitRoot) return null; // no Git anywhere — nothing to warn about
+	if (gitRoot === resolved) return null; // already at the Git root — fine
+	return (
+		`This folder is a sub-folder of a Git repository at "${gitRoot}". ` +
+		`If your source code lives outside "${resolved}" (e.g. in sibling folders), ` +
+		`the planner may emit paths with "../" that are rejected by the coder. ` +
+		`Consider reconfiguring the project to point at "${gitRoot}" instead.`
+	);
+}
+
+/**
  * Get list of git branches for a directory (both local and remote)
  */
 function getGitBranches(projectPath: string): string[] {
@@ -504,7 +543,10 @@ export function registerProjectHandlers(
 				}
 
 				const project = projectStore.addProject(projectPath);
-				return { success: true, data: project };
+				const warning = checkProjectDirIsGitRoot(projectPath);
+				return warning
+					? { success: true, data: project, warning }
+					: { success: true, data: project };
 			} catch (error) {
 				return {
 					success: false,

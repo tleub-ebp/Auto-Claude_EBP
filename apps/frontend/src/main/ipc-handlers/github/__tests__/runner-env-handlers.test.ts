@@ -215,6 +215,46 @@ describe("GitHub runner env usage", () => {
 		);
 	});
 
+	it("propagates TDD_MODE when tddMode is enabled", async () => {
+		const project = projectRef.current;
+		if (project) {
+			project.settings.tddMode = true;
+		}
+
+		const { registerPRHandlers } = await import("../pr-handlers");
+
+		mockRunPythonSubprocess.mockReturnValue({
+			process: { pid: 124 },
+			promise: Promise.resolve({
+				success: true,
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+				data: {
+					prNumber: 124,
+					repo: "test/repo",
+					success: true,
+					findings: [],
+					summary: "",
+					overallStatus: "comment",
+					reviewedAt: new Date().toISOString(),
+				},
+			}),
+		});
+
+		registerPRHandlers(() => createMockWindow());
+		await mockIpcMain.emit(
+			IPC_CHANNELS.GITHUB_PR_REVIEW,
+			projectRef.current?.id,
+			124,
+		);
+
+		expect(mockGetRunnerEnv).toHaveBeenCalledWith({
+			USE_CLAUDE_MD: "true",
+			TDD_MODE: "true",
+		});
+	});
+
 	it("passes runner env to triage subprocess", async () => {
 		const { registerTriageHandlers } = await import("../triage-handlers");
 

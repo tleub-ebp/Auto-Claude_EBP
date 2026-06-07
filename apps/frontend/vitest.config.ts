@@ -50,6 +50,18 @@ export default defineConfig({
 		// Prevent vitest import issues
 		testTimeout: 30000,
 		hookTimeout: 30000,
+		// In CI / pre-push we hit a long-standing vitest fork-pool flake on
+		// Windows: workers occasionally die with "Vitest failed to access
+		// its internal state" at startup. The same suite passes
+		// interactively. The trigger seems to be the density of fork
+		// startups, not parallelism per se — so we throttle (not disable)
+		// parallelism when VITEST_LIMIT_WORKERS=1 (the pre-push script
+		// sets this). Interactive runs (no env var) keep full parallelism.
+		//
+		// maxWorkers: 1 also works but is ~14× slower on the full suite,
+		// so prefer 2 here and let the pre-push retry-once policy catch
+		// the rare residual flake.
+		...(process.env.VITEST_LIMIT_WORKERS === "1" ? { maxWorkers: 2 } : {}),
 	},
 	resolve: {
 		alias: {

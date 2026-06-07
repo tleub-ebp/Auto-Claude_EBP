@@ -29,6 +29,7 @@ import {
 import { getUsageMonitor } from "../claude-profile/usage-monitor";
 import { getClaudeProfileManager } from "../claude-profile-manager";
 import {
+	clearToolCache,
 	configureTools,
 	type ExecFileAsyncOptionsWithVerbatim,
 	getClaudeDetectionPaths,
@@ -2077,6 +2078,9 @@ export function registerClaudeCodeHandlers(): void {
 				// Invalidate the latest-version cache so the next check sees
 				// the freshly-installed binary.
 				cachedLatestVersion = null;
+				// Also invalidate the cli-tool-manager cache so getToolInfo
+				// re-detects the freshly-installed claude version.
+				clearToolCache();
 
 				if (result.code !== 0) {
 					return {

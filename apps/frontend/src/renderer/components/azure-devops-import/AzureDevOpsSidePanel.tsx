@@ -65,6 +65,8 @@ export function AzureDevOpsSidePanel({
 	const [workItems, setWorkItems] = useState<AzureDevOpsWorkItem[]>([]);
 	const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 	const [searchQuery, setSearchQuery] = useState("");
+	const [repository, setRepository] = useState<string | null>(null);
+	const [isSearchingRemote, setIsSearchingRemote] = useState(false);
 	const panelRef = useRef<HTMLDivElement>(null);
 
 	// Gérer la fermeture par clic en dehors du panel
@@ -164,6 +166,24 @@ export function AzureDevOpsSidePanel({
 				if (result.data?.connected) {
 					// Clear error when connection is successful
 					setError(null);
+					// Best-effort: detect the repository name to show in the title
+					// (only once — the value is stable for a given project).
+					if (!repository) {
+						try {
+							const repoResult =
+								await globalThis.electronAPI.detectAzureDevOpsRepository(
+									projectId,
+								);
+							if (repoResult.success) {
+								setRepository(repoResult.data?.repository ?? null);
+							}
+						} catch (repoErr) {
+							rendererLog.azure.debug(
+								"[AzureDevOps] Failed to detect repository for title:",
+								repoErr,
+							);
+						}
+					}
 				} else {
 					setError(
 						result.data?.error || t("azureDevOpsImport.errorNotConfigured"),
@@ -202,7 +222,7 @@ export function AzureDevOpsSidePanel({
 			const result = await globalThis.electronAPI.getAzureDevOpsWorkItems(
 				projectId,
 				undefined, // Use default project from config
-				undefined, // Use default item types (Bug, Task, User Story)
+				undefined, // No type restriction — returns all work item types (incl. custom, e.g. RSD)
 				1000, // Max items
 			);
 
@@ -353,6 +373,52 @@ export function AzureDevOpsSidePanel({
 			return true;
 		});
 	}, [workItems, searchQuery, filters]);
+
+	// When the user searches a specific numeric work item ID that is not in the
+	// loaded backlog window, fetch it directly from Azure DevOps. This makes any
+	// work item findable by ID — including custom types (e.g. RSD) and items
+	// outside the (capped) backlog list.
+	useEffect(() => {
+		const trimmed = searchQuery.trim();
+		if (!/^\d+$/.test(trimmed) || !syncStatus?.connected) return;
+		const id = Number.parseInt(trimmed, 10);
+		if (Number.isNaN(id) || workItems.some((item) => item.id === id)) return;
+
+		let cancelled = false;
+		const handle = setTimeout(async () => {
+			setIsSearchingRemote(true);
+			try {
+				const result = await globalThis.electronAPI.getAzureDevOpsWorkItem(
+					projectId,
+					id,
+				);
+				if (cancelled) return;
+				if (result.success && result.data) {
+					const fetched = result.data;
+					setWorkItems((prev) =>
+						prev.some((item) => item.id === fetched.id)
+							? prev
+							: [fetched, ...prev],
+					);
+				}
+			} catch (err) {
+				if (!cancelled) {
+					rendererLog.azure.debug(
+						"[AzureDevOps] Direct work item lookup failed:",
+						err,
+					);
+				}
+			} finally {
+				if (!cancelled) setIsSearchingRemote(false);
+			}
+		}, 400);
+
+		return () => {
+			cancelled = true;
+			clearTimeout(handle);
+			setIsSearchingRemote(false);
+		};
+	}, [searchQuery, workItems, projectId, syncStatus?.connected]);
 
 	// Get unique values for filters
 	const uniqueTypes = useMemo(() => {
@@ -616,6 +682,13 @@ export function AzureDevOpsSidePanel({
 		return "";
 	};
 
+	// Prefer the repository name in the title, falling back to the Azure
+	// DevOps project name, then to the generic label.
+	const titleContext = repository ?? syncStatus?.projectName ?? null;
+	const panelTitle = titleContext
+		? t("azureDevOpsImport.titleWithRepository", { repository: titleContext })
+		: t("azureDevOpsImport.title");
+
 	if (!open) return null;
 
 	return (
@@ -635,9 +708,7 @@ export function AzureDevOpsSidePanel({
 				<div className="flex items-center justify-between p-4 border-b border-border">
 					<div className="flex items-center gap-2">
 						<Download className="h-5 w-5 text-primary" />
-						<h2 className="text-lg font-semibold">
-							{t("azureDevOpsImport.title")}
-						</h2>
+						<h2 className="text-lg font-semibold">{panelTitle}</h2>
 					</div>
 					<div className="flex items-center gap-1">
 						{/* Collapse button */}
@@ -819,13 +890,22 @@ export function AzureDevOpsSidePanel({
 
 					{!isLoadingItems && filteredItems.length === 0 && (
 						<div className="text-center py-12 text-muted-foreground px-4">
-							<p>{t("azureDevOpsImport.emptyTitle")}</p>
-							{(searchQuery ||
-								filters.workItemType !== "all" ||
-								filters.state !== "all") && (
-								<p className="text-sm mt-2">
-									{t("azureDevOpsImport.emptySubtitle")}
-								</p>
+							{isSearchingRemote ? (
+								<div className="flex items-center justify-center gap-2">
+									<RefreshCw className="h-4 w-4 animate-spin" />
+									<span>{t("azureDevOpsImport.searchingById")}</span>
+								</div>
+							) : (
+								<>
+									<p>{t("azureDevOpsImport.emptyTitle")}</p>
+									{(searchQuery ||
+										filters.workItemType !== "all" ||
+										filters.state !== "all") && (
+										<p className="text-sm mt-2">
+											{t("azureDevOpsImport.emptySubtitle")}
+										</p>
+									)}
+								</>
 							)}
 						</div>
 					)}

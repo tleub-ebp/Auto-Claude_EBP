@@ -7,7 +7,7 @@ pour utiliser des providers personnalisés via LLM Gateway.
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from .llm_base import BaseLLMProvider
 
@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 
 class CursorProvider(BaseLLMProvider):
     """Provider pour Cursor IDE."""
-    
+
     def __init__(self, api_key: str, model: str = "cursor-default", base_url: str = "https://api.cursor.com/v1"):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
-        self._client = None
+        self._client: Optional[Any] = None
 
     def connect(self) -> None:
         """Établit la connexion avec l'API Cursor."""

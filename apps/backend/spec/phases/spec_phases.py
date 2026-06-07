@@ -65,7 +65,60 @@ Create:
 
             errors.append(f"Attempt {attempt + 1}: Quick spec agent failed")
 
-        return PhaseResult("quick_spec", False, [], errors, MAX_RETRIES)
+        # Escalade automatique : si le quick spec echoue apres tous les essais,
+        # on bascule sur le workflow STANDARD (context -> spec_writing -> planning)
+        # au lieu de declarer la tache en erreur. Cela rend le pipeline tolerant
+        # a une mauvaise classification de complexite (ex. tache jugee SIMPLE a
+        # tort sur une grosse base de code necessitant de la recherche).
+        return await self._escalate_quick_spec(spec_file, plan_file, errors)
+
+    async def _escalate_quick_spec(
+        self, spec_file, plan_file, prior_errors: list[str]
+    ) -> PhaseResult:
+        """Bascule du quick spec vers le workflow STANDARD apres echec.
+
+        Execute sequentiellement les phases context, spec_writing et planning,
+        qui disposent toutes de fallbacks fiables (context/spec minimal, planner
+        deterministe). Retourne un quick_spec reussi si spec.md et le plan ont
+        ete produits, sinon un echec contenant l'ensemble des erreurs.
+        """
+        self.ui.print_status(
+            "Quick spec failed - escalating to STANDARD spec workflow",
+            "warning",
+        )
+
+        escalation_errors = list(prior_errors)
+        fallback_phases = (
+            self.phase_context,
+            self.phase_spec_writing,
+            self.phase_planning,
+        )
+        for fallback_phase in fallback_phases:
+            fallback_result = await fallback_phase()
+            escalation_errors.extend(fallback_result.errors)
+            if not fallback_result.success:
+                self.ui.print_status(
+                    f"Escalation phase '{fallback_result.phase}' failed",
+                    "error",
+                )
+                return PhaseResult(
+                    "quick_spec", False, [], escalation_errors, MAX_RETRIES
+                )
+
+        if spec_file.exists() and plan_file.exists():
+            self.ui.print_status("Spec created via STANDARD escalation", "success")
+            return PhaseResult(
+                "quick_spec",
+                True,
+                [str(spec_file), str(plan_file)],
+                escalation_errors,
+                MAX_RETRIES,
+            )
+
+        escalation_errors.append(
+            "Escalation completed but spec.md or implementation_plan.json missing"
+        )
+        return PhaseResult("quick_spec", False, [], escalation_errors, MAX_RETRIES)
 
     async def phase_spec_writing(self) -> PhaseResult:
         """Write the spec.md document."""

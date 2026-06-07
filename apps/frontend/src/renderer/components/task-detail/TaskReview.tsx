@@ -20,6 +20,7 @@ import {
 	StagedSuccessMessage,
 	WorkspaceStatus,
 } from "./task-review";
+import { PlanApprovalSection } from "./PlanApprovalSection";
 
 interface TaskReviewProps {
 	readonly task: Task;
@@ -74,6 +75,7 @@ interface TaskReviewProps {
 		title?: string;
 		draft?: boolean;
 	}) => Promise<WorktreeCreatePRResult | null>;
+	readonly onRefreshDiff?: () => void;
 }
 
 /**
@@ -121,6 +123,7 @@ export function TaskReview({
 	isCreatingPR,
 	onShowPRDialog,
 	onCreatePR,
+	onRefreshDiff,
 }: TaskReviewProps) {
 	// Extract nested ternary into a clear variable
 	const workspaceStatusComponent = (() => {
@@ -159,6 +162,7 @@ export function TaskReview({
 					isMerging={isMerging}
 					isDiscarding={isDiscarding}
 					isCreatingPR={isCreatingPR}
+					existingPrUrl={task.prUrl ?? task.metadata?.prUrl}
 					onShowDiffDialog={onShowDiffDialog}
 					onShowDiscardDialog={onShowDiscardDialog}
 					onShowConflictDialog={onShowConflictDialog}
@@ -177,6 +181,9 @@ export function TaskReview({
 		<div className="space-y-4">
 			{/* Section divider */}
 			<div className="section-divider-gradient" />
+
+			{/* Plan Approval Section - shown when task requires plan review before coding */}
+			<PlanApprovalSection task={task} isSubmitting={isSubmitting} />
 
 			{/* Staged Success Message */}
 			{stagedSuccess && (
@@ -214,6 +221,8 @@ export function TaskReview({
 				open={showDiffDialog}
 				worktreeDiff={worktreeDiff}
 				onOpenChange={onShowDiffDialog}
+				worktreePath={worktreeStatus?.worktreePath}
+				onRefresh={onRefreshDiff}
 			/>
 
 			{/* Conflict Details Dialog */}

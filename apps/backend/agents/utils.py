@@ -185,3 +185,57 @@ def _sync_directory(source_dir: Path, target_dir: Path) -> None:
 def sync_plan_to_source(spec_dir: Path, source_spec_dir: Path | None) -> bool:
     """Alias for sync_spec_to_source for backward compatibility."""
     return sync_spec_to_source(spec_dir, source_spec_dir)
+
+
+def set_pause_state(
+    plan: dict,
+    paused: bool,
+    subtask_id: str | None = None,
+    provider: str = "anthropic",
+    model: str = "claude-opus-4-7",
+) -> dict:
+    """
+    Set or update pause state in the plan.
+
+    Args:
+        plan: Implementation plan dict
+        paused: Whether to pause execution
+        subtask_id: Current subtask ID when pausing
+        provider: LLM provider name
+        model: LLM model name
+
+    Returns:
+        Updated plan dict
+    """
+    if "paused" not in plan:
+        plan["paused"] = {}
+
+    plan["paused"] = {
+        "enabled": paused,
+        "paused_at": None,
+        "paused_subtask_id": subtask_id if paused else None,
+        "provider": provider,
+        "model": model,
+    }
+
+    if paused:
+        from datetime import datetime, timezone
+
+        plan["paused"]["paused_at"] = datetime.now(timezone.utc).isoformat()
+
+    return plan
+
+
+def get_pause_state(plan: dict) -> dict:
+    """
+    Get pause state from plan.
+
+    Returns:
+        Dict with keys: enabled, paused_at, paused_subtask_id, provider, model
+    """
+    return plan.get("paused", {})
+
+
+def is_paused(plan: dict) -> bool:
+    """Check if execution is paused."""
+    return plan.get("paused", {}).get("enabled", False)

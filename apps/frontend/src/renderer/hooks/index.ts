@@ -3,6 +3,7 @@
 export { useToast } from "./use-toast";
 export { useIpcListeners } from "./useIpc";
 export { useProjectRouteScan } from "./useProjectRouteScan";
+export { usePullRequestStats } from "./usePullRequestStats";
 export {
 	type CatalogSource,
 	type ProviderModelCatalog,

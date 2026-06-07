@@ -15,6 +15,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
+from apps.backend.models_registry import get_tier
+
 from .live_tracker import LiveCostTracker
 
 logger = logging.getLogger(__name__)
@@ -55,28 +57,21 @@ class DegradationTier(str, Enum):
         return order[min(idx + 1, len(order) - 1)]
 
 
-# Default model mappings per tier
-DEFAULT_TIER_MODELS: dict[DegradationTier, list[dict[str, str]]] = {
-    DegradationTier.FLAGSHIP: [
-        {"provider": "anthropic", "model": "claude-opus-4-6"},
-        {"provider": "openai", "model": "gpt-4.1"},
-        {"provider": "google", "model": "gemini-2.5-pro"},
-    ],
-    DegradationTier.STANDARD: [
-        {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-        {"provider": "openai", "model": "gpt-4o"},
-        {"provider": "google", "model": "gemini-2.5-flash"},
-    ],
-    DegradationTier.FAST: [
-        {"provider": "anthropic", "model": "claude-haiku-4-5"},
-        {"provider": "openai", "model": "gpt-4o-mini"},
-        {"provider": "google", "model": "gemini-flash"},
-    ],
-    DegradationTier.LOCAL: [
-        {"provider": "ollama", "model": "llama-3.3-70b"},
-        {"provider": "ollama", "model": "deepseek-coder-v3"},
-    ],
-}
+# Default model mappings per tier — generated from registry
+def _build_tier_models() -> dict[DegradationTier, list[dict[str, str]]]:
+    """Build tier models from registry."""
+    result: dict[DegradationTier, list[dict[str, str]]] = {}
+    for tier in DegradationTier:
+        models: list[dict[str, str]] = []
+        for provider in ("anthropic", "openai", "google", "mistral", "ollama"):
+            entry = get_tier(provider, tier.value)
+            if entry:
+                models.append({"provider": entry.provider, "model": entry.model_id})
+        result[tier] = models
+    return result
+
+
+DEFAULT_TIER_MODELS: dict[DegradationTier, list[dict[str, str]]] = _build_tier_models()
 
 
 class CircuitBreakerState(str, Enum):

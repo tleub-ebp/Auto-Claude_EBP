@@ -950,6 +950,7 @@
 		"noWorkItems": "Aucun élément de travail trouvé",
 		"projectLabel": "Projet :",
 		"searchPlaceholder": "Rechercher des éléments de travail...",
+		"searchingById": "Recherche de l'élément de travail…",
 		"selectedItems": "{{count}} élément(s) sélectionné(s)",
 		"selectionCount": "{{selected}} sur {{total}} sélectionné(s)",
 		"sidePanelDescription": "Glissez-déposez les éléments dans les colonnes Kanban",
@@ -959,6 +960,7 @@
 		"successFailedSuffix": "{{count}} échoué(s).",
 		"successTitle": "Import réussi !",
 		"title": "Importer les éléments Azure DevOps",
+		"titleWithRepository": "Importer les éléments de {{repository}}",
 		"toggleSelection": "Basculer la sélection pour l'élément de travail {{id}}"
 	},
 	"collaboration": {
@@ -1359,6 +1361,7 @@
 		"noIssues": "Aucun ticket trouvé",
 		"projectLabel": "Projet :",
 		"searchPlaceholder": "Rechercher des tickets...",
+		"searchingByKey": "Recherche du ticket…",
 		"selectedItems": "{{count}} élément(s) sélectionné(s)",
 		"selectionCount": "{{selected}} sur {{total}} sélectionné(s)",
 		"sidePanelDescription": "Glissez-déposez les éléments dans les colonnes Kanban",
@@ -1367,7 +1370,8 @@
 		"successCount_plural": "{{count}} tickets importés.",
 		"successFailedSuffix": "{{count}} échoué(s).",
 		"successTitle": "Import réussi !",
-		"title": "Importer les tickets Jira"
+		"title": "Importer les tickets Jira",
+		"titleWithProject": "Importer les tickets de {{project}}"
 	},
 	"language": {
 		"description": "Sélectionnez la langue de l'interface de l'application",
@@ -1585,7 +1589,9 @@
 			"description": "Configuration Auto-Build et agent",
 			"configureFor": "Configurer Auto-Build, modèle d'agent et notifications pour {{projectName}}",
 			"useClaudeMd": "Utiliser CLAUDE.md",
-			"useClaudeMdDescription": "Inclure les instructions CLAUDE.md dans le contexte de l'agent"
+			"useClaudeMdDescription": "Inclure les instructions CLAUDE.md dans le contexte de l'agent",
+			"tddMode": "Mode TDD",
+			"tddModeDescription": "Imposer le TDD strict (Red-Green-Refactor) : l'agent écrit le test, le voit échouer, puis implémente"
 		},
 		"github": {
 			"authenticatedAs": "Authentifié en tant que {{username}}",
@@ -1962,6 +1968,7 @@
 		"checkingCopilotCli": "Vérification Copilot CLI...",
 		"copilotCliUpToDate": "Copilot CLI est à jour",
 		"copilotCliExtensionNotInstalled": "Extension Copilot CLI non installée",
+		"updateLocked": "Mise à jour bloquée : un processus Copilot CLI utilise actuellement les fichiers à mettre à jour. Fermez les terminaux ou sessions Copilot ouverts, puis réessayez. Si le problème persiste, redémarrez WorkPilot.",
 		"gitHubCliNotFound": "GitHub CLI (gh) introuvable — requis pour Copilot",
 		"errorCheckingCopilotCli": "Erreur lors de la vérification Copilot CLI",
 		"loadingInstallations": "Chargement des installations...",
@@ -1972,6 +1979,72 @@
 		"gitHubCliNotFoundShort": "GitHub CLI introuvable",
 		"checking": "Vérification...",
 		"error": "Erreur"
+	},
+	"githubCopilot": {
+		"title": "GitHub Copilot",
+		"description": "Authentifiez-vous auprès de GitHub Copilot pour utiliser ses modèles via la CLI ou un Personal Access Token.",
+		"authenticate": "Se connecter",
+		"logout": "Se déconnecter",
+		"authSuccess": "Authentification réussie",
+		"authSuccessDescription": "Vous êtes maintenant connecté à GitHub Copilot.",
+		"logoutSuccess": "Déconnexion réussie",
+		"logoutSuccessDescription": "Vous êtes déconnecté de GitHub Copilot.",
+		"tokenSaved": "Token enregistré",
+		"tokenSavedDescription": "Votre Personal Access Token a été enregistré.",
+		"tokenRemoved": "Token supprimé",
+		"tokenRemovedDescription": "Votre Personal Access Token a été supprimé.",
+		"testSuccess": "Connexion réussie",
+		"testFailed": "Échec de la connexion",
+		"testError": "Erreur de test",
+		"status": {
+			"installed": "GitHub CLI installé (version {{version}})",
+			"notInstalled": "GitHub CLI non installé",
+			"authenticated": "Authentifié",
+			"notAuthenticated": "Non authentifié",
+			"authenticatedAs": "connecté en tant que {{username}}"
+		},
+		"authMethod": {
+			"title": "Méthode d'authentification",
+			"description": "Choisissez entre une connexion via le terminal GitHub CLI ou la saisie directe d'un Personal Access Token.",
+			"selectLabel": "Méthode",
+			"selectPlaceholder": "Sélectionner une méthode",
+			"terminal": "Terminal (gh auth login)",
+			"token": "Personal Access Token (PAT)"
+		},
+		"token": {
+			"inputLabel": "Personal Access Token",
+			"inputPlaceholder": "ghp_...",
+			"save": "Enregistrer le token",
+			"remove": "Supprimer",
+			"currentStatus": "Statut :",
+			"configured": "Configuré",
+			"useInstead": "Utiliser un Personal Access Token à la place",
+			"hide": "Masquer"
+		},
+		"instructions": {
+			"title": "Instructions",
+			"authentication": {
+				"title": "Authentification via terminal",
+				"step1": "Cliquez sur \"Se connecter\" pour ouvrir un terminal intégré.",
+				"step2": "Suivez les instructions de GitHub CLI pour vous authentifier dans votre navigateur.",
+				"step3": "Le statut sera mis à jour automatiquement une fois l'authentification terminée."
+			},
+			"token": {
+				"title": "Authentification via Personal Access Token",
+				"step1": "Générez un PAT sur https://github.com/settings/tokens avec les scopes nécessaires.",
+				"step2": "Collez le token dans le champ ci-dessus.",
+				"step3": "Cliquez sur \"Enregistrer le token\" pour le valider."
+			}
+		},
+		"errors": {
+			"tokenRequired": "Token requis",
+			"tokenRequiredDescription": "Veuillez saisir un Personal Access Token.",
+			"saveFailed": "Échec de l'enregistrement",
+			"removeFailed": "Échec de la suppression",
+			"authFailed": "Échec de l'authentification",
+			"logoutFailed": "Échec de la déconnexion",
+			"unknownError": "Une erreur inconnue est survenue."
+		}
 	},
 	"llmRouter": {
 		"title": "Routeur LLM",

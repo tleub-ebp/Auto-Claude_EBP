@@ -54,7 +54,22 @@ class ModelPricing:
 # Built-in pricing catalog (can be overridden by a JSON/YAML file)
 _DEFAULT_CATALOG: dict[str, dict[str, dict[str, float]]] = {
     "anthropic": {
-        # 4.7 (current latest) — alias to 4.6 pricing pending public price sheet.
+        # 4.8 (current latest) — alias to 4.6 pricing pending public price sheet.
+        "claude-opus-4-8": {
+            "input": 15.0,
+            "output": 75.0,
+            "cache_write": 18.75,
+            "cache_read": 1.50,
+            "thinking": 75.0,
+        },
+        "claude-sonnet-4-8": {
+            "input": 3.0,
+            "output": 15.0,
+            "cache_write": 3.75,
+            "cache_read": 0.30,
+        },
+        "claude-haiku-4-8": {"input": 0.80, "output": 4.0},
+        # 4.7
         "claude-opus-4-7": {
             "input": 15.0,
             "output": 75.0,
@@ -145,6 +160,8 @@ _DEFAULT_CATALOG: dict[str, dict[str, dict[str, float]]] = {
     },
     # AWS Bedrock — pass-through pricing that mirrors underlying foundation models.
     "aws": {
+        "anthropic.claude-opus-4-8": {"input": 15.0, "output": 75.0},
+        "anthropic.claude-opus-4-8-v1": {"input": 15.0, "output": 75.0},
         "anthropic.claude-opus-4-6": {"input": 15.0, "output": 75.0},
         "anthropic.claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
         "meta.llama-3.3-70b": {"input": 0.72, "output": 0.72},

@@ -164,8 +164,22 @@ class ToolExecutor:
             )
 
             if process.returncode != 0:
+                # Include both stdout and stderr: many tools (dotnet, msbuild,
+                # npm, ...) write their diagnostics to stdout, not stderr.
+                combined = ""
+                if stdout:
+                    combined += stdout
+                if stderr:
+                    combined += ("\n" if combined else "") + stderr
+
+                # Exit code 1 with no output is the "no matches found" behavior
+                # for search tools (findstr, grep, etc.). Return a clear message
+                # so the agent knows the pattern was not found.
+                if process.returncode == 1 and not combined.strip():
+                    return "(no matches found)"
+
                 raise RuntimeError(
-                    f"Command failed with code {process.returncode}: {stderr}"
+                    f"Command failed with code {process.returncode}: {combined}"
                 )
 
             return stdout

@@ -26,7 +26,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TypedDict, TypeVar
+from typing import TYPE_CHECKING, TypedDict, TypeVar
+
+if TYPE_CHECKING:
+    from agents.impact_analyzer import ImpactAnalysis
 
 from core.gh_executable import get_gh_executable, invalidate_gh_cache
 from core.git_executable import get_git_executable, get_isolated_git_env, run_git
@@ -110,6 +113,37 @@ def _is_retryable_http_error(stderr: str) -> bool:
     if "http" in stderr_lower and "timeout" in stderr_lower:
         return True
     return False
+
+
+# Fragments of `git worktree add` stderr that indicate a transient filesystem
+# failure worth retrying. These show up mostly on Windows, where antivirus or
+# the search indexer can briefly lock a just-created file during checkout.
+_WORKTREE_ADD_TRANSIENT_TERMS = (
+    "could not",
+    "unable to",
+    "permission denied",
+    "access is denied",
+    "used by another process",
+    "cannot lock",
+    "lock ref",
+    "index.lock",
+    "another git process",
+    "file exists",
+)
+
+
+def _is_retryable_worktree_add_error(stderr: str) -> bool:
+    """Whether a failed ``git worktree add`` looks transient and worth retrying.
+
+    On Windows CI, ``git worktree add`` intermittently exits non-zero while
+    writing *nothing* to stderr -- a just-created file is momentarily locked by
+    antivirus/indexing during checkout. An empty/whitespace stderr is therefore
+    treated as retryable, alongside the known file-locking messages above.
+    """
+    text = stderr.strip().lower()
+    if not text:
+        return True
+    return any(term in text for term in _WORKTREE_ADD_TRANSIENT_TERMS)
 
 
 def _with_retry(
@@ -273,8 +307,25 @@ class WorktreeManager:
                     f"Warning: DEFAULT_BRANCH '{env_branch}' not found, auto-detecting..."
                 )
 
-        # 2. Auto-detect main/master
-        for branch in ["main", "master"]:
+        # 2. Ask the remote what its default branch is. Source of truth for
+        #    repos that don't use 'main'/'master' (GitFlow with 'develop',
+        #    'trunk', 'production', etc.). Without this we silently fall
+        #    through to the current branch and end up creating PRs against
+        #    the wrong base.
+        symref = run_git(
+            ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            cwd=self.project_dir,
+        )
+        if symref.returncode == 0:
+            detected = symref.stdout.strip()
+            if detected.startswith("origin/"):
+                detected = detected[len("origin/") :]
+            if detected:
+                return detected
+
+        # 3. Auto-detect usual default branches. 'develop' is included so
+        #    GitFlow repos resolve without DEFAULT_BRANCH being set.
+        for branch in ["main", "master", "develop"]:
             result = run_git(
                 ["rev-parse", "--verify", branch],
                 cwd=self.project_dir,
@@ -282,9 +333,9 @@ class WorktreeManager:
             if result.returncode == 0:
                 return branch
 
-        # 3. Fall back to current branch with warning
+        # 4. Fall back to current branch with warning
         current = self._get_current_branch()
-        print("Warning: Could not find 'main' or 'master' branch.")
+        print("Warning: Could not find 'main', 'master' or 'develop' branch.")
         print(f"Warning: Using current branch '{current}' as base for worktree.")
         print("Tip: Set DEFAULT_BRANCH=your-branch in .env to avoid this.")
         return current
@@ -653,7 +704,7 @@ class WorktreeManager:
                     stats["days_since_last_commit"] = (
                         datetime.now() - last_commit_date
                     ).days
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError):
                 # If parsing fails, silently continue without date info
                 pass
 
@@ -767,7 +818,8 @@ class WorktreeManager:
         if branch_exists:
             # Branch exists - attach worktree to existing branch (no -b flag)
             print(f"Reusing existing branch: {branch_name}")
-            result = self._run_git(["worktree", "add", str(worktree_path), branch_name])
+            add_args = ["worktree", "add", str(worktree_path), branch_name]
+            created_branch = None
         else:
             # Branch doesn't exist - create new branch from remote or local base
             # Determine the start point for the worktree
@@ -790,13 +842,29 @@ class WorktreeManager:
                     )
 
             # Create worktree with new branch from the start point
-            result = self._run_git(
-                ["worktree", "add", "-b", branch_name, str(worktree_path), start_point]
-            )
+            add_args = [
+                "worktree",
+                "add",
+                "-b",
+                branch_name,
+                str(worktree_path),
+                start_point,
+            ]
+            created_branch = branch_name
+
+        # `git worktree add` is flaky on Windows: it intermittently exits
+        # non-zero (often with an empty stderr) when antivirus/indexing briefly
+        # locks a just-created file during checkout. Retry transient failures,
+        # cleaning up any partial state between attempts.
+        result = self._run_worktree_add(
+            add_args, worktree_path=worktree_path, created_branch=created_branch
+        )
 
         if result.returncode != 0:
+            details = result.stderr.strip() or result.stdout.strip() or "(no output)"
             raise WorktreeError(
-                f"Failed to create worktree for {spec_name}: {result.stderr}"
+                f"Failed to create worktree for {spec_name} "
+                f"(git exit {result.returncode}): {details}"
             )
 
         print(f"Created worktree: {worktree_path.name} on branch {branch_name}")
@@ -808,6 +876,52 @@ class WorktreeManager:
             base_branch=self.base_branch,
             is_active=True,
         )
+
+    def _run_worktree_add(
+        self,
+        add_args: list[str],
+        worktree_path: Path,
+        created_branch: str | None,
+        max_attempts: int = 3,
+    ) -> subprocess.CompletedProcess:
+        """Run ``git worktree add``, retrying transient (often Windows) failures.
+
+        ``git worktree add`` intermittently fails on Windows with a momentary
+        filesystem lock (and, on CI, an empty stderr). Between attempts any
+        partially-created worktree directory and branch are removed so the retry
+        starts from a clean slate. Returns the final ``CompletedProcess`` -- the
+        success, or the last failure for the caller to report.
+        """
+        result = self._run_git(add_args)
+        for attempt in range(1, max_attempts):
+            if result.returncode == 0:
+                return result
+            if not _is_retryable_worktree_add_error(result.stderr):
+                return result
+            print(
+                f"Worktree add failed (attempt {attempt}/{max_attempts}, "
+                f"git exit {result.returncode}); cleaning up and retrying..."
+            )
+            self._cleanup_partial_worktree(worktree_path, created_branch)
+            time.sleep(0.5 * attempt)
+            result = self._run_git(add_args)
+        return result
+
+    def _cleanup_partial_worktree(
+        self, worktree_path: Path, created_branch: str | None
+    ) -> None:
+        """Remove partial state left by a failed ``git worktree add``.
+
+        Best-effort: drops any half-registered worktree, the leftover directory,
+        and the branch we were creating, so the next attempt is not blocked by an
+        "already exists" error. Errors are ignored -- the state may not exist.
+        """
+        self._run_git(["worktree", "remove", "--force", str(worktree_path)])
+        self._run_git(["worktree", "prune"])
+        if worktree_path.exists():
+            shutil.rmtree(worktree_path, ignore_errors=True)
+        if created_branch:
+            self._run_git(["branch", "-D", created_branch])
 
     def get_or_create_worktree(self, spec_name: str) -> WorktreeInfo:
         """
@@ -826,6 +940,89 @@ class WorktreeManager:
 
         return self.create_worktree(spec_name)
 
+    def _has_uncommitted_changes(self, spec_name: str) -> tuple[bool, list[str]]:
+        """
+        Check if a worktree has uncommitted changes.
+
+        Args:
+            spec_name: The spec folder name
+
+        Returns:
+            Tuple of (has_changes: bool, file_list: list[str])
+        """
+        worktree_path = self.get_worktree_path(spec_name)
+        if not worktree_path.exists():
+            return False, []
+
+        # Check for modified/untracked files in the worktree
+        result = self._run_git(
+            ["status", "--porcelain"],
+            cwd=worktree_path,
+        )
+
+        if result.returncode != 0:
+            return False, []
+
+        if not result.stdout.strip():
+            return False, []
+
+        # Parse status output: each line is <status> <filename>
+        # M = modified, A = added, ? = untracked, etc.
+        changed_files = []
+        for line in result.stdout.strip().split("\n"):
+            if line.strip():
+                # Extract filename (after the status indicator and space)
+                parts = line.split(None, 1)
+                if len(parts) >= 2:
+                    changed_files.append(parts[1])
+
+        return len(changed_files) > 0, changed_files
+
+    def _count_commits_ahead(self, spec_name: str, target_branch: str) -> int | None:
+        """
+        Compte les commits de la branche du worktree en avance sur ``target_branch``.
+
+        Utilise ``git rev-list --count <target>..HEAD`` pour préserver la
+        sémantique de l'UI Kanban ("commits à pousser"). Tente une résolution
+        locale puis remote (``origin/<target>``) si la référence locale est
+        absente.
+
+        Args:
+            spec_name: Nom du dossier spec (worktree).
+            target_branch: Branche cible de la PR (ex: ``develop``).
+
+        Returns:
+            Nombre de commits en avance, ou ``None`` si la comparaison est
+            impossible (ex: target inconnu localement et sans remote).
+        """
+        worktree_path = self.get_worktree_path(spec_name)
+        if not worktree_path.exists():
+            return None
+
+        candidates: list[str] = []
+        if target_branch:
+            candidates.append(target_branch)
+            if not target_branch.startswith("origin/"):
+                candidates.append(f"origin/{target_branch}")
+
+        for ref in candidates:
+            verify = self._run_git(
+                ["rev-parse", "--verify", "--quiet", ref],
+                cwd=worktree_path,
+            )
+            if verify.returncode != 0:
+                continue
+            count = self._run_git(
+                ["rev-list", "--count", f"{ref}..HEAD"],
+                cwd=worktree_path,
+            )
+            if count.returncode == 0:
+                try:
+                    return int(count.stdout.strip() or "0")
+                except ValueError:
+                    return None
+        return None
+
     def remove_worktree(self, spec_name: str, delete_branch: bool = False) -> None:
         """
         Remove a spec's worktree.
@@ -833,9 +1030,30 @@ class WorktreeManager:
         Args:
             spec_name: The spec folder name
             delete_branch: Whether to also delete the branch
+
+        Raises:
+            RuntimeError: If the worktree has uncommitted changes
         """
         worktree_path = self.get_worktree_path(spec_name)
         branch_name = self.get_branch_name(spec_name)
+
+        # Check for uncommitted changes before removing
+        has_changes, changed_files = self._has_uncommitted_changes(spec_name)
+        if has_changes:
+            error_msg = (
+                f"Cannot remove worktree for '{spec_name}': "
+                f"has {len(changed_files)} uncommitted file(s):\n"
+            )
+            for file in changed_files[:10]:  # Show first 10 files
+                error_msg += f"  - {file}\n"
+            if len(changed_files) > 10:
+                error_msg += f"  ... and {len(changed_files) - 10} more\n"
+            error_msg += (
+                "\nPlease commit or stash these changes before removing the worktree.\n"
+                "In the worktree, run: git add . && git commit -m 'Save changes'\n"
+                "Or use: git stash"
+            )
+            raise RuntimeError(error_msg)
 
         if worktree_path.exists():
             result = self._run_git(
@@ -844,8 +1062,15 @@ class WorktreeManager:
             if result.returncode == 0:
                 print(f"Removed worktree: {worktree_path.name}")
             else:
-                print(f"Warning: Could not remove worktree: {result.stderr}")
-                shutil.rmtree(worktree_path, ignore_errors=True)
+                # Don't silently delete on git failure - raise exception instead
+                stderr_msg = (
+                    result.stderr[:200] if result.stderr else "<no error details>"
+                )
+                raise RuntimeError(
+                    f"Failed to remove worktree '{spec_name}' via git: {stderr_msg}\n"
+                    f"Worktree path: {worktree_path}\n"
+                    f"Please manually remove if needed, or investigate the error above."
+                )
 
         if delete_branch:
             self._run_git(["branch", "-D", branch_name])
@@ -951,17 +1176,45 @@ class WorktreeManager:
             print(f"Successfully merged {info.branch}")
 
         if delete_after:
-            self.remove_worktree(spec_name, delete_branch=True)
+            try:
+                self.remove_worktree(spec_name, delete_branch=True)
+            except RuntimeError as e:
+                # Worktree has uncommitted changes - log but don't fail merge
+                print()
+                print("WARNING: Worktree cleanup failed")
+                print(str(e))
+                print()
+                print(
+                    "The merge completed successfully, but the worktree still has "
+                    "uncommitted changes and was not removed."
+                )
 
         return True
 
     def commit_in_worktree(self, spec_name: str, message: str) -> bool:
-        """Commit all changes in a spec's worktree."""
+        """Commit all changes in a spec's worktree.
+
+        Les artefacts internes de WorkPilot (``.workpilot/`` et fichiers
+        ``.workpilot-*``) sont volontairement exclus du staging : ils ne
+        doivent jamais polluer la PR (ils restent présents sur le disque pour
+        le fonctionnement de l'app). Voir aussi ``_strip_workpilot_artifacts``
+        pour les fichiers éventuellement déjà commités par l'agent.
+        """
         worktree_path = self.get_worktree_path(spec_name)
         if not worktree_path.exists():
             return False
 
-        self._run_git(["add", "."], cwd=worktree_path)
+        self._run_git(
+            [
+                "add",
+                "-A",
+                "--",
+                ".",
+                ":!.workpilot",
+                ":!.workpilot-*",
+            ],
+            cwd=worktree_path,
+        )
         result = self._run_git(["commit", "-m", message], cwd=worktree_path)
 
         if result.returncode == 0:
@@ -971,6 +1224,73 @@ class WorktreeManager:
         else:
             print(f"Commit failed: {result.stderr}")
             return False
+
+    def _strip_workpilot_artifacts(self, spec_name: str) -> list[str]:
+        """Retire les artefacts internes de WorkPilot de la branche poussée.
+
+        WorkPilot écrit ses propres fichiers de travail à la racine du worktree
+        (``.workpilot/specs/...``, ``.workpilot-status``, ``.workpilot-discard-list``,
+        ``.workpilot-security.json``...). Le ``.gitignore`` du projet cible ne les
+        connaît pas : si l'agent les a commités pendant son travail, ils se
+        retrouvent dans la PR et la polluent.
+
+        On les retire de l'index (``git rm -r --cached``) puis on commit la
+        suppression : les fichiers restent sur le disque (l'app en a besoin)
+        mais disparaissent de l'historique poussé donc de la PR.
+
+        Args:
+            spec_name: Nom du dossier spec (worktree).
+
+        Returns:
+            Liste des chemins effectivement retirés de l'index.
+        """
+        worktree_path = self.get_worktree_path(spec_name)
+        if not worktree_path.exists():
+            return []
+
+        patterns = [".workpilot", ".workpilot-*"]
+
+        # Détecte les fichiers suivis correspondant aux motifs WorkPilot.
+        ls = self._run_git(["ls-files", "--", *patterns], cwd=worktree_path)
+        tracked = [line.strip() for line in ls.stdout.splitlines() if line.strip()]
+        if not tracked:
+            return []
+
+        rm = self._run_git(
+            ["rm", "-r", "--cached", "--ignore-unmatch", "--", *patterns],
+            cwd=worktree_path,
+        )
+        if rm.returncode != 0:
+            logger.warning(
+                "[_strip_workpilot_artifacts] git rm --cached failed: %s",
+                rm.stderr,
+            )
+            return []
+
+        commit = self._run_git(
+            [
+                "commit",
+                "-m",
+                "workpilot: exclude internal WorkPilot artifacts from PR",
+            ],
+            cwd=worktree_path,
+        )
+        if commit.returncode != 0 and "nothing to commit" not in (
+            commit.stdout + commit.stderr
+        ):
+            logger.warning(
+                "[_strip_workpilot_artifacts] Commit of artifact removal failed: %s",
+                commit.stderr,
+            )
+            return []
+
+        logger.info(
+            "[_strip_workpilot_artifacts] Removed %d WorkPilot artifact(s) "
+            "from PR branch of '%s'.",
+            len(tracked),
+            spec_name,
+        )
+        return tracked
 
     # ==================== Listing & Discovery ====================
 
@@ -1320,6 +1640,7 @@ class WorktreeManager:
         target_branch: str | None = None,
         title: str | None = None,
         draft: bool = False,
+        body: str | None = None,
     ) -> PullRequestResult:
         """
         Create an Azure DevOps pull request using the REST API.
@@ -1332,6 +1653,8 @@ class WorktreeManager:
             target_branch: Target branch for PR (defaults to base_branch)
             title: PR title (defaults to spec name)
             draft: Whether to create as draft PR
+            body: PR body. If provided, used as-is (no AI generation, no
+                  impact block injection); otherwise body is auto-generated.
 
         Returns:
             PullRequestResult with keys:
@@ -1352,22 +1675,36 @@ class WorktreeManager:
         target = target_branch or self.base_branch
         pr_title = title or f"feat: {spec_name}"
 
-        # Try AI-powered PR body from project's PR template, fall back to spec summary
-        pr_body: str | None = None
-        try:
-            diff_summary, commit_log = self._gather_pr_context(spec_name, target)
-            pr_body = self._try_ai_pr_body(
+        # Caller-provided body wins. Otherwise try AI-powered PR body from
+        # project's PR template, falling back to spec summary, then append
+        # the impact block.
+        pr_body: str | None = body
+        caller_provided_body = body is not None
+        diff_summary: str = ""
+        commit_log: str = ""
+        if pr_body is None:
+            try:
+                diff_summary, commit_log = self._gather_pr_context(spec_name, target)
+                pr_body = self._try_ai_pr_body(
+                    spec_name=spec_name,
+                    target_branch=target,
+                    branch_name=info.branch,
+                    diff_summary=diff_summary,
+                    commit_log=commit_log,
+                )
+            except Exception as e:
+                logger.warning(f"AI PR body generation encountered an error: {e}")
+
+            if not pr_body:
+                pr_body = self._extract_spec_summary(spec_name)
+
+        if not caller_provided_body:
+            pr_body = self._inject_impact_block(
                 spec_name=spec_name,
-                target_branch=target,
-                branch_name=info.branch,
+                body=pr_body,
                 diff_summary=diff_summary,
                 commit_log=commit_log,
             )
-        except Exception as e:
-            logger.warning(f"AI PR body generation encountered an error: {e}")
-
-        if not pr_body:
-            pr_body = self._extract_spec_summary(spec_name)
 
         # Extract Azure DevOps coordinates from git remote
         org = extract_azure_devops_org(self.project_dir)
@@ -1581,6 +1918,7 @@ class WorktreeManager:
         target_branch: str | None = None,
         title: str | None = None,
         draft: bool = False,
+        body: str | None = None,
     ) -> PullRequestResult:
         """
         Create a GitHub pull request for a spec's branch using gh CLI with retry logic.
@@ -1590,6 +1928,9 @@ class WorktreeManager:
             target_branch: Target branch for PR (defaults to base_branch)
             title: PR title (defaults to spec name)
             draft: Whether to create as draft PR
+            body: PR body. If provided, used as-is; otherwise the body is
+                  auto-generated (AI-powered from project template, falling
+                  back to spec summary).
 
         Returns:
             PullRequestResult with keys:
@@ -1608,22 +1949,38 @@ class WorktreeManager:
         target = target_branch or self.base_branch
         pr_title = title or f"feat: {spec_name}"
 
-        # Try AI-powered PR body from project's PR template, fall back to spec summary
-        pr_body: str | None = None
-        try:
-            diff_summary, commit_log = self._gather_pr_context(spec_name, target)
-            pr_body = self._try_ai_pr_body(
+        # Caller-provided body wins. Otherwise try AI-powered PR body from
+        # project's PR template, falling back to spec summary.
+        pr_body: str | None = body
+        caller_provided_body = body is not None
+        diff_summary: str = ""
+        commit_log: str = ""
+        if pr_body is None:
+            try:
+                diff_summary, commit_log = self._gather_pr_context(spec_name, target)
+                pr_body = self._try_ai_pr_body(
+                    spec_name=spec_name,
+                    target_branch=target,
+                    branch_name=info.branch,
+                    diff_summary=diff_summary,
+                    commit_log=commit_log,
+                )
+            except Exception as e:
+                logger.warning(f"AI PR body generation encountered an error: {e}")
+
+            if not pr_body:
+                pr_body = self._extract_spec_summary(spec_name)
+
+        # Append impact block only when we composed the body ourselves; if the
+        # caller provided a body they are responsible for it (they likely
+        # included or edited the impact block via the review modal).
+        if not caller_provided_body:
+            pr_body = self._inject_impact_block(
                 spec_name=spec_name,
-                target_branch=target,
-                branch_name=info.branch,
+                body=pr_body,
                 diff_summary=diff_summary,
                 commit_log=commit_log,
             )
-        except Exception as e:
-            logger.warning(f"AI PR body generation encountered an error: {e}")
-
-        if not pr_body:
-            pr_body = self._extract_spec_summary(spec_name)
 
         # Find gh executable before attempting PR creation
         gh_executable = get_gh_executable()
@@ -1751,6 +2108,7 @@ class WorktreeManager:
         target_branch: str | None = None,
         title: str | None = None,
         draft: bool = False,
+        body: str | None = None,
     ) -> PullRequestResult:
         """
         Create a GitLab merge request for a spec's branch using glab CLI with retry logic.
@@ -1760,6 +2118,8 @@ class WorktreeManager:
             target_branch: Target branch for MR (defaults to base_branch)
             title: MR title (defaults to spec name)
             draft: Whether to create as draft MR
+            body: MR body. If provided, used as-is (no auto-generation, no
+                  impact block injection); otherwise body is auto-generated.
 
         Returns:
             PullRequestResult with keys:
@@ -1778,8 +2138,22 @@ class WorktreeManager:
         target = target_branch or self.base_branch
         mr_title = title or f"feat: {spec_name}"
 
-        # Get MR body from spec.md if available
-        mr_body = self._extract_spec_summary(spec_name)
+        # Caller-provided body wins. Otherwise spec summary + impact block.
+        if body is not None:
+            mr_body = body
+        else:
+            mr_body = self._extract_spec_summary(spec_name)
+            try:
+                diff_summary, commit_log = self._gather_pr_context(spec_name, target)
+            except Exception as e:
+                logger.warning(f"Could not gather PR context for impact block: {e}")
+                diff_summary, commit_log = "", ""
+            mr_body = self._inject_impact_block(
+                spec_name=spec_name,
+                body=mr_body,
+                diff_summary=diff_summary,
+                commit_log=commit_log,
+            )
 
         # Find glab executable before attempting MR creation
         glab_executable = get_glab_executable()
@@ -2064,6 +2438,133 @@ class WorktreeManager:
             logger.warning(f"AI PR body generation failed: {e}")
             return None
 
+    def _run_impact_analysis(
+        self,
+        spec_name: str,
+        diff_summary: str,
+        commit_log: str,
+    ) -> "ImpactAnalysis":
+        """
+        Run the impact analyzer and return its result, falling back to
+        the "N/A / Non evalue" analysis on any failure. Never raises.
+
+        Returns:
+            An ImpactAnalysis (always non-None thanks to the fallback).
+        """
+        from agents.impact_analyzer import (
+            fallback_analysis,
+            run_impact_analyzer_sync,
+        )
+
+        spec_dir = self.project_dir / ".workpilot" / "specs" / spec_name
+        if not spec_dir.is_dir():
+            worktree_path = self.get_worktree_path(spec_name)
+            spec_dir = worktree_path / ".workpilot" / "specs" / spec_name
+            if not spec_dir.is_dir():
+                spec_dir = self.project_dir  # last resort, analyzer tolerates this
+
+        model, thinking_budget = get_utility_model_config()
+
+        analysis = run_impact_analyzer_sync(
+            project_dir=self.project_dir,
+            spec_dir=spec_dir,
+            model=model,
+            thinking_budget=thinking_budget,
+            diff_summary=diff_summary,
+            commit_log=commit_log,
+        )
+        return analysis if analysis is not None else fallback_analysis()
+
+    def _inject_impact_block(
+        self,
+        spec_name: str,
+        body: str,
+        diff_summary: str,
+        commit_log: str,
+    ) -> str:
+        """
+        Append a French-language impact block to a PR/MR body.
+
+        Runs the impact_analyzer agent on the diff and appends a standardized
+        block at the end of the body:
+
+            ---
+            <!-- workpilot-impact-block -->
+            Note de l'impact (1 a 5) : 3
+            Fonctionnalite(s) impactee(s) : Fiche vehicule, doc de vente
+
+        On any failure, falls back to "N/A" / "Non evalue" so the block is
+        always present (per user spec). Never raises.
+        """
+        try:
+            from agents.impact_analyzer import append_impact_block
+        except ImportError:
+            logger.warning(
+                "impact_analyzer module not available, skipping impact block"
+            )
+            return body
+
+        analysis = self._run_impact_analysis(spec_name, diff_summary, commit_log)
+        return append_impact_block(body, analysis)
+
+    def preview_pr_body(
+        self,
+        spec_name: str,
+        target_branch: str | None = None,
+        include_impact: bool = True,
+    ) -> dict:
+        """
+        Compute what the PR body and impact analysis would be, WITHOUT
+        actually pushing or creating any PR. Intended for the frontend
+        review modal so the user can edit values before creation.
+
+        Returns a dict with:
+            - body: str  (PR body markdown, with impact block appended if include_impact)
+            - rating: str  ("1".."5" or "N/A")
+            - features: str  (French free-text summary, possibly "Non evalue")
+            - error: str  (set only on hard failure; other fields still present)
+        """
+        try:
+            from agents.impact_analyzer import append_impact_block
+        except ImportError:
+            append_impact_block = None  # type: ignore[assignment]
+
+        target = target_branch or self.base_branch
+        info = self.get_worktree_info(spec_name)
+        branch_name = info.branch if info else ""
+
+        try:
+            diff_summary, commit_log = self._gather_pr_context(spec_name, target)
+        except Exception as e:
+            logger.warning(f"preview_pr_body: could not gather context: {e}")
+            diff_summary, commit_log = "", ""
+
+        body: str | None = None
+        try:
+            body = self._try_ai_pr_body(
+                spec_name=spec_name,
+                target_branch=target,
+                branch_name=branch_name,
+                diff_summary=diff_summary,
+                commit_log=commit_log,
+            )
+        except Exception as e:
+            logger.warning(f"preview_pr_body: AI body failed: {e}")
+        if not body:
+            body = self._extract_spec_summary(spec_name)
+
+        analysis = self._run_impact_analysis(spec_name, diff_summary, commit_log)
+
+        body_with_block = body
+        if include_impact and append_impact_block is not None:
+            body_with_block = append_impact_block(body, analysis)
+
+        return {
+            "body": body_with_block,
+            "rating": analysis.rating,
+            "features": analysis.features,
+        }
+
     def _extract_spec_summary(self, spec_name: str) -> str:
         """
         Build a rich Markdown PR/MR body from the spec summary.
@@ -2239,6 +2740,113 @@ class WorktreeManager:
 
         return None
 
+    def _apply_discard_list(self, spec_name: str, target_branch: str) -> list[str]:
+        """Applique la ``.workpilot-discard-list`` au worktree avant le push.
+
+        L'UI affiche un diff filtré (``origin/base...origin/head`` moins les
+        fichiers présents dans ``.workpilot-discard-list``). Sans cette étape,
+        la branche poussée contient toujours les commits d'origine et la PR
+        embarque les fichiers abandonnés : il y a décorrélation entre l'aperçu
+        et la PR.
+
+        Pour chaque fichier abandonné, on aligne la HEAD du worktree sur la
+        branche cible :
+        - fichier présent dans la cible -> ``git checkout <cible> -- <fichier>``
+          (annule les modifications de la tâche) ;
+        - fichier ajouté par la tâche (absent de la cible) -> ``git rm`` (on le
+          retire complètement).
+
+        ``git checkout``/``git rm`` mettent déjà à jour l'index : on commit donc
+        uniquement ces changements, sans ``git add -A``, pour éviter d'inclure
+        ``.workpilot-discard-list`` elle-même dans la PR.
+
+        Args:
+            spec_name: Nom du dossier spec (worktree).
+            target_branch: Branche cible de la PR (ex: ``develop``).
+
+        Returns:
+            Liste des fichiers effectivement réappliqués (revertés).
+        """
+        worktree_path = self.get_worktree_path(spec_name)
+        if not worktree_path.exists():
+            return []
+
+        discard_path = worktree_path / ".workpilot-discard-list"
+        if not discard_path.exists():
+            return []
+
+        try:
+            discarded = [
+                line.strip()
+                for line in discard_path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+        except OSError as exc:
+            logger.warning("[_apply_discard_list] Cannot read discard list: %s", exc)
+            return []
+
+        if not discarded:
+            return []
+
+        # Résout la ref qui contient le contenu "cible" : préfère
+        # origin/<target> si présent (aligné avec la PR), sinon <target>.
+        base_ref = target_branch
+        remote_ref = f"origin/{target_branch}"
+        if (
+            self._run_git(
+                ["rev-parse", "--verify", "--quiet", remote_ref], cwd=worktree_path
+            ).returncode
+            == 0
+        ):
+            base_ref = remote_ref
+
+        reverted: list[str] = []
+        for rel_path in discarded:
+            exists_in_base = (
+                self._run_git(
+                    ["cat-file", "-e", f"{base_ref}:{rel_path}"], cwd=worktree_path
+                ).returncode
+                == 0
+            )
+            if exists_in_base:
+                res = self._run_git(
+                    ["checkout", base_ref, "--", rel_path], cwd=worktree_path
+                )
+            else:
+                res = self._run_git(
+                    ["rm", "-f", "--ignore-unmatch", "--", rel_path],
+                    cwd=worktree_path,
+                )
+
+            if res.returncode == 0:
+                reverted.append(rel_path)
+            else:
+                logger.warning(
+                    "[_apply_discard_list] Failed to revert %s against %s: %s",
+                    rel_path,
+                    base_ref,
+                    res.stderr,
+                )
+
+        if reverted:
+            commit = self._run_git(
+                [
+                    "commit",
+                    "-m",
+                    f"workpilot: exclude {len(reverted)} user-discarded file(s)",
+                ],
+                cwd=worktree_path,
+            )
+            if commit.returncode != 0 and "nothing to commit" not in (
+                commit.stdout + commit.stderr
+            ):
+                logger.warning(
+                    "[_apply_discard_list] Commit of discarded reverts failed: %s",
+                    commit.stderr,
+                )
+
+        return reverted
+
     def push_and_create_pr(
         self,
         spec_name: str,
@@ -2246,6 +2854,7 @@ class WorktreeManager:
         title: str | None = None,
         draft: bool = False,
         force_push: bool = False,
+        body: str | None = None,
     ) -> PushAndCreatePRResult:
         """
         Push branch and create a pull request/merge request in one operation.
@@ -2257,6 +2866,9 @@ class WorktreeManager:
             title: PR/MR title (defaults to spec name)
             draft: Whether to create as draft PR/MR
             force_push: Whether to force push the branch
+            body: Optional PR/MR body. If provided, used verbatim (no AI
+                  generation, no impact block injection) - the caller is
+                  responsible for the full content including any impact block.
 
         Returns:
             PushAndCreatePRResult with keys:
@@ -2267,6 +2879,70 @@ class WorktreeManager:
                 - already_exists: bool (if PR/MR already exists)
                 - error: str (if failed)
         """
+        # Step 0: Commit any uncommitted changes before pushing
+        has_changes, changed_files = self._has_uncommitted_changes(spec_name)
+        if has_changes:
+            logger.info(
+                f"[push_and_create_pr] Found {len(changed_files)} uncommitted files in '{spec_name}', committing..."
+            )
+            commit_msg = title or f"auto-claude: {spec_name}"
+            self.commit_in_worktree(spec_name, commit_msg)
+
+        # Step 0.4: Applique la discard list pour que la branche poussée
+        # corresponde exactement au diff filtré affiché dans l'UI. Sans cela,
+        # les fichiers abandonnés par l'utilisateur (présents uniquement dans
+        # .workpilot-discard-list, un filtre d'affichage) resteraient dans les
+        # commits et seraient embarqués dans la PR -> décorrélation.
+        effective_target = target_branch or self.base_branch
+        reverted = self._apply_discard_list(spec_name, effective_target)
+        if reverted:
+            logger.info(
+                "[push_and_create_pr] Applied discard list: excluded %d file(s) "
+                "from '%s' before push.",
+                len(reverted),
+                spec_name,
+            )
+
+        # Step 0.45: Retire les artefacts internes de WorkPilot (.workpilot/,
+        # .workpilot-*) de la branche pour ne jamais polluer la PR. Gère le cas
+        # où l'agent les aurait déjà commités pendant son travail.
+        stripped = self._strip_workpilot_artifacts(spec_name)
+        if stripped:
+            logger.info(
+                "[push_and_create_pr] Stripped %d WorkPilot artifact(s) from "
+                "'%s' before push.",
+                len(stripped),
+                spec_name,
+            )
+
+        # Step 0.5: Garde-fou contre la création d'une PR vide.
+        # Si la branche du worktree n'a aucun commit en avance de la cible,
+        # la PR créée serait vide (cas typique : tâche dupliquée déjà mergée
+        # via une autre branche, ou agent qui n'a rien commité). On échoue
+        # explicitement avec un message exploitable côté UI plutôt que de
+        # pousser silencieusement une PR sans contenu.
+        ahead = self._count_commits_ahead(spec_name, effective_target)
+        if ahead == 0:
+            logger.warning(
+                "[push_and_create_pr] Refusing to create empty PR: branch for "
+                "spec '%s' has 0 commits ahead of '%s'.",
+                spec_name,
+                effective_target,
+            )
+            return PushAndCreatePRResult(
+                success=False,
+                pushed=False,
+                branch="",
+                remote="",
+                error=(
+                    f"Aucun commit à pousser : la branche du worktree est "
+                    f"identique à '{effective_target}'. Vérifiez que l'agent "
+                    f"a bien commité ses changements, ou que le travail n'a "
+                    f"pas déjà été fusionné via une autre branche (tâche "
+                    f"dupliquée)."
+                ),
+            )
+
         # Step 1: Push the branch
         push_result = self.push_branch(spec_name, force=force_push)
         if not push_result.get("success"):
@@ -2290,6 +2966,7 @@ class WorktreeManager:
                 target_branch=target_branch,
                 title=title,
                 draft=draft,
+                body=body,
             )
         elif provider == "github":
             pr_result = self.create_pull_request(
@@ -2297,6 +2974,7 @@ class WorktreeManager:
                 target_branch=target_branch,
                 title=title,
                 draft=draft,
+                body=body,
             )
         elif provider == "gitlab":
             pr_result = self.create_merge_request(
@@ -2304,6 +2982,7 @@ class WorktreeManager:
                 target_branch=target_branch,
                 title=title,
                 draft=draft,
+                body=body,
             )
         else:
             # Unknown provider

@@ -7,6 +7,7 @@ approval or max iterations.
 """
 
 import os
+import subprocess
 import time as time_module
 from pathlib import Path
 
@@ -48,9 +49,183 @@ from .report import (
 )
 from .reviewer import run_qa_agent_session
 
+
+def _ensure_fix_request_file(
+    spec_dir: Path, issues: list[dict], qa_iteration: int
+) -> bool:
+    """
+    Garantit qu'un ``QA_FIX_REQUEST.md`` existe avant de lancer le fixer.
+
+    Le QA reviewer est censé écrire ce fichier via le prompt
+    ``qa_reviewer.md`` (commande ``cat > QA_FIX_REQUEST.md << EOF``). En
+    pratique, certains modèles (ou des sessions interrompues) oublient
+    cette étape et la boucle échoue ensuite avec
+    ``Fixer error: QA_FIX_REQUEST.md not found``.
+
+    Pour rendre la boucle robuste, on synthétise le fichier à partir des
+    issues déjà connues (``issues_found`` du sign-off) avant d'invoquer le
+    fixer si aucun fichier n'a été produit.
+
+    Args:
+        spec_dir: Dossier du spec courant.
+        issues: Liste des issues remontées par le reviewer.
+        qa_iteration: Itération QA en cours, pour traçabilité.
+
+    Returns:
+        ``True`` si le fichier existe à la sortie (déjà présent ou
+        synthétisé), ``False`` si on n'a pas pu le créer (issues vides).
+    """
+    fix_request_file = spec_dir / "QA_FIX_REQUEST.md"
+    if fix_request_file.exists():
+        return True
+
+    if not issues:
+        debug_warning(
+            "qa_loop",
+            "Cannot synthesize QA_FIX_REQUEST.md: reviewer reported no issues",
+            iteration=qa_iteration,
+        )
+        return False
+
+    lines: list[str] = [
+        "# QA Fix Request",
+        "",
+        f"_Auto-généré par la boucle QA (itération {qa_iteration}) car le "
+        "reviewer n'a pas produit de fichier explicite._",
+        "",
+        "## Issues à corriger",
+        "",
+    ]
+    for idx, issue in enumerate(issues, start=1):
+        title = issue.get("title") or issue.get("summary") or f"Issue {idx}"
+        description = (
+            issue.get("description")
+            or issue.get("details")
+            or issue.get("message")
+            or ""
+        )
+        severity = issue.get("severity") or issue.get("priority") or "unknown"
+        lines.append(f"### {idx}. {title}")
+        lines.append("")
+        lines.append(f"- **Sévérité** : {severity}")
+        if description:
+            lines.append("")
+            lines.append(description.strip())
+        lines.append("")
+
+    lines.append("## Verification")
+    lines.append("")
+    lines.append(
+        "Après application des correctifs, mettre à jour "
+        "`implementation_plan.json` avec `ready_for_qa_revalidation: true`."
+    )
+    lines.append("")
+
+    try:
+        fix_request_file.write_text("\n".join(lines), encoding="utf-8")
+        debug_warning(
+            "qa_loop",
+            "Synthesized QA_FIX_REQUEST.md from issues_found "
+            "(reviewer did not produce one)",
+            iteration=qa_iteration,
+            issue_count=len(issues),
+            path=str(fix_request_file),
+        )
+        return True
+    except OSError as exc:
+        debug_error(
+            "qa_loop",
+            f"Failed to synthesize QA_FIX_REQUEST.md: {exc}",
+            iteration=qa_iteration,
+        )
+        return False
+
+
 # Configuration
 MAX_QA_ITERATIONS = 50
 MAX_CONSECUTIVE_ERRORS = 3  # Stop after 3 consecutive errors without progress
+
+
+async def _run_dotnet_tests(project_dir: Path) -> bool:
+    """
+    Attempt to run dotnet test on the project.
+
+    Returns:
+        True if tests were found and executed, False otherwise.
+    """
+    try:
+        # Search for test projects (*.csproj files with test frameworks)
+        test_projects = []
+        for csproj in project_dir.glob("**/*.csproj"):
+            try:
+                content = csproj.read_text(encoding="utf-8", errors="ignore")
+                if any(
+                    fw in content
+                    for fw in ["NUnit", "xunit", "MSTest", "Microsoft.NET.Test.Sdk"]
+                ):
+                    test_projects.append(csproj)
+            except OSError:
+                pass
+
+        if not test_projects:
+            return False
+
+        debug("qa_loop", f"Found {len(test_projects)} test project(s)")
+        print(f"   Found {len(test_projects)} test project(s)")
+
+        # Run dotnet test on each test project
+        for test_project in test_projects:
+            print(f"   Running tests in: {test_project.relative_to(project_dir)}")
+            try:
+                result = subprocess.run(
+                    ["dotnet", "test", str(test_project), "-c", "Debug"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    cwd=str(project_dir),
+                )
+                if result.returncode == 0:
+                    print("      ✅ Tests passed")
+                    debug("qa_loop", f"dotnet test passed for {test_project.name}")
+                else:
+                    print("      ⚠️  Tests failed or no tests found")
+                    debug_warning(
+                        "qa_loop",
+                        f"dotnet test returned {result.returncode} for {test_project.name}",
+                    )
+                    if result.stdout:
+                        debug("qa_loop", f"stdout: {result.stdout[:500]}")
+                    if result.stderr:
+                        debug_error("qa_loop", f"stderr: {result.stderr[:500]}")
+            except FileNotFoundError:
+                debug_error("qa_loop", "dotnet CLI not found on PATH")
+                return False
+            except subprocess.TimeoutExpired:
+                debug_error("qa_loop", "dotnet test timed out after 300 seconds")
+                print("      ❌ Tests timed out")
+                return False
+
+        return True
+
+    except Exception as e:
+        debug_error("qa_loop", f"Error running dotnet tests: {e}")
+        return False
+
+
+async def _handle_rate_limit_in_qa(
+    error: Exception,
+    spec_dir: Path,
+    source_spec_dir: Path | None,
+) -> bool:
+    """
+    Thin wrapper around the shared rate-limit shield.
+
+    Kept as a module-local alias so existing call sites and tests that patch
+    `qa.loop._handle_rate_limit_in_qa` don't need to change.
+    """
+    from services.rate_limit_shield import handle_rate_limit_pause
+
+    return await handle_rate_limit_pause(error, spec_dir, "qa", source_spec_dir)
 
 
 # =============================================================================
@@ -63,6 +238,7 @@ async def run_qa_validation_loop(
     spec_dir: Path,
     model: str,
     verbose: bool = False,
+    source_spec_dir: Path | None = None,
 ) -> bool:
     """
     Run the full QA validation loop.
@@ -242,12 +418,35 @@ async def run_qa_validation_loop(
         print(f"   ℹ️  Security scan skipped: {_sec_err}")
     # ── End Security Scan ─────────────────────────────────────────────────────
 
-    # Check for no-test projects
+    # Check for no-test projects and attempt .NET test execution
     if is_no_test_project(spec_dir, project_dir):
         print("\n⚠️  No test framework detected in project.")
-        print("Creating manual test plan...")
-        manual_plan = create_manual_test_plan(spec_dir, spec_dir.name)
-        print(f"📝 Manual test plan created: {manual_plan}")
+
+        # Check if this is a .NET project with test projects available
+        from core.dotnet_tools import detect_dotnet_project
+
+        if detect_dotnet_project(project_dir):
+            print("Detected .NET project — attempting to run dotnet test...")
+            try:
+                result = await _run_dotnet_tests(project_dir)
+                if result:
+                    print("✅ dotnet test executed successfully")
+                else:
+                    print("⚠️  dotnet test found no test projects")
+                    print("Creating manual test plan as fallback...")
+                    manual_plan = create_manual_test_plan(spec_dir, spec_dir.name)
+                    print(f"📝 Manual test plan created: {manual_plan}")
+            except Exception as e:
+                debug_error("qa_loop", f"dotnet test failed: {e}")
+                print(f"⚠️  dotnet test execution failed: {e}")
+                print("Creating manual test plan as fallback...")
+                manual_plan = create_manual_test_plan(spec_dir, spec_dir.name)
+                print(f"📝 Manual test plan created: {manual_plan}")
+        else:
+            print("Creating manual test plan...")
+            manual_plan = create_manual_test_plan(spec_dir, spec_dir.name)
+            print(f"📝 Manual test plan created: {manual_plan}")
+
         print("\nNote: Automated testing will be limited for this project.")
 
     # Start validation phase in task logger
@@ -328,6 +527,31 @@ async def run_qa_validation_loop(
                     previous_error=last_error_context,  # Pass error context for self-correction
                 )
         except Exception as e:
+            # Prompt-too-long errors are not retryable — the conversation
+            # is already too big for the model's context window, so the next
+            # attempt would fail identically. Halt the loop and let the UI
+            # surface "reset conversation / switch provider" actions.
+            from services.rate_limit_shield import handle_prompt_too_long
+
+            if handle_prompt_too_long(e, spec_dir, "qa"):
+                debug_error("qa_loop", "QA halted: prompt too long")
+                print("\n⛔ QA halted: prompt too long. See task detail.")
+                if task_logger:
+                    task_logger.end_phase(
+                        LogPhase.VALIDATION,
+                        success=False,
+                        message="QA halted: prompt too long for the LLM context window",
+                    )
+                return False
+
+            # Rate-limit errors must not count toward MAX_CONSECUTIVE_ERRORS or
+            # we escalate to human after 3 limit-hits in a row instead of waiting
+            # for the quota window to reset (the same iteration would have succeeded).
+            if await _handle_rate_limit_in_qa(e, spec_dir, source_spec_dir):
+                qa_iteration -= (
+                    1  # don't burn an iteration on a paused-then-resumed attempt
+                )
+                continue
             debug_error("qa_loop", f"QA reviewer session crashed: {e}")
             print(f"\n❌ QA reviewer session error: {e}")
             status = "error"
@@ -654,6 +878,15 @@ async def run_qa_validation_loop(
             )
             print("\nRunning QA Fixer Agent...")
 
+            # Garde-fou : le reviewer DOIT avoir écrit QA_FIX_REQUEST.md, mais
+            # certaines sessions (modèles trop concis, interruption réseau)
+            # produisent qa_report.md sans rejouer le `cat > QA_FIX_REQUEST.md`
+            # final. Sans ce fichier le fixer renvoie immédiatement "error" et
+            # la boucle échoue avec "Fixer error: QA_FIX_REQUEST.md not found".
+            # On le synthétise depuis les issues déjà connues pour permettre
+            # au fixer de travailler.
+            _ensure_fix_request_file(spec_dir, current_issues, qa_iteration)
+
             try:
                 fix_client = create_agent_client(
                     project_dir=project_dir,
@@ -679,6 +912,25 @@ async def run_qa_validation_loop(
                         fix_client, spec_dir, qa_iteration, verbose
                     )
             except Exception as e:
+                # Prompt-too-long is permanent — see the reviewer block above.
+                from services.rate_limit_shield import handle_prompt_too_long
+
+                if handle_prompt_too_long(e, spec_dir, "qa"):
+                    debug_error("qa_loop", "QA fixer halted: prompt too long")
+                    print("\n⛔ QA fixer halted: prompt too long. See task detail.")
+                    if task_logger:
+                        task_logger.end_phase(
+                            LogPhase.VALIDATION,
+                            success=False,
+                            message="QA fixer halted: prompt too long for the LLM context window",
+                        )
+                    return False
+
+                # Same rate-limit shield as the reviewer above: pause-and-resume
+                # instead of counting toward consecutive errors.
+                if await _handle_rate_limit_in_qa(e, spec_dir, source_spec_dir):
+                    qa_iteration -= 1
+                    continue
                 debug_error("qa_loop", f"QA fixer session crashed: {e}")
                 fix_status = "error"
                 fix_response = str(e)

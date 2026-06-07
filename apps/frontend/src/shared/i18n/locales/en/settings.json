@@ -783,7 +783,9 @@
 			"description": "Auto-Build and agent config",
 			"configureFor": "Configure Auto-Build, agent model, and notifications for {{projectName}}",
 			"useClaudeMd": "Use CLAUDE.md",
-			"useClaudeMdDescription": "Include CLAUDE.md instructions in agent context"
+			"useClaudeMdDescription": "Include CLAUDE.md instructions in agent context",
+			"tddMode": "TDD Mode",
+			"tddModeDescription": "Enforce strict TDD (Red-Green-Refactor): the agent writes the test, watches it fail, then implements"
 		},
 		"autoBuild": {
 			"title": "Auto-Build Integration",
@@ -1618,6 +1620,7 @@
 	},
 	"azureDevOpsImport": {
 		"title": "Import Azure DevOps Work Items",
+		"titleWithRepository": "Import work items from {{repository}}",
 		"description": "Select Azure DevOps work items to import into WorkPilot AI",
 		"importSuccess": "{{count}} work item(s) imported successfully",
 		"importSuccessSingle": "Work item \"{{title}}\" imported successfully",
@@ -1633,6 +1636,7 @@
 		"errorNoProject": "No project selected",
 		"projectLabel": "Project:",
 		"searchPlaceholder": "Search work items...",
+		"searchingById": "Searching for work item…",
 		"filterTypeLabel": "Work Item Type",
 		"filterTypeAll": "All Types",
 		"filterStateLabel": "State",
@@ -1830,6 +1834,7 @@
 	},
 	"jiraImport": {
 		"title": "Import Jira Issues",
+		"titleWithProject": "Import issues from {{project}}",
 		"description": "Select Jira issues to import into WorkPilot AI",
 		"importSuccess": "{{count}} issue(s) imported successfully",
 		"successTitle": "Import Successful!",
@@ -1844,6 +1849,7 @@
 		"errorNoProject": "No project selected",
 		"projectLabel": "Project:",
 		"searchPlaceholder": "Search issues...",
+		"searchingByKey": "Searching for issue…",
 		"filterTypeLabel": "Issue Type",
 		"filterTypeAll": "All Types",
 		"filterStateLabel": "State",
@@ -2020,6 +2026,7 @@
 		"checkingCopilotCli": "Checking Copilot CLI...",
 		"copilotCliUpToDate": "Copilot CLI is up to date",
 		"copilotCliExtensionNotInstalled": "Copilot CLI extension not installed",
+		"updateLocked": "Update blocked: a running Copilot CLI process is holding the package files open. Close any open Copilot terminals or sessions and try again. If the problem persists, restart WorkPilot.",
 		"gitHubCliNotFound": "GitHub CLI (gh) not found — required for Copilot",
 		"errorCheckingCopilotCli": "Error checking Copilot CLI",
 		"loadingInstallations": "Loading installations...",
@@ -2151,6 +2158,72 @@
 				"rejected": "Rejected",
 				"changes_requested": "Changes requested"
 			}
+		}
+	},
+	"githubCopilot": {
+		"title": "GitHub Copilot",
+		"description": "Authenticate with GitHub Copilot to use its models via the CLI or a Personal Access Token.",
+		"authenticate": "Sign in",
+		"logout": "Sign out",
+		"authSuccess": "Authentication successful",
+		"authSuccessDescription": "You are now signed in to GitHub Copilot.",
+		"logoutSuccess": "Signed out",
+		"logoutSuccessDescription": "You have been signed out of GitHub Copilot.",
+		"tokenSaved": "Token saved",
+		"tokenSavedDescription": "Your Personal Access Token has been saved.",
+		"tokenRemoved": "Token removed",
+		"tokenRemovedDescription": "Your Personal Access Token has been removed.",
+		"testSuccess": "Connection successful",
+		"testFailed": "Connection failed",
+		"testError": "Test error",
+		"status": {
+			"installed": "GitHub CLI installed (version {{version}})",
+			"notInstalled": "GitHub CLI not installed",
+			"authenticated": "Authenticated",
+			"notAuthenticated": "Not authenticated",
+			"authenticatedAs": "signed in as {{username}}"
+		},
+		"authMethod": {
+			"title": "Authentication method",
+			"description": "Choose between signing in via the GitHub CLI terminal or entering a Personal Access Token directly.",
+			"selectLabel": "Method",
+			"selectPlaceholder": "Select a method",
+			"terminal": "Terminal (gh auth login)",
+			"token": "Personal Access Token (PAT)"
+		},
+		"token": {
+			"inputLabel": "Personal Access Token",
+			"inputPlaceholder": "ghp_...",
+			"save": "Save token",
+			"remove": "Remove",
+			"currentStatus": "Status:",
+			"configured": "Configured",
+			"useInstead": "Use a Personal Access Token instead",
+			"hide": "Hide"
+		},
+		"instructions": {
+			"title": "Instructions",
+			"authentication": {
+				"title": "Authenticate via terminal",
+				"step1": "Click \"Sign in\" to open an integrated terminal.",
+				"step2": "Follow the GitHub CLI prompts to authenticate in your browser.",
+				"step3": "Status will refresh automatically once authentication completes."
+			},
+			"token": {
+				"title": "Authenticate via Personal Access Token",
+				"step1": "Generate a PAT at https://github.com/settings/tokens with the required scopes.",
+				"step2": "Paste the token in the field above.",
+				"step3": "Click \"Save token\" to validate it."
+			}
+		},
+		"errors": {
+			"tokenRequired": "Token required",
+			"tokenRequiredDescription": "Please enter a Personal Access Token.",
+			"saveFailed": "Save failed",
+			"removeFailed": "Removal failed",
+			"authFailed": "Authentication failed",
+			"logoutFailed": "Sign-out failed",
+			"unknownError": "An unknown error occurred."
 		}
 	}
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
 	GitConflictInfo,
 	ImageAttachment,
+	IPCResult,
 	MergeConflict,
 	MergeStats,
 	Task,
@@ -10,6 +11,7 @@ import type {
 	WorktreeDiff,
 	WorktreeStatus,
 } from "../../../../shared/types";
+import { isTaskPaused } from "../../../../shared/utils/task-pause";
 import { consumePendingTaskDetailTab } from "../../../lib/task-detail-nav";
 import { useProjectStore } from "../../../stores/project-store";
 import { useSettingsStore } from "../../../stores/settings-store";
@@ -121,9 +123,13 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 	const [expandedPhases, setExpandedPhases] = useState<Set<TaskLogPhase>>(
 		new Set(),
 	);
+	const [currentLogPhase, setCurrentLogPhase] = useState<TaskLogPhase | null>(
+		null,
+	);
 	const [isLoadingPlan, setIsLoadingPlan] = useState(false);
 	const logsEndRef = useRef<HTMLDivElement>(null);
 	const logsContainerRef = useRef<HTMLDivElement>(null);
+	const prevStatusRef = useRef<string | undefined>(task.status);
 
 	// Merge preview state
 	const [mergePreview, setMergePreview] = useState<{
@@ -156,11 +162,41 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 	const isIncomplete = isIncompleteHumanReview(task);
 	const taskProgress = getTaskProgress(task);
 
+	// A cooperative pause (e.g. to switch LLM provider) finishes the current step
+	// and lets the subprocess exit while the task status stays "in_progress".
+	// That dead-process-but-in_progress state must NOT be treated as stuck, and
+	// the pause controls need the real subprocess liveness to know when the step
+	// has actually finished.
+	const isPaused = isTaskPaused(task);
+	const [pauseProcessAlive, setPauseProcessAlive] = useState<boolean | null>(
+		null,
+	);
+
+	useEffect(() => {
+		if (!isPaused) {
+			setPauseProcessAlive(null);
+			return;
+		}
+		let cancelled = false;
+		const poll = () => {
+			checkTaskRunning(task.id).then((alive) => {
+				if (!cancelled) setPauseProcessAlive(alive);
+			});
+		};
+		poll();
+		const intervalId = setInterval(poll, 3_000);
+		return () => {
+			cancelled = true;
+			clearInterval(intervalId);
+		};
+	}, [task.id, isPaused]);
+
 	// Catastrophic stuck detection — last-resort safety net.
 	// XState handles all normal process-exit transitions via PROCESS_EXITED events.
 	// This only fires if XState somehow fails to transition after 60s with no activity.
+	// A deliberately-paused task is excluded: its subprocess is expected to be gone.
 	useEffect(() => {
-		if (!isActiveTask) {
+		if (!isActiveTask || isPaused) {
 			setIsStuck(false);
 			setHasCheckedRunning(false);
 			return;
@@ -183,7 +219,22 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		}, 60_000);
 
 		return () => clearInterval(intervalId);
-	}, [task.id, isActiveTask]);
+	}, [task.id, isActiveTask, isPaused]);
+
+	// Cache buster: when task transitions from human_review → in_progress (QA process starts),
+	// force a fresh load to bust the 3-second cache and allow incremental plan updates
+	useEffect(() => {
+		const prevStatus = prevStatusRef.current;
+		prevStatusRef.current = task.status;
+
+		if (
+			prevStatus === "human_review" &&
+			task.status === "in_progress" &&
+			selectedProject
+		) {
+			loadTasks(selectedProject.id, { forceRefresh: true });
+		}
+	}, [task.status, selectedProject]);
 
 	// Handle scroll events in logs to detect if user scrolled away from anchor
 	const handleLogsScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -202,14 +253,19 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 	useEffect(() => {
 		const isReverseOrder = logOrder === "reverse-chronological";
 
-		if (activeTab === "logs" && !isUserScrolledUp) {
+		if (activeTab !== "logs" || isUserScrolledUp) return;
+
+		// Small timeout to ensure the DOM has rendered (tab switch or new log entry)
+		const timer = setTimeout(() => {
 			if (isReverseOrder && logsContainerRef.current) {
 				logsContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
 			} else if (!isReverseOrder && logsEndRef.current) {
 				logsEndRef.current.scrollIntoView({ behavior: "smooth" });
 			}
-		}
-	}, [activeTab, isUserScrolledUp, logOrder]);
+		}, 50);
+
+		return () => clearTimeout(timer);
+	}, [activeTab, isUserScrolledUp, logOrder, phaseLogs]);
 
 	// Reset scroll state when switching to logs tab
 	useEffect(() => {
@@ -234,11 +290,20 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 				window.electronAPI.getWorktreeDiff(task.id),
 			])
 				.then(([statusResult, diffResult]) => {
-					if (statusResult.success && statusResult.data) {
-						setWorktreeStatus(statusResult.data);
+					const status = statusResult.success ? statusResult.data : null;
+					const diff = diffResult.success ? diffResult.data : null;
+					// Reconcile status stats with diff data: the diff already filters
+					// out discarded files, so derive accurate counts from it
+					if (status && diff) {
+						status.filesChanged = diff.files.length;
+						status.additions = diff.files.reduce((s, f) => s + f.additions, 0);
+						status.deletions = diff.files.reduce((s, f) => s + f.deletions, 0);
 					}
-					if (diffResult.success && diffResult.data) {
-						setWorktreeDiff(diffResult.data);
+					if (status) {
+						setWorktreeStatus(status);
+					}
+					if (diff) {
+						setWorktreeDiff(diff);
 					}
 				})
 				.catch((err) => {
@@ -354,6 +419,26 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		}
 	}, [task.id]);
 
+	// Helper to process a single API result and collect errors
+	const processAPIResult = <T,>(
+		result: PromiseSettledResult<IPCResult<T>>,
+		label: string,
+		onSuccess: (data: T) => void,
+		errors: string[],
+	) => {
+		if (result.status === "fulfilled") {
+			const res = result.value;
+			if (res.success && res.data) {
+				onSuccess(res.data);
+			} else if (!res.success && res.error) {
+				errors.push(`${label}: ${res.error}`);
+			}
+		} else {
+			console.error(`[useTaskDetail] Failed to load ${label}:`, result.reason);
+			errors.push(`Failed to load ${label}`);
+		}
+	};
+
 	// Load merge preview (conflict detection) and refresh worktree status
 	const loadMergePreview = useCallback(async () => {
 		setIsLoadingPreview(true);
@@ -361,48 +446,61 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		setWorkspaceError(null);
 
 		try {
-			// Fetch both merge preview and updated worktree status in parallel
+			// Fetch merge preview, worktree diff, and updated worktree status in parallel
 			// This ensures the branch information (currentProjectBranch) is refreshed
 			// when the user clicks the refresh button after switching branches locally
 			// Use Promise.allSettled to handle partial failures - if one API call fails,
 			// the other's result is still processed rather than being discarded
-			const [previewResult, statusResult] = await Promise.allSettled([
+			const [previewResult, statusResult, diffResult] = await Promise.allSettled([
 				window.electronAPI.mergeWorktreePreview(task.id),
 				window.electronAPI.getWorktreeStatus(task.id),
+				window.electronAPI.getWorktreeDiff(task.id),
 			]);
 
 			const errors: string[] = [];
 
-			// Process merge preview result if fulfilled
-			if (previewResult.status === "fulfilled") {
-				const result = previewResult.value;
-				if (result.success && result.data?.preview) {
-					setMergePreview(result.data.preview);
-				} else if (!result.success && result.error) {
-					errors.push(`Merge preview: ${result.error}`);
-				}
-			} else {
-				console.error(
-					"[useTaskDetail] Failed to load merge preview:",
-					previewResult.reason,
-				);
-				errors.push("Failed to load merge preview");
+			processAPIResult(
+				previewResult,
+				"Merge preview",
+				(data: any) => {
+					setMergePreview(data?.preview);
+				},
+				errors,
+			);
+
+			// Collect errors for status/diff (side-effect only); the actual
+			// values are extracted directly from the settled results below so
+			// TS control-flow analysis can narrow them correctly.
+			processAPIResult(statusResult, "Worktree status", () => {}, errors);
+			processAPIResult(diffResult, "Worktree diff", () => {}, errors);
+
+			const latestStatus: WorktreeStatus | null =
+				statusResult.status === "fulfilled" &&
+				statusResult.value.success &&
+				statusResult.value.data
+					? statusResult.value.data
+					: null;
+			const latestDiff: WorktreeDiff | null =
+				diffResult.status === "fulfilled" &&
+				diffResult.value.success &&
+				diffResult.value.data
+					? diffResult.value.data
+					: null;
+
+			if (latestDiff) {
+				setWorktreeDiff(latestDiff);
 			}
 
-			// Update worktree status with fresh branch information if fulfilled
-			if (statusResult.status === "fulfilled") {
-				const result = statusResult.value;
-				if (result.success && result.data) {
-					setWorktreeStatus(result.data);
-				} else if (!result.success && result.error) {
-					errors.push(`Worktree status: ${result.error}`);
+			// Reconcile status stats with diff data: the diff already filters
+			// out discarded files, so derive accurate counts from it.
+			if (latestStatus) {
+				if (latestDiff) {
+					const files = latestDiff.files;
+					latestStatus.filesChanged = files.length;
+					latestStatus.additions = files.reduce((s, f) => s + f.additions, 0);
+					latestStatus.deletions = files.reduce((s, f) => s + f.deletions, 0);
 				}
-			} else {
-				console.error(
-					"[useTaskDetail] Failed to load worktree status:",
-					statusResult.reason,
-				);
-				errors.push("Failed to load worktree status");
+				setWorktreeStatus(latestStatus);
 			}
 
 			// Set workspace error if any API calls failed
@@ -444,11 +542,19 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 				window.electronAPI.getWorktreeStatus(task.id),
 				window.electronAPI.getWorktreeDiff(task.id),
 			]);
-			if (statusResult.success && statusResult.data) {
-				setWorktreeStatus(statusResult.data);
+			const status = statusResult.success ? statusResult.data : null;
+			const diff = diffResult.success ? diffResult.data : null;
+			// Reconcile status stats with diff data (diff filters discarded files)
+			if (status && diff) {
+				status.filesChanged = diff.files.length;
+				status.additions = diff.files.reduce((s, f) => s + f.additions, 0);
+				status.deletions = diff.files.reduce((s, f) => s + f.deletions, 0);
 			}
-			if (diffResult.success && diffResult.data) {
-				setWorktreeDiff(diffResult.data);
+			if (status) {
+				setWorktreeStatus(status);
+			}
+			if (diff) {
+				setWorktreeDiff(diff);
 			}
 
 			// Reload task data from store to reflect cleared staged state
@@ -462,6 +568,35 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 			setIsLoadingWorktree(false);
 		}
 	}, [task.id, selectedProject]);
+
+	// Lightweight refresh of the worktree diff only (status + diff), WITHOUT the
+	// expensive Python merge-preview subprocess. Used after discarding/adding/
+	// editing files in the diff dialog so the list updates immediately instead of
+	// waiting on loadMergePreview (1-30s) or forcing the user to reopen the popup.
+	const refreshWorktreeDiff = useCallback(async () => {
+		try {
+			const [statusResult, diffResult] = await Promise.all([
+				window.electronAPI.getWorktreeStatus(task.id),
+				window.electronAPI.getWorktreeDiff(task.id),
+			]);
+			const status = statusResult.success ? statusResult.data : null;
+			const diff = diffResult.success ? diffResult.data : null;
+			// Reconcile status stats with diff data (diff filters discarded files)
+			if (status && diff) {
+				status.filesChanged = diff.files.length;
+				status.additions = diff.files.reduce((s, f) => s + f.additions, 0);
+				status.deletions = diff.files.reduce((s, f) => s + f.deletions, 0);
+			}
+			if (status) {
+				setWorktreeStatus(status);
+			}
+			if (diff) {
+				setWorktreeDiff(diff);
+			}
+		} catch (err) {
+			console.error("[useTaskDetail] Failed to refresh worktree diff:", err);
+		}
+	}, [task.id]);
 
 	// NOTE: Merge preview is NO LONGER auto-loaded on modal open.
 	// User must click "Check for Conflicts" button to trigger the expensive preview operation.
@@ -581,10 +716,14 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		phaseLogs,
 		isLoadingLogs,
 		expandedPhases,
+		currentLogPhase,
+		setCurrentLogPhase,
 		logsEndRef,
 		logsContainerRef,
 		selectedProject,
 		isRunning,
+		isPaused,
+		pauseProcessAlive,
 		needsReview,
 		executionPhase,
 		hasActiveExecution,
@@ -637,6 +776,7 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		handleLogsScroll,
 		togglePhase,
 		loadMergePreview,
+		refreshWorktreeDiff,
 		addFeedbackImage,
 		addFeedbackImages,
 		removeFeedbackImage,

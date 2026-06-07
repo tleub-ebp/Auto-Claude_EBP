@@ -21,6 +21,7 @@ However, specific scanners can be configured based on project needs.
 from __future__ import annotations
 
 import os
+import threading
 import warnings
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ SECURITY_TOOLS_AVAILABLE = {
 
 
 _TOOL_AVAILABILITY_CHECKED = False
+_tool_check_lock = threading.Lock()
 
 
 def _check_tool_availability(force: bool = False):
@@ -47,10 +49,17 @@ def _check_tool_availability(force: bool = False):
     named bandit/snyk/etc. that happened to be on PATH.
     """
     global _TOOL_AVAILABILITY_CHECKED
+    # Fast path: already done and no force-recheck requested
     if _TOOL_AVAILABILITY_CHECKED and not force:
         return
-    _TOOL_AVAILABILITY_CHECKED = True
 
+    with _tool_check_lock:
+        # Re-check under the lock to avoid double-work
+        if _TOOL_AVAILABILITY_CHECKED and not force:
+            return
+        _TOOL_AVAILABILITY_CHECKED = True
+
+    # Subprocess I/O happens OUTSIDE the lock to avoid blocking other threads
     import shutil
     import subprocess
 

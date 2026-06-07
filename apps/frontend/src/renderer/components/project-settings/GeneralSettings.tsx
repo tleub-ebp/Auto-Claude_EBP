@@ -190,6 +190,22 @@ export function GeneralSettings({
 								}
 							/>
 						</div>
+						<div className="flex items-center justify-between pt-2">
+							<div className="space-y-0.5">
+								<Label className="font-normal text-foreground">
+									{t("projectSections.general.tddMode")}
+								</Label>
+								<p className="text-xs text-muted-foreground">
+									{t("projectSections.general.tddModeDescription")}
+								</p>
+							</div>
+							<Switch
+								checked={settings.tddMode ?? false}
+								onCheckedChange={(checked) =>
+									setSettings({ ...settings, tddMode: checked })
+								}
+							/>
+						</div>
 					</section>
 
 					<Separator />

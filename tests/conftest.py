@@ -63,6 +63,7 @@ if _BACKEND_ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 _MODULES_TO_PRESERVE = [
     "core",
+    "core.agent_client",
     "core.platform",
     "core.auth",
     "review",

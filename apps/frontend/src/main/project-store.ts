@@ -30,6 +30,9 @@ import type {
 	TaskMetadata,
 	TaskStatus,
 } from "../shared/types";
+import { stripAcceptanceCriteriaSection } from "../shared/utils/acceptance-criteria";
+import { extractSubtaskFiles } from "../shared/utils/subtask-files";
+import { stripHtml } from "./ipc-handlers/shared/sanitize";
 import { getAutoBuildPath, isInitialized } from "./project-initializer";
 import { ensureAbsolutePath } from "./utils/path-helpers";
 import { findAllSpecPaths } from "./utils/spec-path-helpers";
@@ -61,6 +64,10 @@ export class ProjectStore {
 	private readonly data: StoreData;
 	private readonly tasksCache: Map<string, TasksCacheEntry> = new Map();
 	private readonly CACHE_TTL_MS = 3000; // 3 seconds TTL for task cache
+	// Per-spec parse errors captured by loadImplementationPlan. Used by
+	// getJsonErrorInfo to distinguish "file missing" (no entry) from
+	// "file malformed" (entry contains the real JSON.parse message).
+	private readonly planLoadErrors: Map<string, string> = new Map();
 
 	constructor() {
 		// Store in app's userData directory
@@ -695,7 +702,15 @@ export class ProjectStore {
 			);
 
 			const description = this.extractDescription(specPath, plan, hasJsonError);
-			const metadata = this.loadTaskMetadata(specPath);
+			const loadedMetadata = this.loadTaskMetadata(specPath);
+			// The pause flag lives in implementation_plan.json (the backend reads
+			// it there), not task_metadata.json. Surface it on task.metadata so the
+			// paused controls survive task-list reloads — otherwise the only source
+			// is the optimistic store update, which every rescan wipes.
+			const metadata =
+				plan?.paused !== undefined
+					? { ...(loadedMetadata ?? {}), paused: plan.paused }
+					: loadedMetadata;
 			const { status: finalStatus, reviewReason: finalReviewReason } =
 				this.determineFinalStatus(plan, hasJsonError);
 			const subtasks = this.extractSubtasks(plan);
@@ -744,7 +759,13 @@ export class ProjectStore {
 	}
 
 	/**
-	 * Load implementation plan from spec directory
+	 * Load implementation plan from spec directory.
+	 *
+	 * Returns `null` for two very different cases — missing file vs. malformed
+	 * JSON. Callers must distinguish them, so the actual parse failure is also
+	 * stashed on `this.planLoadErrors` keyed by spec name; absence of an entry
+	 * there means "no plan file yet", which is normal during early task setup
+	 * and must NOT be reported as a JSON parse error.
 	 */
 	private loadImplementationPlan(
 		specPath: string,
@@ -752,12 +773,20 @@ export class ProjectStore {
 	): ImplementationPlan | null {
 		const planPath = path.join(specPath, AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN);
 
+		// Clear any previous error entry so a now-valid plan no longer surfaces
+		// the old "JSON parse error" toast.
+		this.planLoadErrors.delete(specName);
+
 		if (!existsSync(planPath)) {
 			return null;
 		}
 
 		try {
 			const content = readFileSync(planPath, "utf-8");
+			// Empty file is a transient mid-write state, not a malformed plan.
+			if (content.trim() === "") {
+				return null;
+			}
 			return JSON.parse(content);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
@@ -765,23 +794,41 @@ export class ProjectStore {
 				`[ProjectStore] JSON parse error for spec ${specName}:`,
 				errorMessage,
 			);
+			this.planLoadErrors.set(specName, errorMessage);
 			return null;
 		}
 	}
 
 	/**
-	 * Get JSON error information
+	 * Get JSON error information.
+	 *
+	 * A null plan can mean two things:
+	 *   1. The implementation_plan.json file isn't there yet (newly created
+	 *      spec, planner hasn't run, or the file was just deleted) — this is
+	 *      NOT an error and the UI must show the User Story description from
+	 *      the spec instead of a scary "malformed JSON" banner.
+	 *   2. The file exists but couldn't be parsed — this IS the case we want
+	 *      to surface, with the real parser message so the user knows where
+	 *      to look.
+	 *
+	 * We tell the two apart via `planLoadErrors`, populated by
+	 * loadImplementationPlan when JSON.parse throws.
 	 */
 	private getJsonErrorInfo(
 		plan: ImplementationPlan | null,
-		_specName: string,
+		specName: string,
 	): { hasJsonError: boolean; jsonErrorMessage: string } {
 		if (plan !== null) {
 			return { hasJsonError: false, jsonErrorMessage: "" };
 		}
 
-		// This indicates a JSON parse error occurred during loading
-		return { hasJsonError: true, jsonErrorMessage: "JSON parse error" };
+		const recordedError = this.planLoadErrors.get(specName);
+		if (!recordedError) {
+			// No plan file (or empty/in-flight write) — not a parse error.
+			return { hasJsonError: false, jsonErrorMessage: "" };
+		}
+
+		return { hasJsonError: true, jsonErrorMessage: recordedError };
 	}
 
 	/**
@@ -796,19 +843,81 @@ export class ProjectStore {
 			return "";
 		}
 
+		// Pick whichever source has content (plan → requirements → spec.md),
+		// then strip any Acceptance Criteria section. AC are surfaced by the
+		// dedicated UI panel, so having them inside the description too is
+		// just a visual duplicate the user has to scroll past. This runs on
+		// every load, so tasks imported before the import-time fix get
+		// cleaned up automatically the next time the kanban refreshes.
+		let raw: string | null = null;
+
+		// PRIORITY 0: HTML enrichi conservé pour l'affichage (imports tracker).
+		// Contient les images inlinées ; on l'affiche tel quel sans toucher aux AC
+		// (le HTML n'utilise pas les sections markdown nettoyées plus bas).
+		const displayDescription = this.getRequirementsDisplayDescription(specPath);
+		if (displayDescription) {
+			return displayDescription;
+		}
+
 		// PRIORITY 1: From implementation plan
 		if (plan?.description) {
-			return plan.description;
+			raw = plan.description;
 		}
 
 		// PRIORITY 2: From requirements.json
-		const requirementsDescription = this.getRequirementsDescription(specPath);
-		if (requirementsDescription) {
-			return requirementsDescription;
+		if (!raw) {
+			const requirementsDescription =
+				this.getRequirementsDescription(specPath);
+			if (requirementsDescription) raw = requirementsDescription;
 		}
 
 		// PRIORITY 3: From spec.md Overview
-		return this.getSpecOverview(specPath);
+		if (!raw) raw = this.getSpecOverview(specPath);
+
+		return raw ? stripAcceptanceCriteriaSection(raw) : "";
+	}
+
+	/**
+	 * Get the rich HTML display description from requirements.json, if any.
+	 * Renseigné à l'import (Azure DevOps) avec les images inlinées.
+	 */
+	private getRequirementsDisplayDescription(specPath: string): string {
+		const requirementsPath = path.join(specPath, AUTO_BUILD_PATHS.REQUIREMENTS);
+
+		if (!existsSync(requirementsPath)) {
+			return "";
+		}
+
+		try {
+			const reqContent = readFileSync(requirementsPath, "utf-8");
+			const requirements = JSON.parse(reqContent);
+			return requirements.display_description || "";
+		} catch {
+			return "";
+		}
+	}
+
+	/**
+	 * Get the clean, accented display title from requirements.json, if any.
+	 * Renseigné à l'import (Azure DevOps) ou par l'hydratation à l'ouverture.
+	 * Évite de retomber sur le nom de dossier slugifié (accents perdus).
+	 */
+	private getRequirementsDisplayTitle(specPath: string): string {
+		const requirementsPath = path.join(specPath, AUTO_BUILD_PATHS.REQUIREMENTS);
+
+		if (!existsSync(requirementsPath)) {
+			return "";
+		}
+
+		try {
+			const reqContent = readFileSync(requirementsPath, "utf-8");
+			const requirements = JSON.parse(reqContent);
+			return typeof requirements.display_title === "string"
+				? requirements.display_title.trim()
+				: "";
+		} catch {
+			return "";
+		}
 	}
 
 	/**
@@ -851,21 +960,58 @@ export class ProjectStore {
 	}
 
 	/**
-	 * Load task metadata
+	 * Load task metadata, enriching acceptanceCriteria from requirements.json
+	 * when not already present in task_metadata.json (backward-compat for old imports).
 	 */
 	private loadTaskMetadata(specPath: string): TaskMetadata | undefined {
 		const metadataPath = path.join(specPath, "task_metadata.json");
 
-		if (!existsSync(metadataPath)) {
-			return undefined;
+		let metadata: TaskMetadata | undefined;
+		let metadataExists = false;
+		if (existsSync(metadataPath)) {
+			metadataExists = true;
+			try {
+				const content = readFileSync(metadataPath, "utf-8");
+				metadata = JSON.parse(content);
+			} catch {
+				metadata = undefined;
+			}
 		}
 
-		try {
-			const content = readFileSync(metadataPath, "utf-8");
-			return JSON.parse(content);
-		} catch {
-			return undefined;
+		// Fallback: populate acceptanceCriteria from requirements.json ONLY when
+		// task_metadata.json doesn't exist yet (or has no `acceptanceCriteria`
+		// key at all — meaning the task pre-dates the metadata-stored AC era).
+		// Once the user has edited the AC via the UI, task_metadata.json has the
+		// key set — possibly to an empty array if the user deleted everything —
+		// and that user choice is authoritative. The previous version restored
+		// from requirements.json whenever the array was empty/length-0, which
+		// silently undid user deletions and, more importantly, made
+		// `persistUpdateTask` look like a no-op on the next refresh.
+		const hasAcKey =
+			metadata !== undefined &&
+			Object.hasOwn(metadata, "acceptanceCriteria");
+		if (!metadataExists || (metadata && !hasAcKey)) {
+			const requirementsPath = path.join(specPath, AUTO_BUILD_PATHS.REQUIREMENTS);
+			if (existsSync(requirementsPath)) {
+				try {
+					const reqContent = readFileSync(requirementsPath, "utf-8");
+					const requirements = JSON.parse(reqContent);
+					if (
+						Array.isArray(requirements.acceptance_criteria) &&
+						requirements.acceptance_criteria.length > 0
+					) {
+						metadata = {
+							...metadata,
+							acceptanceCriteria: requirements.acceptance_criteria,
+						};
+					}
+				} catch {
+					// silently ignore parse errors
+				}
+			}
 		}
+
+		return metadata;
 	}
 
 	/**
@@ -898,7 +1044,7 @@ export class ProjectStore {
 					title: subtask.description,
 					description: subtask.description,
 					status: subtask.status,
-					files: [],
+					files: extractSubtaskFiles(subtask),
 				}));
 			}) || []
 		);
@@ -918,7 +1064,20 @@ export class ProjectStore {
 			return `${dirName}${JSON_ERROR_TITLE_SUFFIX}`;
 		}
 
-		// Get title from plan
+		// Highest priority: a clean, accented title persisted at import time or by
+		// the on-open hydration (requirements.display_title). This is what keeps
+		// imported US/RsD titles readable ("Fenêtre d'avertissement…") instead of
+		// the slugified folder name that has lost its accents.
+		const displayTitle = this.getRequirementsDisplayTitle(specPath);
+		if (displayTitle) {
+			return displayTitle.length > 200
+				? `${displayTitle.slice(0, 200)}…`
+				: displayTitle;
+		}
+
+		// Get title from plan. The spec-folder name (dirName) is a clean,
+		// slugified fallback we hold onto in case richer sources turn out to be
+		// HTML garbage (see below).
 		let title = plan?.feature || plan?.title || dirName;
 
 		// If it looks like a spec ID, try to extract title from spec file
@@ -928,6 +1087,23 @@ export class ProjectStore {
 			existsSync(path.join(specPath, AUTO_BUILD_PATHS.SPEC_FILE))
 		) {
 			title = this.extractTitleFromSpec(specPath) || title;
+		}
+
+		// Les titres issus d'imports (US/RsD Azure DevOps) peuvent contenir du
+		// HTML enrichi : on le réduit en texte brut sur une seule ligne pour ne
+		// jamais afficher de balises. Répare aussi les tâches déjà importées.
+		//
+		// Cas limite : certaines tâches anciennes ont un titre de spec qui est en
+		// réalité la description HTML brute, parfois tronquée en pleine balise
+		// (« …<b style=… »). Une fois le HTML retiré il ne reste rien d'utile :
+		// on revient alors au nom du dossier de spec (propre) plutôt que d'afficher
+		// un fragment de balise.
+		if (title.includes("<")) {
+			const plain = stripHtml(title).replace(/\s+/g, " ").trim();
+			title = plain.length >= 3 ? plain : dirName;
+		}
+		if (title.length > 200) {
+			title = `${title.slice(0, 200)}…`;
 		}
 
 		return title;

@@ -68,10 +68,21 @@ export interface TaskExecutionOptions {
 	useLocalBranch?: boolean; // If true, use local branch directly instead of preferring origin/branch
 	enableStreaming?: boolean; // Enable streaming mode for this task
 	streamingSessionId?: string; // Streaming session ID for live coding
+	// Claude Agent SDK session_id to resume. When set, the backend rehydrates
+	// transcript context instead of starting from scratch — used when a card
+	// hit error_max_turns or error_max_budget_usd and the user clicks "Reprendre".
+	// Injected into the subprocess env as AUTO_CLAUDE_RESUME_SESSION_ID.
+	resumeSessionId?: string;
+	// Per-task TDD override. true -> force strict TDD, false -> force disabled,
+	// undefined -> inherit project default. Injected as TDD_MODE env at spawn time.
+	tddMode?: boolean;
 }
 
 export interface SpecCreationMetadata {
 	requireReviewBeforeCoding?: boolean;
+	// Per-task TDD override. true -> force strict TDD, false -> force disabled,
+	// undefined -> inherit project default. Injected as TDD_MODE env at spawn time.
+	tddMode?: boolean;
 	// LLM provider (anthropic, openai, copilot, google, mistral, deepseek, grok, meta, aws, ollama)
 	provider?: string;
 	// Auto profile - phase-based model and thinking configuration

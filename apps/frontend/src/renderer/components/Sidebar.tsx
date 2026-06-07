@@ -1549,20 +1549,32 @@ export function Sidebar({
 		return subGroups;
 	};
 
-	const renderTooltipSubGroupItem = (item: NavItem) => (
-		<div
-			key={item.id}
-			className="flex items-center gap-2 text-xs p-1 rounded hover:bg-accent/50"
-		>
-			<item.icon className="h-3 w-3 shrink-0" />
-			<span className="truncate">{t(item.labelKey)}</span>
-			{item.shortcut && (
-				<kbd className="rounded border border-border bg-secondary px-1 font-mono text-[9px] ml-auto">
-					{item.shortcut}
-				</kbd>
-			)}
-		</div>
-	);
+	const renderTooltipSubGroupItem = (item: NavItem) => {
+		const isActive = activeView === item.id;
+		return (
+			<button
+				key={item.id}
+				type="button"
+				onClick={() => handleNavClick(item.id)}
+				disabled={!selectedProjectId}
+				aria-keyshortcuts={item.shortcut}
+				className={cn(
+					"w-full flex items-center gap-2 text-xs p-1 rounded text-left",
+					"hover:bg-accent hover:text-accent-foreground",
+					"disabled:pointer-events-none disabled:opacity-50",
+					isActive && "bg-accent text-accent-foreground",
+				)}
+			>
+				<item.icon className="h-3 w-3 shrink-0" />
+				<span className="flex-1 truncate">{t(item.labelKey)}</span>
+				{item.shortcut && (
+					<kbd className="rounded border border-border bg-secondary px-1 font-mono text-[9px]">
+						{item.shortcut}
+					</kbd>
+				)}
+			</button>
+		);
+	};
 
 	const renderTooltipItems = (items: NavItem[]) => {
 		const hasSubGroups = items.some((item) => item.subGroup);
@@ -2192,15 +2204,17 @@ export function Sidebar({
 					<Collapsible
 						open={isCliPanelExpanded}
 						onOpenChange={setIsCliPanelExpanded}
+						className={isCollapsed ? "flex flex-col" : undefined}
 					>
 						<CollapsibleTrigger asChild>
 							<Button
 								variant="ghost"
-								size="sm"
-								className={cn(
-									"w-full justify-start gap-2 text-xs font-medium",
-									isCollapsed ? "h-8 w-8 p-0" : "h-8",
-								)}
+								size={isCollapsed ? "icon" : "sm"}
+								className={
+									isCollapsed
+										? "self-center"
+										: "w-full h-8 justify-start gap-2 text-xs font-medium"
+								}
 							>
 								<Wrench className="h-4 w-4" />
 								{!isCollapsed && (

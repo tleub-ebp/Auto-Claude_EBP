@@ -8,11 +8,13 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import type { Task } from "../../../../shared/types";
+import { usePullRequestStats } from "../../../hooks/usePullRequestStats";
 import { persistTaskStatus, startTask } from "../../../stores/task-store";
 import { Button } from "../../ui/button";
+import { PullRequestStats } from "./PullRequestStats";
 
 interface LoadingMessageProps {
-	message?: string;
+	readonly message?: string;
 }
 
 /**
@@ -32,16 +34,23 @@ export function LoadingMessage({
 }
 
 interface NoWorkspaceMessageProps {
-	task?: Task;
-	onClose?: () => void;
+	readonly task?: Task;
+	readonly onClose?: () => void;
 }
 
 /**
  * Displays message when no workspace is found for the task
+ * Falls back to showing PR stats if a PR exists
  */
 export function NoWorkspaceMessage({ task, onClose }: NoWorkspaceMessageProps) {
 	const [isMarkingDone, setIsMarkingDone] = useState(false);
 	const [isProceeding, setIsProceeding] = useState(false);
+
+	const prUrl = task?.metadata?.prUrl;
+	const { prData, isLoading: isLoadingPR } = usePullRequestStats(
+		prUrl,
+		task?.id,
+	);
 
 	const isPlanReview =
 		task?.status === "human_review" && task.reviewReason === "plan_review";
@@ -66,7 +75,7 @@ export function NoWorkspaceMessage({ task, onClose }: NoWorkspaceMessageProps) {
 
 		setIsProceeding(true);
 		try {
-			await startTask(task.id);
+			startTask(task.id);
 		} catch (err) {
 			console.error("Error proceeding to coding:", err);
 		} finally {
@@ -74,6 +83,49 @@ export function NoWorkspaceMessage({ task, onClose }: NoWorkspaceMessageProps) {
 		}
 	};
 
+	// If PR data is available and loaded, show PR stats instead
+	if (prData && !isLoadingPR) {
+		return (
+			<div className="space-y-4">
+				<PullRequestStats prData={prData} />
+				{task?.status === "human_review" && (
+					<Button
+						onClick={handleMarkDone}
+						disabled={isMarkingDone}
+						size="sm"
+						variant="default"
+						className="w-full"
+					>
+						{isMarkingDone ? (
+							<>
+								<Loader2 className="h-4 w-4 mr-2 animate-spin" />
+								Updating...
+							</>
+						) : (
+							<>
+								<Check className="h-4 w-4 mr-2" />
+								Mark as Done
+							</>
+						)}
+					</Button>
+				)}
+			</div>
+		);
+	}
+
+	// Loading PR data
+	if (isLoadingPR && prUrl) {
+		return (
+			<div className="rounded-xl border border-border bg-secondary/30 p-4">
+				<div className="flex items-center gap-2 text-muted-foreground">
+					<Loader2 className="h-4 w-4 animate-spin" />
+					<span className="text-sm">Loading PR information...</span>
+				</div>
+			</div>
+		);
+	}
+
+	// Default: no workspace and no PR
 	return (
 		<div className="rounded-xl border border-border bg-secondary/30 p-4">
 			<h3 className="font-medium text-sm text-foreground mb-2 flex items-center gap-2">
@@ -108,8 +160,7 @@ export function NoWorkspaceMessage({ task, onClose }: NoWorkspaceMessageProps) {
 					)}
 				</Button>
 			) : (
-				task &&
-				task.status === "human_review" && (
+				task?.status === "human_review" && (
 					<Button
 						onClick={handleMarkDone}
 						disabled={isMarkingDone}
@@ -136,11 +187,11 @@ export function NoWorkspaceMessage({ task, onClose }: NoWorkspaceMessageProps) {
 }
 
 interface StagedInProjectMessageProps {
-	task: Task;
-	projectPath?: string;
-	hasWorktree?: boolean;
-	onClose?: () => void;
-	onReviewAgain?: () => void;
+	readonly task: Task;
+	readonly projectPath?: string;
+	readonly hasWorktree?: boolean;
+	readonly onClose?: () => void;
+	readonly onReviewAgain?: () => void;
 }
 
 /**
@@ -166,7 +217,7 @@ export function StagedInProjectMessage({
 			// Call the discard/delete worktree command
 			// Pass skipStatusChange=true to prevent backend from resetting to 'backlog'
 			// since we explicitly set status to 'done' immediately after
-			const result = await window.electronAPI.discardWorktree(task.id, true);
+			const result = await globalThis.electronAPI.discardWorktree(task.id, true);
 
 			if (!result.success) {
 				setError(result.error || "Failed to delete worktree");
@@ -219,7 +270,7 @@ export function StagedInProjectMessage({
 
 		try {
 			// Clear the staged flag via IPC
-			const result = await window.electronAPI.clearStagedState(task.id);
+			const result = await globalThis.electronAPI.clearStagedState(task.id);
 
 			if (!result.success) {
 				setError(result.error || "Failed to reset staged state");

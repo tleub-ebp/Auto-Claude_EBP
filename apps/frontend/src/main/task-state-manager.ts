@@ -108,6 +108,27 @@ export class TaskStateManager {
 			return;
 		}
 		const actor = this.getOrCreateActor(taskId);
+
+		// Safety net: if process exited with code 0 but no terminal event was
+		// seen, and XState is stuck in coding or qa_review, synthesise a
+		// QA_PASSED event so the task moves to human_review instead of being
+		// stuck forever.  This covers edge cases where the backend fails to
+		// emit ALL_SUBTASKS_DONE or QA_PASSED (e.g., QA already approved).
+		if (exitCode === 0) {
+			const currentState = String(actor.getSnapshot().value);
+			if (currentState === "coding" || currentState === "qa_review") {
+				console.warn(
+					`[TaskStateManager] Process exited code 0 with no terminal event in state '${currentState}' for task ${taskId} — synthesising QA_PASSED`,
+				);
+				actor.send({
+					type: "QA_PASSED",
+					iteration: 0,
+					testsRun: {},
+				} satisfies TaskEvent);
+				return;
+			}
+		}
+
 		// Only mark as unexpected if the process exited with a non-zero code.
 		// A code-0 exit is normal (e.g., spec creation finished, plan created, waiting for review).
 		// Sending unexpected:true for code-0 exits incorrectly transitions plan_review → error.

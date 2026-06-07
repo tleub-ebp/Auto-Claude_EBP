@@ -44,6 +44,7 @@ import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
 import { ClassificationFields } from "./ClassificationFields";
 import { ImagePreviewModal } from "./ImagePreviewModal";
+import { RichTextEditor } from "./RichTextEditor";
 import { type FileReferenceData, useImageUpload } from "./useImageUpload";
 
 interface TaskFormFieldsProps {
@@ -55,6 +56,13 @@ interface TaskFormFieldsProps {
 	description: string;
 	onDescriptionChange: (value: string) => void;
 	descriptionPlaceholder?: string;
+	/**
+	 * Render the description as a WYSIWYG rich-text editor instead of a plain
+	 * textarea. Used when the description may contain HTML (e.g. tasks imported
+	 * from Azure DevOps) so the markup is shown rendered, not as raw text.
+	 * Not compatible with the @ mention overlay (textarea-only).
+	 */
+	richText?: boolean;
 	/** Optional custom content to render inside the description field (e.g., autocomplete popup) */
 	descriptionOverlay?: ReactNode;
 	/** Optional ref for the description textarea (used for @ mention autocomplete positioning) */
@@ -100,6 +108,10 @@ interface TaskFormFieldsProps {
 	requireReviewBeforeCoding: boolean;
 	onRequireReviewChange: (require: boolean) => void;
 
+	// TDD override (per-task)
+	tddMode: boolean;
+	onTddModeChange: (tdd: boolean) => void;
+
 	// Form state
 	disabled?: boolean;
 	error?: string | null;
@@ -121,6 +133,7 @@ export function TaskFormFields({
 	description,
 	onDescriptionChange,
 	descriptionPlaceholder,
+	richText = false,
 	descriptionOverlay,
 	descriptionRef: externalDescriptionRef,
 	title,
@@ -149,6 +162,8 @@ export function TaskFormFields({
 	onImagesChange,
 	requireReviewBeforeCoding,
 	onRequireReviewChange,
+	tddMode,
+	onTddModeChange,
 	disabled = false,
 	error,
 	onError,
@@ -323,35 +338,55 @@ export function TaskFormFields({
 						{t("tasks:form.description")}{" "}
 						<span className="text-destructive">*</span>
 					</Label>
-					<div className="relative">
-						{/* Optional overlay (e.g., @ mention highlighting) */}
-						{descriptionOverlay}
-						<Textarea
-							ref={descriptionRef}
+					{richText ? (
+						<RichTextEditor
 							id={`${prefix}description`}
+							value={description}
+							onChange={onDescriptionChange}
 							placeholder={
 								descriptionPlaceholder || t("tasks:form.descriptionPlaceholder")
 							}
-							value={description}
-							onChange={(e) => onDescriptionChange(e.target.value)}
+							disabled={disabled}
+							ariaRequired
+							ariaDescribedBy={`${prefix}description-help`}
+							isDragOver={isDragOver}
 							onPaste={handlePaste}
 							onDragOver={handleDragOver}
 							onDragLeave={handleDragLeave}
 							onDrop={handleDrop}
-							rows={6}
-							disabled={disabled}
-							aria-required="true"
-							aria-describedby={`${prefix}description-help`}
-							className={cn(
-								"resize-y min-h-[150px] max-h-[400px] relative",
-								descriptionOverlay && "bg-transparent",
-								isDragOver &&
-									!disabled &&
-									"border-primary bg-primary/5 ring-2 ring-primary/20",
-							)}
-							style={descriptionOverlay ? { caretColor: "auto" } : undefined}
 						/>
-					</div>
+					) : (
+						<div className="relative">
+							{/* Optional overlay (e.g., @ mention highlighting) */}
+							{descriptionOverlay}
+							<Textarea
+								ref={descriptionRef}
+								id={`${prefix}description`}
+								placeholder={
+									descriptionPlaceholder ||
+									t("tasks:form.descriptionPlaceholder")
+								}
+								value={description}
+								onChange={(e) => onDescriptionChange(e.target.value)}
+								onPaste={handlePaste}
+								onDragOver={handleDragOver}
+								onDragLeave={handleDragLeave}
+								onDrop={handleDrop}
+								rows={6}
+								disabled={disabled}
+								aria-required="true"
+								aria-describedby={`${prefix}description-help`}
+								className={cn(
+									"resize-y min-h-[150px] max-h-[400px] relative",
+									descriptionOverlay && "bg-transparent",
+									isDragOver &&
+										!disabled &&
+										"border-primary bg-primary/5 ring-2 ring-primary/20",
+								)}
+								style={descriptionOverlay ? { caretColor: "auto" } : undefined}
+							/>
+						</div>
+					)}
 					<div className="flex items-center justify-between">
 						<p
 							id={`${prefix}description-help`}
@@ -602,6 +637,28 @@ export function TaskFormFields({
 						</Label>
 						<p className="text-xs text-muted-foreground">
 							{t("tasks:form.requireReviewDescription")}
+						</p>
+					</div>
+				</div>
+
+				{/* TDD Override Toggle */}
+				<div className="flex items-start gap-3 p-4 rounded-lg border border-border bg-muted/30">
+					<Checkbox
+						id={`${prefix}tdd-mode`}
+						checked={tddMode}
+						onCheckedChange={(checked) => onTddModeChange(checked === true)}
+						disabled={disabled}
+						className="mt-0.5"
+					/>
+					<div className="flex-1 space-y-1">
+						<Label
+							htmlFor={`${prefix}tdd-mode`}
+							className="text-sm font-medium text-foreground cursor-pointer"
+						>
+							{t("tasks:form.tddModeLabel")}
+						</Label>
+						<p className="text-xs text-muted-foreground">
+							{t("tasks:form.tddModeDescription")}
 						</p>
 					</div>
 				</div>

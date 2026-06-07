@@ -7,6 +7,7 @@ and report generation.
 """
 
 import json
+import os
 from collections import Counter
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -15,8 +16,29 @@ from typing import Any
 
 from .criteria import load_implementation_plan, save_implementation_plan
 
+
+def _read_int_env(name: str, default: int, *, minimum: int = 1) -> int:
+    """Lit une variable d'env entière, retombe sur ``default`` si invalide."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= minimum else default
+
+
 # Configuration
-RECURRING_ISSUE_THRESHOLD = 3  # Escalate if same issue appears this many times
+# Seuil par défaut : 8 occurrences avant escalade humaine. L'ancien seuil de 3
+# faisait escalader la boucle dès la 3ᵉ itération sur 50, dès qu'une issue
+# persistait — y compris des faux positifs non-actionables comme « Cannot
+# verify without runtime ». 8 laisse au fixer une vraie chance de converger
+# tout en gardant un garde-fou contre les boucles infinies. Surchargeable via
+# ``WORKPILOT_QA_RECURRING_THRESHOLD``.
+RECURRING_ISSUE_THRESHOLD = _read_int_env(
+    "WORKPILOT_QA_RECURRING_THRESHOLD", default=8, minimum=2
+)
 ISSUE_SIMILARITY_THRESHOLD = 0.8  # Consider issues "same" if similarity >= this
 
 
@@ -133,6 +155,34 @@ def _issue_similarity(issue1: dict[str, Any], issue2: dict[str, Any]) -> float:
     return SequenceMatcher(None, key1, key2).ratio()
 
 
+# Motifs d'issues qu'on ignore pour la détection de récurrence : le fixer ne
+# peut pas les résoudre (besoin runtime, validation manuelle, etc.). Sans ce
+# filtre, la boucle escalade à cause de faux positifs persistants alors que
+# le code livré est en réalité correct.
+_NON_FIXABLE_ISSUE_MARKERS = (
+    "cannot verify without runtime",
+    "cannot be verified without runtime",
+    "requires runtime verification",
+    "requires manual testing",
+    "requires manual verification",
+    "needs manual review",
+    "manual qa required",
+)
+
+
+def _is_non_fixable_issue(issue: dict[str, Any]) -> bool:
+    """Détermine si une issue est intrinsèquement non-actionable par le fixer."""
+    haystack_parts = [
+        issue.get("title") or "",
+        issue.get("description") or "",
+        issue.get("details") or "",
+        issue.get("message") or "",
+        issue.get("category") or "",
+    ]
+    haystack = " ".join(str(part) for part in haystack_parts).lower()
+    return any(marker in haystack for marker in _NON_FIXABLE_ISSUE_MARKERS)
+
+
 def has_recurring_issues(
     current_issues: list[dict[str, Any]],
     history: list[dict[str, Any]],
@@ -160,6 +210,13 @@ def has_recurring_issues(
     recurring = []
 
     for current in current_issues:
+        # Les issues non-actionables (« cannot verify without runtime » etc.)
+        # ne doivent pas faire escalader la boucle : le fixer ne peut rien y
+        # faire, c'est une revue humaine qu'il faut, mais pas en plein milieu
+        # d'un cycle de fixes potentiellement utiles.
+        if _is_non_fixable_issue(current):
+            continue
+
         occurrence_count = 1  # Count current occurrence
 
         for historical in historical_issues:
@@ -519,5 +576,21 @@ def is_no_test_project(spec_dir: Path, project_dir: Path) -> bool:
                     or f.name.endswith(".test.ts")
                 ):
                     return False
+
+    # Check for .NET test frameworks
+    for csproj in project_dir.glob("**/*.csproj"):
+        try:
+            content = csproj.read_text(encoding="utf-8", errors="ignore")
+            if any(
+                fw in content
+                for fw in ["NUnit", "xunit", "MSTest", "Microsoft.NET.Test.Sdk"]
+            ):
+                return False
+        except OSError:
+            pass
+
+    # Check for .sln (solution = likely has test projects)
+    if any(project_dir.glob("*.sln")):
+        return False
 
     return True

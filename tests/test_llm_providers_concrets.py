@@ -35,7 +35,7 @@ AnthropicProvider = import_module_from_file("src.connectors.llm_anthropic", conn
 
 @pytest.mark.parametrize("provider_cls,kwargs,should_validate", [
     (OpenAIProvider, {"api_key": "sk-test", "model": "gpt-3.5-turbo"}, False),
-    (ClaudeProvider, {"api_key": "sk-test", "model": "claude-3-sonnet-20240229"}, True),
+    (ClaudeProvider, {"api_key": "sk-ant-test", "model": "claude-3-sonnet-20240229"}, True),
     (OllamaProvider, {"model": "llama2"}, False),
     (GoogleLLMProvider, {"api_key": "test", "model": "gemini-2.0-flash"}, True),
     (AnthropicProvider, {"api_key": "sk-ant-test", "model": "claude-3-sonnet-20240229"}, True),

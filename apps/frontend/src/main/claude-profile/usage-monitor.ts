@@ -3120,8 +3120,41 @@ export class UsageMonitor extends EventEmitter {
 			const usage = data.usage;
 			const copilotDetails = data.copilotUsageDetails || {};
 
+			// New branch: personal-quotas (Premium Requests from /copilot_internal/user)
+			if (copilotDetails.scope === "personal-quotas") {
+				const pctUsed =
+					typeof copilotDetails.premiumRequestsPercentUsed === "number"
+						? copilotDetails.premiumRequestsPercentUsed
+						: 0;
+				const sessionPct = copilotDetails.premiumRequestsUnlimited
+					? 0
+					: Math.min(Math.max(pctUsed, 0), 100);
+
+				return {
+					sessionPercent: sessionPct,
+					weeklyPercent: sessionPct,
+					sessionResetTime: copilotDetails.quotaResetDate,
+					weeklyResetTime: copilotDetails.quotaResetDate,
+					sessionResetTimestamp: copilotDetails.quotaResetDate,
+					weeklyResetTimestamp: copilotDetails.quotaResetDate,
+					profileId,
+					profileName,
+					profileEmail,
+					fetchedAt: new Date(data.fetched_at || Date.now()),
+					limitType: "session" as const,
+					usageWindows: {
+						sessionWindowLabel: "common:usage.window5Hour",
+						weeklyWindowLabel: "common:usage.window7Day",
+					},
+					sessionUsageValue: copilotDetails.premiumRequestsUsed,
+					sessionUsageLimit: copilotDetails.premiumRequestsEntitlement,
+					providerName: "copilot",
+					copilotUsageDetails: copilotDetails,
+				} as UsageSnapshot;
+			}
+
+			// Legacy branch: aggregated metrics (admin enterprise/org)
 			// Calculate percentages based on suggestions (assuming 1000 as a reasonable limit)
-			// This is a placeholder - in a real implementation, you'd get actual limits from GitHub
 			const suggestions =
 				usage.total_suggestions || copilotDetails.suggestions || 0;
 			const sessionPercent = Math.min((suggestions / 1000) * 100, 100);

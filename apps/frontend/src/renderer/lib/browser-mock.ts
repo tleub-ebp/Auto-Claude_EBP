@@ -529,6 +529,10 @@ const browserMockAPI: ElectronAPI = {
 			error: undefined,
 		},
 	}),
+	syncAzureDevOpsTaskAC: async () => ({
+		success: true,
+		data: { acceptanceCriteria: [] },
+	}),
 
 	// Jira Operations
 	getJiraIssues: async () => ({

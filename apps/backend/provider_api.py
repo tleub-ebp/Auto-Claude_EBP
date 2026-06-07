@@ -6,6 +6,20 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
+# Windows: force the Proactor event-loop policy BEFORE anything else creates
+# a loop. uvicorn (especially with --reload) defaults to the Selector loop on
+# Python ≥ 3.8, which raises NotImplementedError on `asyncio.create_subprocess_exec`.
+# The Claude Agent SDK spawns the bundled `claude.exe` via subprocess, so the
+# /api/slash-commands/run endpoint (and any future SDK-backed endpoint) would
+# fail with "Failed to start Claude Code" without this fix.
+# Safe no-op on Linux/macOS where the policy attribute doesn't exist.
+if sys.platform == "win32":
+    import asyncio as _asyncio
+
+    _policy_cls = getattr(_asyncio, "WindowsProactorEventLoopPolicy", None)
+    if _policy_cls is not None:
+        _asyncio.set_event_loop_policy(_policy_cls())
+
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
 
 # Install the global log redaction filter as early as possible — before
@@ -21,17 +35,20 @@ import ipaddress
 import json
 import os
 import socket
+import threading
 from typing import Annotated, Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import Body, FastAPI, HTTPException, Path, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+
+from apps.backend.models_registry import get_default
 
 # Import specific exception for provider validation failures
 try:
@@ -225,6 +242,35 @@ app.add_middleware(
 
 # Global variable to store selected provider (ContextVar doesn't work across HTTP requests)
 _selected_provider: str | None = None
+_provider_lock = threading.Lock()
+
+
+def _get_anthropic_token() -> str | None:
+    """Get the first available Anthropic auth token from env or system keyring."""
+    token = (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
+        or os.getenv("CLAUDE_API_KEY")
+    )
+    if not token:
+        from src.connectors.llm_config import get_claude_token_from_system
+
+        token = get_claude_token_from_system()
+    return token
+
+
+def _check_copilot_gh_auth() -> bool:
+    """Return True if 'gh auth status' reports success."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "status"], capture_output=True, text=True, timeout=5
+        )
+        return GITHUB_CLI_AUTH_SUCCESS in (result.stdout + result.stderr)
+    except Exception:
+        logger.debug("Failed to check GitHub Copilot auth — skipping", exc_info=True)
+        return False
 
 
 def get_env_provider_config(name: str) -> dict | None:
@@ -236,46 +282,62 @@ def get_env_provider_config(name: str) -> dict | None:
 
             token = get_claude_token_from_system()
         if token:
-            return {"api_key": token, "model": "claude-opus-4-6"}
+            default_model = get_default("anthropic")
+            model_id = default_model.model_id if default_model else "claude-opus-4-7"
+            return {"api_key": token, "model": model_id}
         return None
 
     # OpenAI
     if name == "openai" and os.getenv("OPENAI_API_KEY"):
+        default_model = get_default("openai")
+        model_id = default_model.model_id if default_model else "gpt-5.5"
         return {
             "api_key": os.getenv("OPENAI_API_KEY"),
-            "model": "gpt-5.2",
+            "model": model_id,
             "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         }
 
     # Google Gemini
     if name == "google" and os.getenv("GOOGLE_API_KEY"):
-        return {"api_key": os.getenv("GOOGLE_API_KEY"), "model": "gemini-2.5-pro"}
+        default_model = get_default("google")
+        model_id = default_model.model_id if default_model else "gemini-3.1-pro"
+        return {"api_key": os.getenv("GOOGLE_API_KEY"), "model": model_id}
 
     # Mistral AI
     if name == "mistral" and os.getenv("MISTRAL_API_KEY"):
+        default_model = get_default("mistral")
+        model_id = default_model.model_id if default_model else "mistral-large-3"
         return {
             "api_key": os.getenv("MISTRAL_API_KEY"),
-            "model": "mistral-large-2",
+            "model": model_id,
             "base_url": os.getenv("MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),
         }
 
     # DeepSeek
     if name == "deepseek" and os.getenv("DEEPSEEK_API_KEY"):
+        default_model = get_default("deepseek")
+        model_id = default_model.model_id if default_model else "deepseek-v4"
         return {
             "api_key": os.getenv("DEEPSEEK_API_KEY"),
-            "model": "deepseek-r2",
+            "model": model_id,
             "base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
         }
 
     # Grok (xAI)
     if name == "grok" and os.getenv("GROK_API_KEY"):
-        return {"api_key": os.getenv("GROK_API_KEY"), "model": "grok-2"}
+        default_model = get_default("grok")
+        model_id = default_model.model_id if default_model else "grok-4.3"
+        return {"api_key": os.getenv("GROK_API_KEY"), "model": model_id}
 
     # Meta (LLaMA) — via Together AI or Replicate
     if name == "meta" and os.getenv("META_API_KEY"):
+        default_model = get_default("meta")
+        model_id = (
+            default_model.model_id if default_model else "meta-llama/llama-4-scout"
+        )
         return {
             "api_key": os.getenv("META_API_KEY"),
-            "model": "meta-llama/llama-4-scout",
+            "model": model_id,
             "base_url": os.getenv("META_BASE_URL", "https://api.together.xyz/v1"),
         }
 
@@ -284,11 +346,15 @@ def get_env_provider_config(name: str) -> dict | None:
         access_key = os.getenv("AWS_ACCESS_KEY_ID")
         secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
         if access_key and secret_key:
+            default_model = get_default("aws")
+            model_id = (
+                default_model.model_id if default_model else "anthropic.claude-opus-4-7"
+            )
             return {
                 "api_key": access_key,
                 "secret_key": secret_key,
                 "region": os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-                "model": "anthropic.claude-opus-4-6-v1",
+                "model": model_id,
             }
         return None
 
@@ -301,11 +367,10 @@ def get_env_provider_config(name: str) -> dict | None:
         try:
             parsed = urlparse(base_url)
         except Exception:
+            logger.debug("Failed to parse Ollama base URL — skipping", exc_info=True)
             return None
         if parsed.scheme not in ("http", "https"):
-            logger.debug(
-                "Refusing Ollama probe to non-http(s) URL: %s", base_url
-            )
+            logger.debug("Refusing Ollama probe to non-http(s) URL: %s", base_url)
             return None
         # Vérifier si Ollama est accessible
         try:
@@ -320,16 +385,8 @@ def get_env_provider_config(name: str) -> dict | None:
 
     # GitHub Copilot (gh CLI)
     if name == "copilot":
-        try:
-            import subprocess
-
-            result = subprocess.run(
-                ["gh", "auth", "status"], capture_output=True, text=True, timeout=5
-            )
-            if GITHUB_CLI_AUTH_SUCCESS in (result.stdout + result.stderr):
-                return {"authenticated": True, "model": "gpt-4o"}
-        except Exception as e:
-            logger.debug("GitHub Copilot auth check failed: %s", e)
+        if _check_copilot_gh_auth():
+            return {"authenticated": True, "model": "gpt-4o"}
         return None
 
     # Windsurf (Codeium)
@@ -438,26 +495,13 @@ def get_providers():
         for p in providers:
             name = p["name"]
             config = None
-            # print(f"DEBUG: provider={name} tentative fichier: fichier absent")
             config = get_env_provider_config(name)
-            # print(f"DEBUG: provider={name} tentative env: config={config}")
             if name == "anthropic" or name == "claude":
-                token = (
-                    os.getenv("ANTHROPIC_API_KEY")
-                    or os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
-                    or os.getenv("CLAUDE_API_KEY")
-                )
-                if not token:
-                    from src.connectors.llm_config import get_claude_token_from_system
-
-                    token = get_claude_token_from_system()
-                status[name] = bool(token)
-                # print(f"DEBUG: provider={name} status OAuth/API={status[name]}")
+                status[name] = bool(_get_anthropic_token())
             else:
                 status[name] = bool(
                     config and (config.get("api_key") or config.get("base_url"))
                 )
-                # print(f"DEBUG: provider={name} status final={status[name]}")
         return {"providers": providers, "status": status}
     # Si le fichier existe, on garde la logique mixte
     with open(config_path, encoding="utf-8") as f:
@@ -477,13 +521,9 @@ def get_providers():
             cfg.get("oauth_token") for cfg in provider_configs if cfg.get("oauth_token")
         )
         if name == "anthropic" or name == "claude":
-            token = os.getenv("ANTHROPIC_API_KEY")
-            if not token:
-                from src.connectors.llm_config import get_claude_token_from_system
-
-                token = get_claude_token_from_system()
-            status[name] = bool(token) or has_valid_key or has_oauth_token
-            # print(f"DEBUG: provider={name} status OAuth/API={status[name]}")
+            status[name] = (
+                bool(_get_anthropic_token()) or has_valid_key or has_oauth_token
+            )
         else:
             env_key = os.getenv(f"{name.upper()}_API_KEY")
             # For Windsurf, check OAuth token instead of API key
@@ -516,20 +556,7 @@ def get_providers():
                 is_valid = is_validated(name, api_key)
             # Cas spécial pour Copilot : vérifier l'authentification gh CLI
             if name == "copilot":
-                try:
-                    import subprocess
-
-                    result = subprocess.run(
-                        ["gh", "auth", "status"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
-                    status[name] = GITHUB_CLI_AUTH_SUCCESS in (
-                        result.stdout + result.stderr
-                    )
-                except Exception:
-                    status[name] = False
+                status[name] = _check_copilot_gh_auth()
             else:
                 status[name] = is_valid or (
                     env_key is not None and env_key.strip() != ""
@@ -568,7 +595,8 @@ def delete_provider_config_api(provider: str):
 @app.post("/providers/select")
 def select_provider(provider: Annotated[str, Query(...)]):
     global _selected_provider
-    _selected_provider = provider
+    with _provider_lock:
+        _selected_provider = provider
     return {"selected": provider}
 
 
@@ -579,8 +607,8 @@ def get_selected_provider_endpoint():
 
 
 def get_selected_provider() -> str | None:
-    global _selected_provider
-    return _selected_provider
+    with _provider_lock:
+        return _selected_provider
 
 
 @app.post(
@@ -1122,6 +1150,92 @@ def generate_with_provider(request: Request, provider: str, payload: dict[str, A
         raise HTTPException(status_code=400, detail=GENERATION_FAILED.format(e=e))
 
 
+# Per-provider key-validation specs. Keep this in sync with AUTHORIZED_URLS above.
+# auth_style: how the API key is presented to the provider.
+#   "bearer"     → Authorization: Bearer <key>
+#   "x-api-key"  → x-api-key: <key>  (Anthropic-style)
+#   "query"      → appended as ?key=<key> (Google-style)
+# ok_statuses: status codes that count as a valid key (some providers return 403/404
+#   on the models endpoint even with a valid key — that still proves auth worked).
+_VALIDATION_SPECS: dict[str, dict[str, Any]] = {
+    "openai": {
+        "url": "https://api.openai.com" + API_MODELS_ENDPOINT,
+        "auth_style": "bearer",
+        "ok_statuses": (200,),
+    },
+    "grok": {
+        "url": "https://api.x.ai" + API_MODELS_ENDPOINT,
+        "auth_style": "bearer",
+        "ok_statuses": (200,),
+    },
+    "anthropic": {
+        "url": "https://api.anthropic.com" + API_MODELS_ENDPOINT,
+        "auth_style": "x-api-key",
+        "ok_statuses": (200, 403),
+        "extra_headers": {"anthropic-version": "2023-06-01"},
+    },
+    "claude": {
+        "url": "https://api.anthropic.com" + API_MODELS_ENDPOINT,
+        "auth_style": "x-api-key",
+        "ok_statuses": (200, 403),
+        "extra_headers": {"anthropic-version": "2023-06-01"},
+    },
+    "google": {
+        "url": "https://generativelanguage.googleapis.com" + API_MODELS_ENDPOINT,
+        "auth_style": "query",
+        "ok_statuses": (200,),
+    },
+    "windsurf": {
+        "url": "https://server.codeium.com/api" + API_MODELS_ENDPOINT,
+        "auth_style": "bearer",
+        "ok_statuses": (200, 404),
+    },
+    "mistral": {
+        "url": "https://api.mistral.ai" + API_MODELS_ENDPOINT,
+        "auth_style": "bearer",
+        "ok_statuses": (200,),
+    },
+    "deepseek": {
+        "url": "https://api.deepseek.com" + API_MODELS_ENDPOINT,
+        "auth_style": "bearer",
+        "ok_statuses": (200,),
+    },
+}
+
+
+async def _validate_key_http(provider: str, api_key: str, spec: dict[str, Any]) -> None:
+    """Test an API key by hitting the provider's models endpoint.
+
+    Raises HTTPException(400) and marks the key invalid on any failure.
+    """
+    url = spec["url"]
+    auth_style = spec["auth_style"]
+    ok_statuses = spec["ok_statuses"]
+    headers: dict[str, str] = dict(spec.get("extra_headers", {}))
+
+    if auth_style == "bearer":
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif auth_style == "x-api-key":
+        headers["x-api-key"] = api_key
+    elif auth_style == "query":
+        url = f"{url}?key={api_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
+            resp = await client.get(url, headers=headers, timeout=10)
+        if resp.status_code not in ok_statuses:
+            set_validated(provider, api_key, False)
+            raise HTTPException(
+                status_code=400, detail=API_KEY_VALIDATION_FAILED_INVALID
+            )
+    except httpx.HTTPError as e:
+        set_validated(provider, api_key, False)
+        raise HTTPException(
+            status_code=400,
+            detail=API_KEY_VALIDATION_FAILED_ERROR.format(e=_safe_error_message(e)),
+        )
+
+
 @app.post(
     "/providers/validate/{provider}",
     responses={400: {"description": "API key validation failed"}},
@@ -1131,132 +1245,9 @@ async def validate_provider_key(
     request: Request, provider: str, api_key: Annotated[str, Body(..., embed=True)]
 ):
     """Validate a provider API key by actually testing it before marking as valid."""
-    # Actually test the key before marking it as validated
-    if provider in ("openai",):
-        try:
-            url = "https://api.openai.com" + API_MODELS_ENDPOINT
-            headers = {"Authorization": f"Bearer {api_key}"}
-            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-                resp = await client.get(url, headers=headers, timeout=10)
-            if resp.status_code != 200:
-                set_validated(provider, api_key, False)
-                raise HTTPException(
-                    status_code=400, detail=API_KEY_VALIDATION_FAILED_INVALID
-                )
-        except httpx.HTTPError as e:
-            set_validated(provider, api_key, False)
-            raise HTTPException(
-                status_code=400,
-                detail=API_KEY_VALIDATION_FAILED_ERROR.format(e=_safe_error_message(e)),
-            )
-    elif provider in ("grok",):
-        try:
-            url = "https://api.x.ai" + API_MODELS_ENDPOINT
-            headers = {"Authorization": f"Bearer {api_key}"}
-            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-                resp = await client.get(url, headers=headers, timeout=10)
-            if resp.status_code != 200:
-                set_validated(provider, api_key, False)
-                raise HTTPException(
-                    status_code=400, detail=API_KEY_VALIDATION_FAILED_INVALID
-                )
-        except httpx.HTTPError as e:
-            set_validated(provider, api_key, False)
-            raise HTTPException(
-                status_code=400,
-                detail=API_KEY_VALIDATION_FAILED_ERROR.format(e=_safe_error_message(e)),
-            )
-    elif provider in ("anthropic", "claude"):
-        try:
-            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
-            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-                resp = await client.get(
-                    "https://api.anthropic.com" + API_MODELS_ENDPOINT,
-                    headers=headers,
-                    timeout=10,
-                )
-            if resp.status_code not in (200, 403):
-                set_validated(provider, api_key, False)
-                raise HTTPException(
-                    status_code=400, detail=API_KEY_VALIDATION_FAILED_INVALID
-                )
-        except httpx.HTTPError as e:
-            set_validated(provider, api_key, False)
-            raise HTTPException(
-                status_code=400,
-                detail=API_KEY_VALIDATION_FAILED_ERROR.format(e=_safe_error_message(e)),
-            )
-    elif provider in ("google",):
-        try:
-            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-                resp = await client.get(
-                    f"https://generativelanguage.googleapis.com{API_MODELS_ENDPOINT}?key={api_key}",
-                    timeout=10,
-                )
-            if resp.status_code != 200:
-                set_validated(provider, api_key, False)
-                raise HTTPException(
-                    status_code=400, detail=API_KEY_VALIDATION_FAILED_INVALID
-                )
-        except httpx.HTTPError as e:
-            set_validated(provider, api_key, False)
-            raise HTTPException(
-                status_code=400,
-                detail=API_KEY_VALIDATION_FAILED_ERROR.format(e=_safe_error_message(e)),
-            )
-    elif provider in ("windsurf",):
-        try:
-            url = "https://server.codeium.com/api" + API_MODELS_ENDPOINT
-            headers = {"Authorization": f"Bearer {api_key}"}
-            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-                resp = await client.get(url, headers=headers, timeout=10)
-            if resp.status_code not in (200, 404):
-                set_validated(provider, api_key, False)
-                raise HTTPException(
-                    status_code=400, detail=API_KEY_VALIDATION_FAILED_INVALID
-                )
-        except httpx.HTTPError as e:
-            set_validated(provider, api_key, False)
-            raise HTTPException(
-                status_code=400,
-                detail=API_KEY_VALIDATION_FAILED_ERROR.format(e=_safe_error_message(e)),
-            )
-    elif provider in ("mistral",):
-        try:
-            url = "https://api.mistral.ai" + API_MODELS_ENDPOINT
-            headers = {"Authorization": f"Bearer {api_key}"}
-            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-                resp = await client.get(url, headers=headers, timeout=10)
-            if resp.status_code != 200:
-                set_validated(provider, api_key, False)
-                raise HTTPException(
-                    status_code=400, detail=API_KEY_VALIDATION_FAILED_INVALID
-                )
-        except httpx.HTTPError as e:
-            set_validated(provider, api_key, False)
-            raise HTTPException(
-                status_code=400,
-                detail=API_KEY_VALIDATION_FAILED_ERROR.format(e=_safe_error_message(e)),
-            )
-    elif provider in ("deepseek",):
-        try:
-            url = "https://api.deepseek.com" + API_MODELS_ENDPOINT
-            headers = {"Authorization": f"Bearer {api_key}"}
-            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-                resp = await client.get(url, headers=headers, timeout=10)
-            if resp.status_code != 200:
-                set_validated(provider, api_key, False)
-                raise HTTPException(
-                    status_code=400, detail=API_KEY_VALIDATION_FAILED_INVALID
-                )
-        except httpx.HTTPError as e:
-            set_validated(provider, api_key, False)
-            raise HTTPException(
-                status_code=400,
-                detail=API_KEY_VALIDATION_FAILED_ERROR.format(e=_safe_error_message(e)),
-            )
-    else:
-        # For providers without specific validation (meta, cursor, copilot, ollama, aws)
+    spec = _VALIDATION_SPECS.get(provider)
+    if spec is None:
+        # Providers without specific validation (meta, cursor, copilot, ollama, aws)
         # Accept the key if it's non-empty
         if api_key and api_key.strip():
             set_validated(provider, api_key, True)
@@ -1266,6 +1257,7 @@ async def validate_provider_key(
             detail=f"Provider '{provider}': API key is empty",
         )
 
+    await _validate_key_http(provider, api_key, spec)
     set_validated(provider, api_key, True)
     return {"status": "validated"}
 
@@ -1319,6 +1311,9 @@ def health_check():
             cfg = get_env_provider_config(name)
             provider_status[name] = cfg is not None
         except Exception:
+            logger.debug(
+                "Failed to check provider %s availability", name, exc_info=True
+            )
             provider_status[name] = False
     subsystems["providers"] = {"status": "ok", "available": provider_status}
 
@@ -1444,6 +1439,46 @@ async def get_provider_usage(provider: str):
                     ),
                 }
 
+            # Branche "personal-quotas": quotas Premium Requests via
+            # /copilot_internal/user — c'est ce que la UI github.com affiche.
+            if usage_data.get("scope") == "personal-quotas":
+                premium = usage_data.get("premium_requests", {}) or {}
+                chat = usage_data.get("chat", {}) or {}
+                completions = usage_data.get("completions", {}) or {}
+                return {
+                    "provider": "copilot",
+                    "available": True,
+                    "usage": {
+                        "scope": "personal-quotas",
+                        "plan": usage_data.get("plan"),
+                        "login": usage_data.get("login"),
+                        "organization": usage_data.get("organization"),
+                        "premium_requests": premium,
+                        "chat": chat,
+                        "completions": completions,
+                        "quota_reset_date": usage_data.get("quota_reset_date"),
+                        "level": "user",
+                    },
+                    "fetched_at": usage_data.get("fetched_at"),
+                    "copilotUsageDetails": {
+                        "scope": "personal-quotas",
+                        "plan": usage_data.get("plan"),
+                        "organization": usage_data.get("organization"),
+                        "premiumRequestsUsed": premium.get("used", 0),
+                        "premiumRequestsEntitlement": premium.get("entitlement", 0),
+                        "premiumRequestsRemaining": premium.get("remaining", 0),
+                        "premiumRequestsPercentUsed": premium.get("percent_used", 0),
+                        "premiumRequestsPercentRemaining": premium.get(
+                            "percent_remaining"
+                        ),
+                        "premiumRequestsUnlimited": premium.get("unlimited", False),
+                        "chatUnlimited": chat.get("unlimited", False),
+                        "completionsUnlimited": completions.get("unlimited", False),
+                        "quotaResetDate": usage_data.get("quota_reset_date"),
+                    },
+                }
+
+            # Branche legacy: métriques agrégées enterprise/org (admin-only)
             return {
                 "provider": "copilot",
                 "available": True,
@@ -1464,6 +1499,7 @@ async def get_provider_usage(provider: str):
                 },
                 "fetched_at": usage_data.get("fetched_at"),
                 "copilotUsageDetails": {
+                    "scope": "aggregated-metrics",
                     "suggestions": usage_data.get("total_suggestions", 0),
                     "acceptances": usage_data.get("total_acceptances", 0),
                     "acceptanceRate": usage_data.get("acceptance_rate_percent", 0),
@@ -1473,7 +1509,7 @@ async def get_provider_usage(provider: str):
                         "line_acceptance_rate_percent", 0
                     ),
                 },
-            }  # Added closing bracket here
+            }
         except ImportError as e:
             return {"error": f"Module Copilot non disponible: {_safe_error_message(e)}"}
         except Exception as e:
@@ -1562,7 +1598,9 @@ async def get_provider_usage(provider: str):
                         "fetched_at": "now",
                     }
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to call Windsurf GetUser endpoint — skipping", exc_info=True
+                )
             return {
                 "provider": "windsurf",
                 "error": f"Erreur {resp.status_code}: {resp.text[:200]}",
@@ -1583,833 +1621,18 @@ async def get_provider_usage(provider: str):
 # ---------------------------------------------------------------------------
 
 
-# --- 1.1 Dashboard Metrics ---
-def _load_dashboard_snapshot(project_id: str) -> dict:
-    """Load dashboard_snapshot.json written by core.usage_tracker.
-    project_id is the project path (URL-decoded by FastAPI)."""
-    import json as _json
-    from pathlib import Path as _Path
+# Dashboard + Session History endpoints moved to dashboard/api.py
 
-    base_dir = _Path.cwd().resolve()
-    try:
-        project_path = (base_dir / project_id).resolve()
-        project_path.relative_to(base_dir)
-    except Exception:
-        return {}
 
-    if not project_path.is_dir():
-        return {}
-    snap_path = project_path / ".workpilot" / "dashboard_snapshot.json"
-    if snap_path.is_file() and str(snap_path.resolve()).startswith(str(project_path)):
-        try:
-            return _json.loads(snap_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {
-        "tasks_by_status": {},
-        "avg_completion_by_complexity": {},
-        "qa_first_pass_rate": 0.0,
-        "qa_avg_score": 0.0,
-        "total_tokens": 0,
-        "tokens_by_provider": {},
-        "total_cost": 0.0,
-        "cost_by_model": {},
-        "merge_auto_count": 0,
-        "merge_manual_count": 0,
-    }
+# Refactoring + documentation + feedback + templates + code-review
+# endpoints moved to agent_endpoints/api.py
+# System status endpoints moved to system_status/api.py
+# GitHub PR Details endpoint moved to runners/github/api.py
+# Test Generation Agent API moved to test_generation/api.py
+# Both mounted below alongside the other feature routers.
 
 
-@app.get("/api/dashboard/snapshot/{project_id:path}")
-def get_dashboard_snapshot(project_id: str):
-    try:
-        snap = _load_dashboard_snapshot(project_id)
-        # Compute merge rate
-        auto = snap.get("merge_auto_count", 0)
-        manual = snap.get("merge_manual_count", 0)
-        total_merges = auto + manual
-        merge_rate = (auto / total_merges * 100) if total_merges > 0 else 0.0
-        snap["merge_auto_rate"] = merge_rate
-        # Flatten avg_completion (list → mean)
-        avg_compl = {}
-        for k, v in snap.get("avg_completion_by_complexity", {}).items():
-            if isinstance(v, list) and v:
-                avg_compl[k] = sum(v) / len(v)
-            else:
-                avg_compl[k] = v or 0.0
-        snap["avg_completion_by_complexity"] = avg_compl
-        return {"success": True, "snapshot": snap}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.get("/api/dashboard/stats")
-def get_dashboard_stats():
-    return {"success": True, "stats": {}}
-
-
-@app.get("/api/dashboard/export/{project_id:path}")
-def export_dashboard(project_id: str, fmt: str = "json"):
-    try:
-        import csv as _csv
-        import io as _io
-
-        snap = _load_dashboard_snapshot(project_id)
-        if fmt == "csv":
-            buf = _io.StringIO()
-            writer = _csv.writer(buf)
-            writer.writerow(["metric", "value"])
-            for k, v in snap.items():
-                if not k.startswith("_"):
-                    writer.writerow([k, v])
-            return {"success": True, "report": buf.getvalue(), "format": "csv"}
-        return {"success": True, "report": snap, "format": "json"}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 1.2 Session History ---
-@app.get("/api/sessions/{project_id}")
-def get_sessions(project_id: str):
-    try:
-        from agents.session_history import SessionRecorder
-
-        sh = SessionRecorder(project_id=project_id)
-        sessions = sh.list_sessions()
-        return {
-            "success": True,
-            "sessions": [
-                s.to_dict() if hasattr(s, "to_dict") else s.__dict__ for s in sessions
-            ],
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 2.1 Refactoring Agent ---
-@app.post("/api/refactoring/detect-smells")
-def detect_smells(body: Annotated[dict[str, Any], Body(...)]):
-    try:
-        from agents.refactorer import RefactoringAgent
-
-        agent = RefactoringAgent(thresholds=body.get("thresholds", {}))
-        source = body.get("source", "")
-        smells = agent.detect_smells_from_source(source)
-        return {
-            "success": True,
-            "smells": [
-                s.to_dict() if hasattr(s, "to_dict") else s.__dict__ for s in smells
-            ],
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post("/api/refactoring/propose")
-def propose_refactoring(body: Annotated[dict[str, Any], Body(...)]):
-    try:
-        from agents.refactorer import RefactoringAgent
-
-        agent = RefactoringAgent(thresholds=body.get("thresholds", {}))
-        source = body.get("source", "")
-        proposals = agent.propose_refactoring(source=source)
-        return {
-            "success": True,
-            "proposals": [
-                p.to_dict() if hasattr(p, "to_dict") else p.__dict__ for p in proposals
-            ],
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 2.2 Documentation Agent ---
-@app.post("/api/documentation/coverage")
-def check_doc_coverage(body: Annotated[dict[str, Any], Body(...)]):
-    try:
-        from agents.documenter import DocFormat, DocumentationAgent
-
-        fmt = body.get("format", "google")
-        agent = DocumentationAgent(default_format=DocFormat(fmt))
-        file_path = body.get("file_path", "")
-        coverage = agent.check_documentation_coverage(file_path=file_path)
-        return {"success": True, "coverage": coverage}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post("/api/documentation/generate-docstrings")
-def generate_docstrings(body: Annotated[dict[str, Any], Body(...)]):
-    try:
-        from agents.documenter import DocFormat, DocumentationAgent
-
-        fmt = body.get("format", "google")
-        agent = DocumentationAgent(default_format=DocFormat(fmt))
-        file_path = body.get("file_path", "")
-        result = agent.generate_docstrings(file_path=file_path)
-        return {
-            "success": True,
-            "result": result.to_dict()
-            if hasattr(result, "to_dict")
-            else result.__dict__,
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post("/api/documentation/generate-readme")
-def generate_readme(body: Annotated[dict[str, Any], Body(...)]):
-    try:
-        from agents.documenter import DocFormat, DocumentationAgent
-
-        fmt = body.get("format", "google")
-        agent = DocumentationAgent(default_format=DocFormat(fmt))
-        dir_path = body.get("dir_path", "")
-        result = agent.generate_module_readme(dir_path)
-        return {
-            "success": True,
-            "result": result.to_dict()
-            if hasattr(result, "to_dict")
-            else result.__dict__,
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 2.4 Feedback Learning ---
-@app.get("/api/feedback/stats/{project_id}")
-def get_feedback_stats(project_id: str):
-    try:
-        from agents.feedback_learning import FeedbackLearning
-
-        fl = FeedbackLearning()
-        stats = fl.get_stats(project_id)
-        return {"success": True, "stats": stats}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 3.2 Task Templates ---
-@app.get("/api/templates")
-def list_task_templates():
-    try:
-        from scheduling.task_templates import TemplateManager
-
-        tm = TemplateManager()
-        templates = tm.list_templates()
-        return {
-            "success": True,
-            "templates": [
-                t.to_dict() if hasattr(t, "to_dict") else t.__dict__ for t in templates
-            ],
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 3.3 AI Code Review ---
-@app.post("/api/code-review/analyze")
-def analyze_code_review(body: Annotated[dict[str, Any], Body(...)]):
-    try:
-        from review.ai_code_review import AICodeReview
-
-        reviewer = AICodeReview()
-        diff = body.get("diff", "")
-        result = reviewer.review_diff(diff)
-        return {
-            "success": True,
-            "review": result.to_dict()
-            if hasattr(result, "to_dict")
-            else result.__dict__,
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 6.1 Intelligent Router ---
-@app.get("/api/router/config")
-def get_router_config():
-    try:
-        from scheduling.intelligent_router import IntelligentRouter
-
-        router = IntelligentRouter()
-        config = router.get_config()
-        return {"success": True, "config": config}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 6.2 Local Model Manager ---
-@app.get("/api/local-models/status")
-def get_local_models_status():
-    try:
-        from scheduling.local_model_manager import LocalModelManager
-
-        mgr = LocalModelManager()
-        status = mgr.get_status()
-        return {"success": True, "status": status}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 6.3 Cost Estimator ---
-@app.get("/api/costs/summary/{project_id}")
-def get_cost_summary(project_id: str):
-    try:
-        from scheduling.cost_estimator import CostEstimator
-
-        ce = CostEstimator()
-        summary = ce.get_summary(project_id)
-        return {"success": True, "summary": summary}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.get("/api/costs/budget/{project_id}")
-def get_cost_budget(project_id: str):
-    try:
-        from scheduling.cost_estimator import CostEstimator
-
-        ce = CostEstimator()
-        budget = ce.get_budget(project_id)
-        return {"success": True, "budget": budget}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 7.2 Sandbox ---
-@app.get("/api/sandbox/status")
-def get_sandbox_status():
-    try:
-        from security.sandbox import SandboxManager
-
-        mgr = SandboxManager()
-        status = mgr.get_status()
-        return {"success": True, "status": status}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 7.3 Anomaly Detector ---
-@app.get("/api/anomaly/status")
-def get_anomaly_status():
-    try:
-        from security.anomaly_detector import AnomalyDetector
-
-        detector = AnomalyDetector()
-        status = detector.get_status()
-        return {"success": True, "status": status}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 8.1 Scheduler ---
-@app.get("/api/scheduler/jobs")
-def get_scheduler_jobs():
-    try:
-        from scheduling.scheduler import TaskScheduler
-
-        sched = TaskScheduler()
-        jobs = sched.list_jobs()
-        return {
-            "success": True,
-            "jobs": [
-                j.to_dict() if hasattr(j, "to_dict") else j.__dict__ for j in jobs
-            ],
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 8.2 Auto-Detection ---
-@app.get("/api/auto-detect/status")
-def get_auto_detect_status():
-    try:
-        from scheduling.auto_detector import AutoDetector
-
-        detector = AutoDetector()
-        status = detector.get_status()
-        return {"success": True, "status": status}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- 9.1 GitHub PR Details ---
-@app.get("/api/github/pr-details")
-def get_pr_details(pr_url: Annotated[str, Query(...)]):
-    """Get PR details including files and diffs from GitHub."""
-    try:
-        from runners.github.providers.github_provider import GitHubProvider
-
-        # Extract PR number and repo from URL
-        # Expected format: https://github.com/owner/repo/pull/123
-        if "github.com" not in pr_url or "/pull/" not in pr_url:
-            return {"success": False, "error": "Invalid GitHub PR URL format"}
-
-        # Parse URL to get owner, repo, and PR number
-        parts = pr_url.strip("/").split("/")
-        if len(parts) < 5 or parts[3] != "pull":
-            return {"success": False, "error": "Invalid GitHub PR URL format"}
-
-        owner = parts[2]
-        repo = parts[3]
-        pr_number = parts[4]
-
-        # Initialize GitHub provider
-        provider = GitHubProvider()
-
-        # Fetch PR data
-        pr_data = provider.fetch_pr(owner, repo, int(pr_number))
-
-        if not pr_data:
-            return {"success": False, "error": "Failed to fetch PR data"}
-
-        # Convert to dict for JSON serialization
-        result = {
-            "success": True,
-            "data": {
-                "number": pr_data.number,
-                "title": pr_data.title,
-                "body": pr_data.body,
-                "state": pr_data.state,
-                "author": pr_data.author,
-                "createdAt": pr_data.created_at,
-                "updatedAt": pr_data.updated_at,
-                "url": pr_data.url,
-                "baseBranch": pr_data.base_branch,
-                "headBranch": pr_data.head_branch,
-                "mergeable": pr_data.mergeable,
-                "additions": pr_data.additions,
-                "deletions": pr_data.deletions,
-                "changedFiles": pr_data.changed_files,
-                "files": pr_data.files,
-                "diff": pr_data.diff,
-            },
-        }
-
-        return result
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- Test Generation Agent API ---
-@app.post("/api/test-generation/analyze-coverage")
-def analyze_test_coverage(
-    file_path: Annotated[str, Body(...)],
-    existing_test_path: Annotated[str | None, Body()] = None,
-):
-    """Analyze test coverage gaps for a source file."""
-    try:
-        from agents.test_generator import TestGeneratorAgent
-
-        agent = TestGeneratorAgent()
-        gaps = agent.analyze_coverage(file_path, existing_test_path)
-        return {
-            "success": True,
-            "gaps": [
-                {
-                    "function": {
-                        "name": gap.function.name,
-                        "module": gap.function.module,
-                        "class_name": gap.function.class_name,
-                        "args": gap.function.args,
-                        "return_type": gap.function.return_type,
-                        "docstring": gap.function.docstring,
-                        "line_number": gap.function.line_number,
-                        "is_async": gap.function.is_async,
-                        "decorators": gap.function.decorators,
-                        "complexity": gap.function.complexity,
-                        "full_name": gap.function.full_name,
-                        "is_private": gap.function.is_private,
-                        "is_dunder": gap.function.is_dunder,
-                    },
-                    "priority": gap.priority,
-                    "reason": gap.reason,
-                    "suggested_test_count": gap.suggested_test_count,
-                }
-                for gap in gaps
-            ],
-        }  # added closing brace here
-    except Exception as e:
-        return {
-            "success": False,
-            "error": _safe_error_message(e),
-        }  # added except block here
-
-
-@app.post("/api/test-generation/generate-unit-tests")
-def generate_unit_tests(
-    file_path: Annotated[str, Body(...)],
-    existing_test_path: Annotated[str | None, Body()] = None,
-    max_tests_per_function: int = 3,
-):
-    """Generate unit tests for a source file."""
-    try:
-        from agents.test_generator import TestGeneratorAgent
-
-        agent = TestGeneratorAgent()
-        result = agent.generate_unit_tests(
-            file_path, existing_test_path, max_tests_per_function
-        )
-        return {
-            "success": True,
-            "result": {
-                "source_file": result.source_file,
-                "functions_analyzed": result.functions_analyzed,
-                "tests_generated": result.tests_generated,
-                "coverage_gaps": [
-                    {
-                        "function": {
-                            "name": gap.function.name,
-                            "full_name": gap.function.full_name,
-                        },
-                        "priority": gap.priority,
-                        "reason": gap.reason,
-                        "suggested_test_count": gap.suggested_test_count,
-                    }
-                    for gap in result.coverage_gaps
-                ],
-                "generated_tests": [
-                    {
-                        "test_name": test.test_name,
-                        "test_code": test.test_code,
-                        "target_function": test.target_function,
-                        "test_type": test.test_type,
-                        "description": test.description,
-                        "imports": test.imports,
-                        "fixtures": test.fixtures,
-                    }
-                    for test in result.generated_tests
-                ],
-                "test_file_content": result.test_file_content,
-                "test_file_path": result.test_file_path,
-            },
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post("/api/test-generation/generate-e2e-tests")
-def generate_e2e_tests(
-    user_story: Annotated[str, Body(...)], target_module: Annotated[str, Body(...)]
-):
-    """Generate E2E tests from a user story."""
-    try:
-        from agents.test_generator import TestGeneratorAgent
-
-        agent = TestGeneratorAgent()
-        result = agent.generate_tests_from_user_story(user_story, target_module)
-        return {
-            "success": True,
-            "result": {
-                "source_file": result.source_file,
-                "functions_analyzed": result.functions_analyzed,
-                "tests_generated": result.tests_generated,
-                "generated_tests": [
-                    {
-                        "test_name": test.test_name,
-                        "test_code": test.test_code,
-                        "target_function": test.target_function,
-                        "test_type": test.test_type,
-                        "description": test.description,
-                        "imports": test.imports,
-                        "fixtures": test.fixtures,
-                    }
-                    for test in result.generated_tests
-                ],
-                "test_file_content": result.test_file_content,
-                "test_file_path": result.test_file_path,
-            },
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post("/api/test-generation/generate-tdd-tests")
-def generate_tdd_tests(spec: Annotated[dict, Body(...)]):
-    """Generate tests before implementation (TDD mode)."""
-    try:
-        from agents.test_generator import TestGeneratorAgent
-
-        agent = TestGeneratorAgent()
-        result = agent.generate_tdd_tests(spec)
-        return {
-            "success": True,
-            "result": {
-                "source_file": result.source_file,
-                "functions_analyzed": result.functions_analyzed,
-                "tests_generated": result.tests_generated,
-                "generated_tests": [
-                    {
-                        "test_name": test.test_name,
-                        "test_code": test.test_code,
-                        "target_function": test.target_function,
-                        "test_type": test.test_type,
-                        "description": test.description,
-                        "imports": test.imports,
-                        "fixtures": test.fixtures,
-                    }
-                    for test in result.generated_tests
-                ],
-                "test_file_content": result.test_file_content,
-                "test_file_path": result.test_file_path,
-            },
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post("/api/test-generation/run-post-build")
-def run_post_build_test_generation(
-    project_path: Annotated[str, Body(...)],
-    modified_files: Annotated[list[str], Body(...)],
-):
-    """Run automatic test generation after a build (post-build hook)."""
-    try:
-        from agents.test_generator import TestGeneratorAgent
-
-        agent = TestGeneratorAgent()
-        results = []
-
-        project_dir = os.path.realpath(project_path)
-        for file_path in modified_files:
-            # Validate file path stays within project directory
-            real_file = os.path.realpath(file_path)
-            if not real_file.startswith(project_dir):
-                continue
-            if file_path.endswith(".py") and os.path.exists(real_file):
-                # Skip test files themselves
-                if "test_" in file_path or "/tests/" in file_path:
-                    continue
-
-                # Find existing test file
-                test_file_path = agent._compute_test_file_path(real_file)
-                existing_test_path = (
-                    test_file_path if os.path.exists(test_file_path) else None
-                )
-
-                # Generate tests
-                result = agent.generate_unit_tests(file_path, existing_test_path)
-                if result.tests_generated > 0:
-                    results.append(
-                        {
-                            "source_file": result.source_file,
-                            "tests_generated": result.tests_generated,
-                            "test_file_path": result.test_file_path,
-                            "test_file_content": result.test_file_content,
-                        }
-                    )
-
-        return {
-            "success": True,
-            "results": results,
-            "summary": {
-                "files_processed": len(modified_files),
-                "files_with_tests": len(results),
-                "total_tests_generated": sum(r["tests_generated"] for r in results),
-            },
-        }
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-# --- Event-Driven Hooks System API ---
-@app.get("/api/hooks")
-def list_hooks(project_id: Annotated[str | None, Query()] = None):
-    """List all hooks, optionally filtered by project."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        hooks = svc.list_hooks(project_id)
-        return {"success": True, "hooks": hooks}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.get("/api/hooks/stats")
-def get_hooks_stats():
-    """Get overall hook system statistics."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        stats = svc.get_stats()
-        return {"success": True, "stats": stats}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.get("/api/hooks/templates")
-def get_hook_templates():
-    """Get all available hook templates."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        templates = svc.get_templates()
-        return {"success": True, "templates": templates}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.get("/api/hooks/{hook_id}", responses={404: {"description": "Hook not found"}})
-def get_hook(hook_id: Annotated[str, Path(...)]):
-    """Get a single hook by ID."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        hook = svc.get_hook(hook_id)
-        if not hook:
-            raise HTTPException(status_code=404, detail=HOOK_NOT_FOUND)
-        return {"success": True, "hook": hook}
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post("/api/hooks")
-def create_hook(body: Annotated[dict[str, Any], Body(...)]):
-    """Create a new hook."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        hook = svc.create_hook(body)
-        return {"success": True, "hook": hook}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.put("/api/hooks/{hook_id}", responses={404: {"description": HOOK_NOT_FOUND}})
-def update_hook(
-    hook_id: Annotated[str, Path(...)], body: Annotated[dict[str, Any], Body(...)]
-):
-    """Update an existing hook."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        hook = svc.update_hook(hook_id, body)
-        if not hook:
-            raise HTTPException(status_code=404, detail=HOOK_NOT_FOUND)
-        return {"success": True, "hook": hook}
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.delete("/api/hooks/{hook_id}", responses={404: {"description": "Hook not found"}})
-def delete_hook(hook_id: Annotated[str, Path(...)]):
-    """Delete a hook."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        deleted = svc.delete_hook(hook_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail=HOOK_NOT_FOUND)
-        return {"success": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post(
-    "/api/hooks/{hook_id}/toggle", responses={404: {"description": "Hook not found"}}
-)
-def toggle_hook(hook_id: Annotated[str, Path(...)]):
-    """Toggle a hook between active and paused."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        hook = svc.toggle_hook(hook_id)
-        if not hook:
-            raise HTTPException(status_code=404, detail=HOOK_NOT_FOUND)
-        return {"success": True, "hook": hook}
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post(
-    "/api/hooks/{hook_id}/duplicate", responses={404: {"description": HOOK_NOT_FOUND}}
-)
-def duplicate_hook(hook_id: Annotated[str, Path(...)]):
-    """Duplicate an existing hook."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        hook = svc.duplicate_hook(hook_id)
-        if not hook:
-            raise HTTPException(status_code=404, detail=HOOK_NOT_FOUND)
-        return {"success": True, "hook": hook}
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post(
-    "/api/hooks/from-template", responses={404: {"description": TEMPLATE_NOT_FOUND}}
-)
-def create_hook_from_template(body: Annotated[dict[str, Any], Body(...)]):
-    """Create a hook from a template."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        template_id = body.get("template_id", "")
-        project_id = body.get("project_id")
-        hook = svc.create_from_template(template_id, project_id)
-        if not hook:
-            raise HTTPException(status_code=404, detail=TEMPLATE_NOT_FOUND)
-        return {"success": True, "hook": hook}
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.post("/api/hooks/emit")
-async def emit_hook_event(body: Annotated[dict[str, Any], Body(...)]):
-    """Emit an event to trigger matching hooks."""
-    try:
-        from services.hooks.hook_service import HookService
-        from services.hooks.models import HookEvent, TriggerType
-
-        svc = HookService.get_instance()
-        event = HookEvent(
-            type=TriggerType(body.get("type", "manual")),
-            data=body.get("data", {}),
-            project_id=body.get("project_id"),
-            source=body.get("source", "api"),
-        )
-        results = await svc.emit_event(event)
-        return {"success": True, "executions": results, "hooks_triggered": len(results)}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
-
-
-@app.get("/api/hooks/executions/history")
-def get_hook_executions(
-    hook_id: Annotated[str | None, Query()] = None, limit: Annotated[int, Query()] = 50
-):
-    """Get execution history for hooks."""
-    try:
-        from services.hooks.hook_service import HookService
-
-        svc = HookService.get_instance()
-        executions = svc.get_executions(hook_id, limit)
-        return {"success": True, "executions": executions}
-    except Exception as e:
-        return {"success": False, "error": _safe_error_message(e)}
+# Event-Driven Hooks System API moved to event_hooks/api.py
 
 
 # --- Analytics API (prefer real DB implementation, fall back to minimal stub) ---
@@ -2600,6 +1823,14 @@ try:
 except ImportError as e:
     print(f"Warning: Could not import qa_promotion router: {e}")
 
+# --- Slash Commands API (Kanban Quick-Command bar: list + run .claude/commands) ---
+try:
+    from slash_commands.api import router as slash_commands_router
+
+    app.include_router(slash_commands_router)
+except ImportError as e:
+    print(f"Warning: Could not import slash_commands router: {e}")
+
 # --- Parallel Variations API (local Arena: scaffold + compare, never auto-merge) ---
 try:
     from parallel_variations.api import router as parallel_variations_router
@@ -2615,6 +1846,54 @@ try:
     app.include_router(virtual_reviewer_router)
 except ImportError as e:
     print(f"Warning: Could not import virtual_reviewer router: {e}")
+
+# --- Test Generation Agent API (extracted from this file) ---
+try:
+    from test_generation.api import router as test_generation_router
+
+    app.include_router(test_generation_router)
+except ImportError as e:
+    print(f"Warning: Could not import test_generation router: {e}")
+
+# --- GitHub PR Details API (extracted from this file) ---
+try:
+    from runners.github.api import router as github_api_router
+
+    app.include_router(github_api_router)
+except ImportError as e:
+    print(f"Warning: Could not import github api router: {e}")
+
+# --- System Status API (extracted from this file) ---
+try:
+    from system_status.api import router as system_status_router
+
+    app.include_router(system_status_router)
+except ImportError as e:
+    print(f"Warning: Could not import system_status router: {e}")
+
+# --- Dashboard + Sessions API (extracted from this file) ---
+try:
+    from dashboard.api import router as dashboard_router
+
+    app.include_router(dashboard_router)
+except ImportError as e:
+    print(f"Warning: Could not import dashboard router: {e}")
+
+# --- Agent feature endpoints (extracted from this file) ---
+try:
+    from agent_endpoints.api import router as agent_endpoints_router
+
+    app.include_router(agent_endpoints_router)
+except ImportError as e:
+    print(f"Warning: Could not import agent_endpoints router: {e}")
+
+# --- Event-Driven Hooks System API (extracted from this file) ---
+try:
+    from event_hooks.api import router as event_hooks_router
+
+    app.include_router(event_hooks_router)
+except ImportError as e:
+    print(f"Warning: Could not import event_hooks router: {e}")
 
 if __name__ == "__main__":
     import uvicorn

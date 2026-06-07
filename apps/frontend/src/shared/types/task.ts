@@ -30,12 +30,17 @@ export type TaskOrderState = Record<TaskStatus, string[]>;
 // - 'errors': Subtasks failed during execution
 // - 'qa_rejected': QA found issues that need fixing
 // - 'plan_review': Spec/plan created and awaiting approval before coding starts
+// - 'prompt_too_long': The accumulated conversation exceeded the LLM context
+//                     limit; retrying with the same context will never succeed.
+//                     User should reset the conversation or switch to a provider
+//                     with a larger context window.
 export type ReviewReason =
 	| "completed"
 	| "errors"
 	| "qa_rejected"
 	| "plan_review"
-	| "stopped";
+	| "stopped"
+	| "prompt_too_long";
 
 export type SubtaskStatus = "pending" | "in_progress" | "completed" | "failed";
 
@@ -188,6 +193,7 @@ export interface TaskDraft {
 	images: ImageAttachment[];
 	referencedFiles: ReferencedFile[];
 	requireReviewBeforeCoding?: boolean;
+	tddMode?: boolean;
 	savedAt: Date;
 }
 
@@ -248,6 +254,10 @@ export interface TaskMetadata {
 	jiraState?: string; // Jira issue state
 	jiraType?: string; // Jira issue type (Bug, Story, Task, etc.)
 
+	// Tracker d'origine de l'import (pilote le post-traitement : strip HTML,
+	// inlining des images en pièce jointe, etc.).
+	importSource?: "azure-devops" | "jira";
+
 	// Classification
 	category?: TaskCategory;
 	complexity?: TaskComplexity;
@@ -263,6 +273,8 @@ export interface TaskMetadata {
 	affectedFiles?: string[]; // Files likely to be modified
 	dependencies?: string[]; // Other features/tasks this depends on
 	acceptanceCriteria?: string[]; // What defines "done"
+	extraNote?: string; // Free-form note added on the Kanban card; injected
+	// into requirements.json as additional_context for every pipeline phase.
 
 	// Effort estimation
 	estimatedEffort?: TaskComplexity;
@@ -282,6 +294,10 @@ export interface TaskMetadata {
 	// Review settings
 	requireReviewBeforeCoding?: boolean; // Require human review of spec/plan before coding starts
 
+	// TDD override (per-task). When set, overrides project.settings.tddMode:
+	// true -> force strict TDD, false -> force disabled, undefined -> inherit project default.
+	tddMode?: boolean;
+
 	// Agent configuration (from agent profile or manual selection)
 	provider?: string; // Active LLM provider (e.g. 'anthropic', 'openai', 'google', 'ollama', ...)
 	model?: string; // Model ID to use (supports multi-provider) - used when not auto profile
@@ -294,8 +310,18 @@ export interface TaskMetadata {
 	// Git/Worktree configuration
 	baseBranch?: string; // Override base branch for this task's worktree
 	prUrl?: string; // GitHub PR URL if task has been submitted as a PR
+	visualProof?: VisualProofRun; // Latest automated emulator/screenshots proof for the PR
 	useWorktree?: boolean; // If false, use direct mode (no worktree isolation) - default is true for safety
 	useLocalBranch?: boolean; // If true, use the local branch directly instead of preferring origin/branch (preserves gitignored files)
+
+	// Pause/Resume state (from implementation_plan.json)
+	paused?: {
+		enabled: boolean;
+		paused_at: string | null;
+		paused_subtask_id: string | null;
+		provider?: string;
+		model?: string;
+	};
 
 	// Archive status
 	archivedAt?: string; // ISO date when task was archived
@@ -349,6 +375,16 @@ export interface ImplementationPlan {
 	};
 	recoveryNote?: string;
 	description?: string;
+	// Pause/Resume state. Written by the TASK_PAUSE handler and read back by the
+	// backend coder loop (cooperative stop) and the task scanner (so the UI's
+	// paused controls survive task-list reloads).
+	paused?: {
+		enabled: boolean;
+		paused_at: string | null;
+		paused_subtask_id: string | null;
+		provider?: string;
+		model?: string;
+	};
 }
 
 export interface Phase {
@@ -363,6 +399,17 @@ export interface PlanSubtask {
 	id: string;
 	description: string;
 	status: SubtaskStatus;
+	/**
+	 * Files impacted by this subtask. `files_changed` is the actual git diff
+	 * recorded once the subtask completes (ground truth); the planner emits the
+	 * `files_to_modify` / `files_to_create` predictions before coding; `files`
+	 * is a legacy fallback. Use `extractSubtaskFiles()` to read a normalized
+	 * flat list that prefers the ground truth.
+	 */
+	files?: string[];
+	files_changed?: string[];
+	files_to_modify?: string[];
+	files_to_create?: string[];
 	verification?: {
 		type: string;
 		run?: string;
@@ -543,6 +590,18 @@ export interface WorktreeCreatePROptions {
 	targetBranch?: string;
 	title?: string;
 	draft?: boolean;
+	/**
+	 * If provided, used verbatim as the PR body (no AI generation, no impact
+	 * block auto-injection). Caller is responsible for the full content,
+	 * including any impact block at the end. Used by the review modal after
+	 * the user has edited the auto-filled values.
+	 */
+	customBody?: string;
+	/**
+	 * Run automated app emulation and screenshot proof after the PR is created.
+	 * Defaults to true.
+	 */
+	runVisualProof?: boolean;
 }
 
 /**
@@ -554,6 +613,113 @@ export interface WorktreeCreatePRResult {
 	error?: string;
 	message?: string; // Human-readable message for both success and error cases
 	alreadyExists?: boolean;
+	visualProof?: VisualProofRun;
+}
+
+export type VisualProofStatus = "pending" | "passed" | "failed" | "skipped";
+
+export type VisualProofTargetKind = "web" | "desktop" | "remote";
+
+export type VisualProofProviderId =
+	| "local-web"
+	| "local-iis-express"
+	| "local-windows-desktop"
+	| "docker"
+	| "wsl"
+	| "hyper-v"
+	| "remote-runner";
+
+export interface VisualProofScreenshot {
+	label: string;
+	relativePath: string;
+	absolutePath: string;
+	url?: string;
+	width: number;
+	height: number;
+	capturedAt: string;
+}
+
+export interface VisualProofRun {
+	id: string;
+	status: VisualProofStatus;
+	taskId: string;
+	specId: string;
+	prUrl: string;
+	framework?: string;
+	provider?: VisualProofProviderId;
+	targetKind?: VisualProofTargetKind;
+	isolated?: boolean;
+	providerDetails?: string;
+	appUrl?: string;
+	artifactDir?: string;
+	commentUrl?: string;
+	commitSha?: string;
+	screenshots: VisualProofScreenshot[];
+	error?: string;
+	startedAt: string;
+	completedAt?: string;
+}
+
+export interface VisualProofRunOptions {
+	taskId: string;
+	projectPath: string;
+	specId: string;
+	prUrl: string;
+	worktreePath?: string;
+	autoBuildPath?: string;
+	provider?: VisualProofProviderId | "auto";
+}
+
+/**
+ * A single navigation/interaction step performed before capturing a screenshot.
+ *
+ * Web fields drive a headless BrowserWindow (route navigation + DOM actions),
+ * desktop fields drive Windows UI Automation (invoke controls / set text by name)
+ * on the running heavy client. Fields not relevant to the active target are
+ * simply ignored, so the same plan shape works for both worlds.
+ */
+export interface VisualProofNavigationStep {
+	/** Label used for the screenshot taken after this step. */
+	label?: string;
+	/** Web: route (relative to the app origin) or absolute URL to open. */
+	path?: string;
+	/** Web: CSS selector to wait for before continuing. */
+	waitForSelector?: string;
+	/** Web: CSS selector to click. */
+	click?: string;
+	/** Web: fill a form control. */
+	fill?: { selector: string; value: string };
+	/** Desktop: name of the UI Automation element to invoke (menu item/button). */
+	invoke?: string;
+	/** Desktop: set text into an edit control identified by name. */
+	setText?: { name: string; value: string };
+	/** Milliseconds to wait after the step so the UI can settle. */
+	delayMs?: number;
+	/** Capture a screenshot after this step (default true). */
+	capture?: boolean;
+}
+
+/**
+ * Navigation plan describing how to reach the implemented feature before taking
+ * visual proof screenshots. Steps can be split per target or shared by both.
+ */
+export interface VisualProofNavigationPlan {
+	web?: VisualProofNavigationStep[];
+	desktop?: VisualProofNavigationStep[];
+}
+
+/**
+ * Result of a preview impact analysis (no PR creation, no push).
+ */
+export interface WorktreeAnalyzeImpactResult {
+	success: boolean;
+	/** Full PR body markdown including the impact block at the end. */
+	body?: string;
+	/** Rating "1".."5" or "N/A" on failure. */
+	rating?: string;
+	/** French free-text feature list, or "Non evalue" on failure. */
+	features?: string;
+	error?: string;
 }
 
 /**

@@ -28,6 +28,13 @@ from typing import Any
 
 import httpx
 
+try:
+    from .models_registry import ModelEntry, list_provider
+except ImportError:
+    # Module is imported as a top-level "provider_models_catalog" (no package
+    # context), e.g. by provider_api.py when apps/backend is on sys.path.
+    from models_registry import ModelEntry, list_provider  # type: ignore[no-redef]
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -40,169 +47,48 @@ HTTP_TIMEOUT = httpx.Timeout(8.0, connect=4.0)
 
 
 # ---------------------------------------------------------------------------
-# Static fallback catalog (last-resort, kept minimal — live fetch is the truth)
+# Static fallback catalog (generated from models_registry, last-resort only)
 # ---------------------------------------------------------------------------
 
-STATIC_FALLBACK: dict[str, list[dict[str, Any]]] = {
-    # Anthropic — current flagship line as of May 2026 (Opus 4.7 released April 16, 2026)
-    "anthropic": [
-        {
-            "value": "claude-opus-4-7",
-            "label": "Claude Opus 4.7",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {
-            "value": "claude-sonnet-4-6",
-            "label": "Claude Sonnet 4.6",
-            "tier": "standard",
-            "supportsThinking": True,
-        },
-        {"value": "claude-haiku-4-5", "label": "Claude Haiku 4.5", "tier": "fast"},
-    ],
-    # OpenAI — GPT-5.5 family released April 23-24, 2026 (replaces GPT-5/GPT-5.2 as flagship)
-    "openai": [
-        {
-            "value": "gpt-5.5-pro",
-            "label": "GPT-5.5 Pro",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {
-            "value": "gpt-5.5",
-            "label": "GPT-5.5",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {
-            "value": "gpt-5.5-mini",
-            "label": "GPT-5.5 mini",
-            "tier": "standard",
-            "supportsThinking": True,
-        },
-        {
-            "value": "gpt-5.2",
-            "label": "GPT-5.2",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {"value": "o4", "label": "o4", "tier": "flagship", "supportsThinking": True},
-    ],
-    # Google — Gemini 3.1 series (Pro / Flash / Flash-Lite preview, May 2026)
-    "google": [
-        {
-            "value": "gemini-3.1-pro",
-            "label": "Gemini 3.1 Pro",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {
-            "value": "gemini-3.1-flash",
-            "label": "Gemini 3.1 Flash",
-            "tier": "standard",
-            "supportsThinking": True,
-        },
-        {
-            "value": "gemini-3.1-flash-lite",
-            "label": "Gemini 3.1 Flash-Lite",
-            "tier": "fast",
-        },
-    ],
-    # Mistral — Large 3 (Dec 2025) + Small 4 + Magistral reasoning (2026)
-    "mistral": [
-        {"value": "mistral-large-3", "label": "Mistral Large 3", "tier": "flagship"},
-        {"value": "mistral-small-4", "label": "Mistral Small 4", "tier": "standard"},
-        {
-            "value": "magistral-medium-2506",
-            "label": "Magistral Medium",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {
-            "value": "magistral-small-2506",
-            "label": "Magistral Small",
-            "tier": "standard",
-            "supportsThinking": True,
-        },
-        {"value": "devstral-2512", "label": "Devstral 2", "tier": "flagship"},
-    ],
-    # DeepSeek — V4 family released April 2026; chat/reasoner aliases deprecated 2026-07-24
-    "deepseek": [
-        {
-            "value": "deepseek-v4",
-            "label": "DeepSeek V4",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {
-            "value": "deepseek-v4-flash",
-            "label": "DeepSeek V4 Flash",
-            "tier": "standard",
-            "supportsThinking": True,
-        },
-        {
-            "value": "deepseek-reasoner",
-            "label": "DeepSeek Reasoner",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {"value": "deepseek-chat", "label": "DeepSeek Chat", "tier": "standard"},
-    ],
-    # Grok — 4.3 flagship (April 30, 2026), 4.20 reasoning, 4.1 fast
-    "grok": [
-        {
-            "value": "grok-4.3",
-            "label": "Grok 4.3",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {
-            "value": "grok-4.20-reasoning",
-            "label": "Grok 4.20 Reasoning",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {"value": "grok-4.1-fast", "label": "Grok 4.1 Fast", "tier": "fast"},
-        {
-            "value": "grok-4",
-            "label": "Grok 4",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-    ],
-    "ollama": [],
-    # Windsurf / Codeium — Cascade router exposes hosted models with MODEL_ prefix
-    "windsurf": [
-        {"value": "MODEL_SWE_1_6", "label": "SWE-1.6", "tier": "flagship"},
-        {
-            "value": "MODEL_CLAUDE_OPUS_4_7",
-            "label": "Claude Opus 4.7",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {
-            "value": "MODEL_CLAUDE_SONNET_4_6",
-            "label": "Claude Sonnet 4.6",
-            "tier": "standard",
-            "supportsThinking": True,
-        },
-        {
-            "value": "MODEL_GPT_5_5",
-            "label": "GPT-5.5",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-        {
-            "value": "MODEL_GEMINI_3_1_PRO",
-            "label": "Gemini 3.1 Pro",
-            "tier": "flagship",
-            "supportsThinking": True,
-        },
-    ],
-}
+
+def _to_catalog_entry(entry: ModelEntry) -> dict[str, Any]:
+    """Convert a ModelEntry to catalog dict format."""
+    result: dict[str, Any] = {
+        "value": entry.model_id,
+        "label": entry.label,
+        "tier": entry.tier,
+    }
+    if entry.supports_thinking:
+        result["supportsThinking"] = True
+    return result
+
+
+def _build_static_fallback() -> dict[str, list[dict[str, Any]]]:
+    """Generate STATIC_FALLBACK from registry."""
+    result: dict[str, list[dict[str, Any]]] = {}
+    for provider in [
+        "anthropic",
+        "openai",
+        "google",
+        "mistral",
+        "deepseek",
+        "grok",
+        "meta",
+        "ollama",
+        "windsurf",
+        "aws",
+        "copilot",
+        "cursor",
+    ]:
+        entries = list_provider(provider)
+        result[provider] = [_to_catalog_entry(e) for e in entries]
+    return result
+
+
+STATIC_FALLBACK: dict[str, list[dict[str, Any]]] = _build_static_fallback()
 
 # Aliases — providers that share a catalog
-STATIC_FALLBACK["claude"] = STATIC_FALLBACK["anthropic"]
+STATIC_FALLBACK["claude"] = STATIC_FALLBACK.get("anthropic", [])
 
 
 # ---------------------------------------------------------------------------

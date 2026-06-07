@@ -107,10 +107,8 @@ export function CopilotCliStatusBadge({
 	);
 
 	const [isOpen, setIsOpen] = useState(false);
-	const [showInstallWarning, setShowInstallWarning] = useState(false);
 	const [installError, setInstallError] = useState<string | null>(null);
 	const [isInstalling, setIsInstalling] = useState(false);
-	const [autoUpdateDetected, setAutoUpdateDetected] = useState(false);
 
 	// CLI path selection state
 	const [installations, setInstallations] = useState<CopilotInstallationInfo[]>(
@@ -160,13 +158,6 @@ export function CopilotCliStatusBadge({
 		}
 	}, [isOpen, installations.length, fetchInstallations]);
 
-	// Reset auto-update detection when dialog closes
-	useEffect(() => {
-		if (!showInstallWarning) {
-			setAutoUpdateDetected(false);
-		}
-	}, [showInstallWarning]);
-
 	// Helper function for delay
 	const delay = (ms: number) =>
 		new Promise((resolve) => setTimeout(resolve, ms));
@@ -205,12 +196,43 @@ export function CopilotCliStatusBadge({
 		return true;
 	};
 
-	// Perform install/update
+	// Perform install/update.
+	//
+	// Try the silent path first (`gh copilot install|update` run in the
+	// background via IPC). Fall back to opening an internal terminal only if
+	// the silent path is unavailable (e.g. gh missing) or fails in a way that
+	// requires user interaction.
 	const performInstall = async () => {
 		setIsInstalling(true);
-		setShowInstallWarning(false);
 		setInstallError(null);
 		try {
+			const silentApi = globalThis.electronAPI?.installCopilotCliSilent;
+			if (silentApi) {
+				const result = await silentApi();
+				if (result.success) {
+					await refreshCopilot();
+					setTimeout(() => refreshCopilot(), VERSION_RECHECK_DELAY_MS);
+					return;
+				}
+				if (result.error?.startsWith("copilot_pkg_locked:")) {
+					// Translatable, actionable variant of the raw EPERM/rename
+					// stack trace from gh copilot update. Tells the user what
+					// to actually do (close running Copilot sessions) instead
+					// of dumping internal Node.js filesystem errors.
+					setInstallError(
+						t(
+							"settings:copilot.updateLocked",
+							"Mise à jour bloquée : un processus Copilot CLI utilise actuellement les fichiers à mettre à jour. Fermez les terminaux ou sessions Copilot ouverts, puis réessayez. Si le problème persiste, redémarrez WorkPilot.",
+						),
+					);
+					return;
+				}
+				if (!result.error?.startsWith("gh_missing")) {
+					setInstallError(result.error || "Installation failed");
+					return;
+				}
+			}
+
 			const isUpdate = status === "outdated";
 			const label = isUpdate ? "Copilot Update" : "Copilot Install";
 			const command = isUpdate ? COPILOT_UPDATE_COMMAND : COPILOT_INSTALL_COMMAND;
@@ -281,14 +303,9 @@ export function CopilotCliStatusBadge({
 		}
 	};
 
-	// Handle install button click
+	// Handle install button click — run silently in the background; no confirmation.
 	const handleInstall = () => {
-		if (status === "outdated") {
-			setAutoUpdateDetected(true);
-			setShowInstallWarning(true);
-		} else {
-			performInstall();
-		}
+		performInstall();
 	};
 
 	// Handle installation selection
@@ -664,41 +681,6 @@ export function CopilotCliStatusBadge({
 					</Button>
 				</div>
 			</PopoverContent>
-
-			{/* Update warning dialog */}
-			<AlertDialog
-				open={showInstallWarning}
-				onOpenChange={setShowInstallWarning}
-			>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>
-							{autoUpdateDetected
-								? t(
-										"settings:copilot.updateAvailable",
-										"Copilot CLI Update Available",
-									)
-								: t("settings:copilot.updateCopilotCli")}
-						</AlertDialogTitle>
-						<AlertDialogDescription>
-							{autoUpdateDetected
-								? t(
-										"settings:copilot.autoUpdateDescription",
-										"A new version of GitHub Copilot CLI is available. Would you like to open a terminal and update it automatically?",
-									)
-								: t("settings:copilot.updateDescription")}
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel>
-							{t("common:cancel", "Cancel")}
-						</AlertDialogCancel>
-						<AlertDialogAction onClick={performInstall}>
-							{t("settings:copilot.openTerminalAndUpdate")}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
 
 			{/* Path change warning dialog */}
 			<AlertDialog

@@ -50,7 +50,9 @@ class TestConfiguration:
 
     def test_recurring_threshold_default(self) -> None:
         """Test default recurring issue threshold."""
-        assert RECURRING_ISSUE_THRESHOLD == 3
+        # Le défaut a été remonté de 3 à 8 pour éviter d'escalader vers
+        # une revue humaine dès la 3ᵉ itération sur 50 max.
+        assert RECURRING_ISSUE_THRESHOLD == 8
 
     def test_recurring_threshold_is_int(self) -> None:
         """Test that recurring threshold is an integer."""

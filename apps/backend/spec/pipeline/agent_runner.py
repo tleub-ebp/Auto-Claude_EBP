@@ -352,6 +352,28 @@ class AgentRunner:
                 exception_type=type(e).__name__,
             )
 
+            # Detect "prompt too long" errors — these are permanent for the
+            # current conversation, so we surface a sentinel the orchestrator
+            # recognises to halt the pipeline instead of looping.
+            if (
+                "prompt is too long" in error_str
+                or "prompt too long" in error_str
+                or "context length exceeded" in error_str
+                or "context_length_exceeded" in error_str
+                or "maximum context length" in error_str
+                or "input is too long" in error_str
+            ):
+                halt_msg = (
+                    f"Prompt too long for the LLM context window: {e}. "
+                    f"Reset the conversation or switch to a provider with a "
+                    f"larger context."
+                )
+                debug_error("agent_runner", halt_msg)
+                print(f"\n⛔ {halt_msg}", flush=True)
+                if self.task_logger:
+                    self.task_logger.log_error(halt_msg, LogPhase.PLANNING)
+                return False, f"PROMPT_TOO_LONG_HALT::{halt_msg}::{e}"
+
             # Detect rate/usage limit exceptions from the SDK.
             # The Claude Agent SDK may raise exceptions like:
             #   "Unknown message type: rate_limit_event"
@@ -368,7 +390,10 @@ class AgentRunner:
                 print(f"\n⚠️  {cap_msg}", flush=True)
                 if self.task_logger:
                     self.task_logger.log_error(cap_msg, LogPhase.PLANNING)
-                return False, cap_msg
+                # Prefix with a sentinel the orchestrator recognises so it can
+                # invoke the rate-limit shield and retry the same phase instead
+                # of failing the spec pipeline outright.
+                return False, f"RATE_LIMIT_RETRY_REQUIRED::{cap_msg}::{e}"
 
             if self.task_logger:
                 self.task_logger.log_error(f"Agent error: {e}", LogPhase.PLANNING)
@@ -520,17 +545,19 @@ class AgentRunner:
         if not isinstance(inp, dict):
             return None
 
+        # Show commands and paths in full so the activity feed reveals exactly
+        # what the agent is doing; only pathologically long inputs are trimmed.
         if "pattern" in inp:
             return f"pattern: {inp['pattern']}"
         elif "file_path" in inp:
-            fp = inp["file_path"]
-            if len(fp) > 50:
-                fp = "..." + fp[-47:]
+            fp = str(inp["file_path"])
+            if len(fp) > 2000:
+                fp = "..." + fp[-1997:]
             return fp
         elif "command" in inp:
-            cmd = inp["command"]
-            if len(cmd) > 50:
-                cmd = cmd[:47] + "..."
+            cmd = str(inp["command"])
+            if len(cmd) > 2000:
+                cmd = cmd[:1997] + "..."
             return cmd
         elif "path" in inp:
             return inp["path"]

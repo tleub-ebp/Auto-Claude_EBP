@@ -57,6 +57,18 @@ export interface CopilotCliSetActivePathResult {
 }
 
 /**
+ * Result of silent install/update attempt
+ */
+export interface CopilotCliSilentInstallResult {
+	success: boolean;
+	data?: {
+		stdout: string;
+		stderr: string;
+	};
+	error?: string;
+}
+
+/**
  * Result of auth check
  */
 export interface CopilotCliAuthResult {
@@ -96,6 +108,12 @@ export interface CopilotCliAPI {
 	installCopilotCli: () => Promise<CopilotCliInstallResult>;
 
 	/**
+	 * Install or update Copilot CLI extension silently in the background.
+	 * Runs `gh copilot install` / `gh copilot update` without opening a terminal.
+	 */
+	installCopilotCliSilent: () => Promise<CopilotCliSilentInstallResult>;
+
+	/**
 	 * Get all Copilot CLI installations found on the system
 	 * Returns list of gh installations with copilot extension
 	 */
@@ -131,6 +149,9 @@ export const createCopilotCliAPI = (): CopilotCliAPI => ({
 
 	installCopilotCli: (): Promise<CopilotCliInstallResult> =>
 		invokeIpc(IPC_CHANNELS.COPILOT_CLI_INSTALL),
+
+	installCopilotCliSilent: (): Promise<CopilotCliSilentInstallResult> =>
+		invokeIpc(IPC_CHANNELS.COPILOT_CLI_INSTALL_SILENT),
 
 	getCopilotCliInstallations: (): Promise<CopilotCliInstallationsResult> =>
 		invokeIpc(IPC_CHANNELS.COPILOT_CLI_GET_INSTALLATIONS),

@@ -22,6 +22,7 @@ AUTO_CLAUDE_GITIGNORE_ENTRIES = [
     ".worktrees/",
     ".security-key",
     "logs/security/",
+    "build_output.txt",
 ]
 
 

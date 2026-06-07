@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 from .llm_base import BaseLLMProvider
 
@@ -7,7 +7,7 @@ class OllamaProvider(BaseLLMProvider):
     def __init__(self, model: str = "llama2", base_url: str = "http://localhost:11434"):
         self.model = model
         self.base_url = base_url
-        self._client = None
+        self._client: Optional[Any] = None
 
     def connect(self) -> None:
         try:

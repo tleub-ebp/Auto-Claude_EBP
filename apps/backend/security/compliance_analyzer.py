@@ -249,7 +249,7 @@ class ComplianceAnalyzer:
             ):
                 self._check_security_controls_in_file(file_path, lines, report)
 
-        except Exception as e:
+        except Exception:
             # Skip files that can't be read
             pass
 

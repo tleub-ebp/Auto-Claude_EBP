@@ -32,9 +32,13 @@ export const IPC_CHANNELS = {
 	TASK_STOP: "task:stop",
 	TASK_REVIEW: "task:review",
 	TASK_UPDATE_STATUS: "task:updateStatus",
+	TASK_UPDATE_PLAN: "task:updatePlan", // Update plan phases and subtasks
 	TASK_RECOVER_STUCK: "task:recoverStuck",
 	TASK_CHECK_RUNNING: "task:checkRunning",
 	TASK_RESUME_PAUSED: "task:resumePaused", // Resume a rate-limited or auth-paused task
+	TASK_RESUME_SESSION: "task:resumeSession", // Resume a Claude SDK session (uses .session.json)
+	TASK_RESUME_WITH_PROVIDER: "task:resumeWithProvider", // Resume a paused task under a different LLM provider (Niveau 3b)
+	TASK_RESET_CONVERSATION: "task:resetConversation", // Clear conversation.jsonl + PROMPT_TOO_LONG_HALT marker so the task can restart with a fresh context
 	TASK_LOAD_IMAGE_THUMBNAIL: "task:loadImageThumbnail",
 
 	// Workspace management (for human review)
@@ -47,9 +51,15 @@ export const IPC_CHANNELS = {
 	TASK_WORKTREE_DISCARD_ORPHAN: "task:worktreeDiscardOrphan", // Delete orphaned worktree by spec name (no task association)
 	TASK_WORKTREE_SYNC_FROM_BRANCH: "task:worktreeSyncFromBranch", // Merge or rebase worktree from any branch
 	TASK_WORKTREE_CREATE_PR: "task:worktreeCreatePR",
+	TASK_WORKTREE_ANALYZE_IMPACT: "task:worktreeAnalyzeImpact", // Preview PR body + impact analysis WITHOUT pushing
+	TASK_VISUAL_PROOF_RUN: "task:visualProofRun", // Run emulator + screenshot proof for PR
+	TASK_VISUAL_PROOF_STATUS: "task:visualProofStatus", // Query whether a visual proof run is in progress for a task
 	TASK_WORKTREE_OPEN_IN_IDE: "task:worktreeOpenInIDE",
 	TASK_WORKTREE_OPEN_IN_TERMINAL: "task:worktreeOpenInTerminal",
 	TASK_WORKTREE_DETECT_TOOLS: "task:worktreeDetectTools", // Detect installed IDEs/terminals
+	TASK_WORKTREE_READ_FILE: "task:worktreeReadFile",
+	TASK_WORKTREE_WRITE_FILE: "task:worktreeWriteFile",
+	TASK_WORKTREE_DELETE_FILES: "task:worktreeDeleteFiles",
 	TASK_LIST_WORKTREES: "task:listWorktrees",
 	TASK_ARCHIVE: "task:archive",
 	TASK_UNARCHIVE: "task:unarchive",
@@ -61,6 +71,7 @@ export const IPC_CHANNELS = {
 	TASK_LOG: "task:log",
 	TASK_STATUS_CHANGE: "task:statusChange",
 	TASK_EXECUTION_PROGRESS: "task:executionProgress",
+	TASK_VISUAL_PROOF_RUNNING: "task:visualProofRunning", // Event: visual proof run started/finished (main -> renderer)
 
 	// Task phase logs (persistent, collapsible logs by phase)
 	TASK_LOGS_GET: "task:logsGet", // Load logs from spec dir
@@ -255,10 +266,13 @@ export const IPC_CHANNELS = {
 	// Azure DevOps integration
 	AZURE_DEVOPS_GET_PROJECTS: "azureDevOps:getProjects",
 	AZURE_DEVOPS_GET_WORK_ITEMS: "azureDevOps:getWorkItems",
+	AZURE_DEVOPS_GET_WORK_ITEM: "azureDevOps:getWorkItem",
 	AZURE_DEVOPS_IMPORT_WORK_ITEMS: "azureDevOps:importWorkItems",
 	AZURE_DEVOPS_CHECK_CONNECTION: "azureDevOps:checkConnection",
 	AZURE_DEVOPS_LIST_REPOSITORIES: "azureDevOps:listRepositories",
 	AZURE_DEVOPS_DETECT_REPOSITORY: "azureDevOps:detectRepository",
+	AZURE_DEVOPS_SYNC_TASK_AC: "azureDevOps:syncTaskAC",
+	AZURE_DEVOPS_HYDRATE_TASK_DISPLAY: "azureDevOps:hydrateTaskDisplay",
 
 	// Azure DevOps PR Review
 	AZURE_DEVOPS_PR_REVIEW: "azureDevOps:prReview",
@@ -268,6 +282,7 @@ export const IPC_CHANNELS = {
 
 	// Jira integration
 	JIRA_GET_ISSUES: "jira:getIssues",
+	JIRA_GET_ISSUE: "jira:getIssue",
 	JIRA_CHECK_CONNECTION: "jira:checkConnection",
 	JIRA_TEST_CONNECTION: "jira:testConnection",
 
@@ -607,6 +622,7 @@ export const IPC_CHANNELS = {
 	// Copilot CLI operations (mirrors Claude Code CLI pattern)
 	COPILOT_CLI_CHECK_VERSION: "copilotCli:checkVersion",
 	COPILOT_CLI_INSTALL: "copilotCli:install",
+	COPILOT_CLI_INSTALL_SILENT: "copilotCli:installSilent",
 	COPILOT_CLI_GET_INSTALLATIONS: "copilotCli:getInstallations",
 	COPILOT_CLI_SET_ACTIVE_PATH: "copilotCli:setActivePath",
 	COPILOT_CLI_CHECK_AUTH: "copilotCli:checkAuth",

@@ -559,6 +559,125 @@ describe("task-store-persistence", () => {
 			expect(state.tasks[0].executionProgress?.overallProgress).toBe(50);
 		});
 
+		it("should reconcile status to in_progress when an active phase arrives on a backlog task", () => {
+			const store = useTaskStore.getState();
+
+			const task: Task = {
+				id: "task-1",
+				specId: "001-test-task",
+				projectId: "test-project",
+				title: "Test Task",
+				description: "Test",
+				status: "backlog" as TaskStatus,
+				logs: [],
+				subtasks: [],
+				createdAt: new Date(),
+				updatedAt: new Date(),
+			};
+
+			store.setTasks([task]);
+
+			// Le backend émet une phase d'exécution active alors que le statut est
+			// resté à "backlog" (événement de statut manqué). Le statut doit être
+			// rattrapé vers in_progress.
+			store.updateExecutionProgress("task-1", {
+				phase: "planning",
+				phaseProgress: 0,
+				overallProgress: 0,
+			});
+
+			const state = useTaskStore.getState();
+			expect(state.tasks[0].status).toBe("in_progress");
+			expect(state.tasks[0].executionProgress?.phase).toBe("planning");
+		});
+
+		it("should reconcile a queued task to in_progress on active phase", () => {
+			const store = useTaskStore.getState();
+
+			store.setTasks([
+				{
+					id: "task-1",
+					specId: "001-test-task",
+					projectId: "test-project",
+					title: "Test Task",
+					description: "Test",
+					status: "queue" as TaskStatus,
+					logs: [],
+					subtasks: [],
+					createdAt: new Date(),
+					updatedAt: new Date(),
+				},
+			]);
+
+			store.updateExecutionProgress("task-1", {
+				phase: "coding",
+				phaseProgress: 10,
+				overallProgress: 10,
+			});
+
+			expect(useTaskStore.getState().tasks[0].status).toBe("in_progress");
+		});
+
+		it("should NOT change a backlog task status on terminal/idle phase events", () => {
+			const store = useTaskStore.getState();
+
+			store.setTasks([
+				{
+					id: "task-1",
+					specId: "001-test-task",
+					projectId: "test-project",
+					title: "Test Task",
+					description: "Test",
+					status: "backlog" as TaskStatus,
+					logs: [],
+					subtasks: [],
+					createdAt: new Date(),
+					updatedAt: new Date(),
+				},
+			]);
+
+			store.updateExecutionProgress("task-1", {
+				phase: "idle",
+				phaseProgress: 0,
+				overallProgress: 0,
+			});
+			expect(useTaskStore.getState().tasks[0].status).toBe("backlog");
+
+			store.updateExecutionProgress("task-1", {
+				phase: "complete",
+				phaseProgress: 100,
+				overallProgress: 100,
+			});
+			expect(useTaskStore.getState().tasks[0].status).toBe("backlog");
+		});
+
+		it("should NOT downgrade a human_review task when phase events arrive", () => {
+			const store = useTaskStore.getState();
+
+			store.setTasks([
+				{
+					id: "task-1",
+					specId: "001-test-task",
+					projectId: "test-project",
+					title: "Test Task",
+					description: "Test",
+					status: "human_review" as TaskStatus,
+					logs: [],
+					subtasks: [],
+					createdAt: new Date(),
+					updatedAt: new Date(),
+				},
+			]);
+
+			store.updateExecutionProgress("task-1", {
+				phase: "coding",
+				phaseProgress: 50,
+				overallProgress: 50,
+			});
+
+			expect(useTaskStore.getState().tasks[0].status).toBe("human_review");
+		});
+
 		it("should transition to idle phase when status changes to backlog", () => {
 			const store = useTaskStore.getState();
 

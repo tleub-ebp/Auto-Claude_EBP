@@ -134,6 +134,9 @@ class JiraIssue:
         updated: Last update datetime, or None.
         project_key: The parent project key.
         custom_fields: Additional custom fields as key-value pairs.
+        acceptance_criteria: Plain-text acceptance criteria extracted from
+            the matching custom field (autodetected by name), or empty
+            string if no such field is set on the issue.
     """
 
     key: str
@@ -150,6 +153,7 @@ class JiraIssue:
     updated: datetime | None = None
     project_key: str = ""
     custom_fields: dict[str, Any] = field(default_factory=dict)
+    acceptance_criteria: str = ""
 
     @classmethod
     def from_api_response(cls, data: dict[str, Any]) -> "JiraIssue":
@@ -286,25 +290,46 @@ class JiraComment:
         )
 
 
+_ADF_BLOCK_CONTAINERS = frozenset({
+    "doc",
+    "bulletList",
+    "orderedList",
+    "blockquote",
+    "table",
+    "tableBody",
+    "tableHead",
+    "tableFoot",
+})
+
+
 def _extract_adf_text(adf: dict[str, Any]) -> str:
     """Extract plain text from Atlassian Document Format (ADF).
 
     Recursively traverses ADF nodes and concatenates text content.
+    Block-level container nodes (lists, tables, doc root, blockquotes)
+    join their children with newlines so that list items and paragraphs
+    remain on separate lines — which is essential for correctly splitting
+    acceptance criteria into individual criteria later.
 
     Args:
         adf: An ADF document dictionary.
 
     Returns:
-        Extracted plain text.
+        Extracted plain text with newlines between block-level items.
     """
     if not isinstance(adf, dict):
         return ""
 
-    parts: list[str] = []
-    if adf.get("type") == "text":
-        parts.append(adf.get("text", ""))
+    node_type = adf.get("type", "")
 
-    for child in adf.get("content", []):
-        parts.append(_extract_adf_text(child))
+    if node_type == "text":
+        return adf.get("text", "")
 
-    return " ".join(p for p in parts if p).strip()
+    if node_type == "hardBreak":
+        return "\n"
+
+    child_texts = [_extract_adf_text(child) for child in adf.get("content", [])]
+    child_texts = [t for t in child_texts if t]
+
+    separator = "\n" if node_type in _ADF_BLOCK_CONTAINERS else " "
+    return separator.join(child_texts).strip()

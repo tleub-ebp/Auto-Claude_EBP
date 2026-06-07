@@ -79,6 +79,7 @@
 		"retry": "Retry",
 		"create": "Create",
 		"createPR": "Create PR",
+		"updatePR": "Update PR",
 		"openPR": "Open PR",
 		"open": "Open",
 		"start": "Start",
@@ -509,6 +510,13 @@
 		"providerCursor": "Cursor",
 		"providerAWS": "AWS Bedrock",
 		"providerUnknown": "Unknown",
+		"copilotTokensSuffix": " Tok",
+		"copilotTokensTitle": "Tokens consumed (Copilot)",
+		"copilotContextTitle": "Context used — {{model}}",
+		"copilotContextTitleShort": "Context window",
+		"copilotContextDesc": "Percentage of the model's context window used on the last turn.",
+		"copilotContextPercentLabel": "Context used",
+		"copilotContextUsedLabel": "Tokens (context / max)",
 		"profile": "Profile",
 		"id": "ID",
 		"created": "Created",
@@ -596,7 +604,19 @@
 		"copilotMetricsDesc": "GitHub Copilot usage data for the last 28 days.",
 		"copilotAcceptancesLabel": "Acceptances",
 		"copilotAcceptanceRateLabel": "Acceptance rate",
-		"copilotTokensUsedLabel": "Tokens used"
+		"copilotTokensUsedLabel": "Tokens used",
+		"copilotPremiumTitle": "Copilot Premium Requests",
+		"copilotPremiumDescPlan": "{{plan}} plan — current billing cycle usage.",
+		"copilotPremiumDescDefault": "Copilot usage for the current billing cycle.",
+		"copilotPremiumUsedLabel": "Used",
+		"copilotPremiumEntitlementLabel": "Allowance",
+		"copilotPremiumRemainingLabel": "Remaining",
+		"copilotPremiumPercentLabel": "Consumed",
+		"copilotPremiumUnlimited": "Unlimited",
+		"copilotPremiumResetOn": "Resets on {{date}}",
+		"copilotPremiumOverageHint": "Beyond the quota, requests will be billed as overage.",
+		"copilotPlanLabel": "Plan",
+		"copilotOrganizationLabel": "Organization"
 	},
 	"oauth": {
 		"enterCode": "Manual Code Entry (Fallback)",
@@ -1071,5 +1091,6 @@
 		"stopTaskDescription": "Stop the task and navigate",
 		"pauseTask": "Pause task",
 		"pauseTaskDescription": "Navigate away and resume later"
-	}
+	},
+	"testing": "Testing..."
 }

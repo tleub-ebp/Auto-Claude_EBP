@@ -79,6 +79,7 @@
 		"retry": "Réessayer",
 		"create": "Créer",
 		"createPR": "Créer PR",
+		"updatePR": "Mettre à jour la PR",
 		"openPR": "Ouvrir PR",
 		"open": "Ouvrir",
 		"start": "Démarrer",
@@ -509,6 +510,13 @@
 		"providerCursor": "Cursor",
 		"providerAWS": "AWS Bedrock",
 		"providerUnknown": "Inconnu",
+		"copilotTokensSuffix": " Tok",
+		"copilotTokensTitle": "Tokens consommés (Copilot)",
+		"copilotContextTitle": "Contexte consommé — {{model}}",
+		"copilotContextTitleShort": "Fenêtre de contexte",
+		"copilotContextDesc": "Pourcentage de la fenêtre de contexte du modèle utilisée au dernier tour.",
+		"copilotContextPercentLabel": "Contexte consommé",
+		"copilotContextUsedLabel": "Tokens (contexte / max)",
 		"profile": "Profil",
 		"id": "ID",
 		"created": "Créé",
@@ -596,7 +604,19 @@
 		"copilotMetricsDesc": "Données d'utilisation GitHub Copilot pour les 28 derniers jours.",
 		"copilotAcceptancesLabel": "Acceptations",
 		"copilotAcceptanceRateLabel": "Taux d'acceptation",
-		"copilotTokensUsedLabel": "Tokens utilisés"
+		"copilotTokensUsedLabel": "Tokens utilisés",
+		"copilotPremiumTitle": "Premium Requests Copilot",
+		"copilotPremiumDescPlan": "Plan {{plan}} — usage du cycle de facturation en cours.",
+		"copilotPremiumDescDefault": "Usage Copilot du cycle de facturation en cours.",
+		"copilotPremiumUsedLabel": "Utilisées",
+		"copilotPremiumEntitlementLabel": "Allocation",
+		"copilotPremiumRemainingLabel": "Restantes",
+		"copilotPremiumPercentLabel": "Consommation",
+		"copilotPremiumUnlimited": "Illimitées",
+		"copilotPremiumResetOn": "Reset le {{date}}",
+		"copilotPremiumOverageHint": "Au-delà du quota, les requêtes seront facturées en heures supplémentaires.",
+		"copilotPlanLabel": "Plan",
+		"copilotOrganizationLabel": "Organisation"
 	},
 	"oauth": {
 		"enterCode": "Saisie de code manuelle (Fallback)",
@@ -1071,5 +1091,6 @@
 		"stopTaskDescription": "Arrêter la tâche et naviguer",
 		"pauseTask": "Mettre en pause",
 		"pauseTaskDescription": "Naviguer et reprendre plus tard"
-	}
+	},
+	"testing": "Test en cours..."
 }

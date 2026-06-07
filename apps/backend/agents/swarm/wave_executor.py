@@ -309,12 +309,10 @@ class WaveExecutor:
 
             stderr_task = asyncio.create_task(_drain_stderr())
 
-            # Stream stdout and capture output
-            last_output = ""
+            # Stream stdout
             if process.stdout:
                 async for line_bytes in process.stdout:
                     line = line_bytes.decode("utf-8", errors="replace").rstrip()
-                    last_output = line
                     if on_log:
                         on_log(subtask_id, line)
                     # Forward phase events with subtask prefix

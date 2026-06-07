@@ -371,9 +371,12 @@ export async function loadProjects(): Promise<void> {
 }
 
 /**
- * Add a new project
+ * Add a new project. Returns the created project plus an optional warning
+ * (e.g. when the chosen path is a Git sub-folder instead of the Git root).
  */
-export async function addProject(projectPath: string): Promise<Project | null> {
+export async function addProject(
+	projectPath: string,
+): Promise<{ project: Project; warning?: string } | null> {
 	const store = useProjectStore.getState();
 
 	try {
@@ -383,7 +386,7 @@ export async function addProject(projectPath: string): Promise<Project | null> {
 			store.selectProject(result.data.id);
 			// Also open a tab for the new project
 			store.openProjectTab(result.data.id);
-			return result.data;
+			return { project: result.data, warning: result.warning };
 		} else {
 			store.setError(result.error || "Failed to add project");
 			return null;
@@ -458,10 +461,20 @@ export async function updateProjectSettings(
 			settings,
 		);
 		if (result.success) {
-			const project = store.projects.find((p) => p.id === projectId);
-			if (project) {
-				store.updateProject(projectId, settings);
-			}
+			// Merge the saved values into the in-memory project so the UI reflects
+			// what was persisted. The updates MUST be merged into `project.settings`
+			// (not spread onto the top-level project object), otherwise the settings
+			// dialog's reset-on-project-change effect reads a stale `project.settings`
+			// and reverts toggles like tddMode/useClaudeMd back to their old value.
+			// Use a functional setState to avoid clobbering concurrent store updates
+			// that may have landed during the await above.
+			useProjectStore.setState((state) => ({
+				projects: state.projects.map((p) =>
+					p.id === projectId
+						? { ...p, settings: { ...p.settings, ...settings } }
+						: p,
+				),
+			}));
 			return true;
 		}
 		return false;

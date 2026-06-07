@@ -429,12 +429,12 @@ This is attempt {previous_error.get("consecutive_errors", 1) + 1}. If you fail t
                         # Safely extract tool input (handles None, non-dict, etc.)
                         inp = get_safe_tool_input(block)
 
-                        # Extract tool input for display
+                        # Extract tool input for display (full command/path)
                         if inp:
                             if "file_path" in inp:
-                                fp = inp["file_path"]
-                                if len(fp) > 50:
-                                    fp = "..." + fp[-47:]
+                                fp = str(inp["file_path"])
+                                if len(fp) > 2000:
+                                    fp = "..." + fp[-1997:]
                                 tool_input_display = fp
                             elif "pattern" in inp:
                                 tool_input_display = f"pattern: {inp['pattern']}"
@@ -685,16 +685,16 @@ async def _run_qa_agent_client_session(
 
                     if inp:
                         if "file_path" in inp:
-                            fp = inp["file_path"]
-                            if len(fp) > 50:
-                                fp = "..." + fp[-47:]
+                            fp = str(inp["file_path"])
+                            if len(fp) > 2000:
+                                fp = "..." + fp[-1997:]
                             tool_input_display = fp
                         elif "pattern" in inp:
                             tool_input_display = f"pattern: {inp['pattern']}"
                         elif "command" in inp:
-                            cmd = inp["command"]
-                            if len(cmd) > 50:
-                                cmd = cmd[:47] + "..."
+                            cmd = str(inp["command"])
+                            if len(cmd) > 2000:
+                                cmd = cmd[:1997] + "..."
                             tool_input_display = cmd
 
                     debug(

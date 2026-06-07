@@ -206,6 +206,7 @@ class VelocityTracker {
 			return { sessionMinutesRemaining: null, weeklyMinutesRemaining: null };
 		}
 
+		// biome-ignore lint/style/noNonNullAssertion: safely accessed after length check
 		const latest = points.at(-1)!;
 
 		// Session time-to-limit

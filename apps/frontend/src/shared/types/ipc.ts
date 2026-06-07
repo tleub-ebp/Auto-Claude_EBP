@@ -145,6 +145,8 @@ import type {
 	TaskRecoveryResult,
 	TaskStartOptions,
 	TaskStatus,
+	VisualProofRun,
+	WorktreeAnalyzeImpactResult,
 	WorktreeCreatePROptions,
 	WorktreeCreatePRResult,
 	WorktreeDiff,
@@ -283,6 +285,7 @@ export interface ElectronAPI {
 	) => Promise<IPCResult<TaskRecoveryResult>>;
 	checkTaskRunning: (taskId: string) => Promise<IPCResult<boolean>>;
 	resumePausedTask: (taskId: string) => Promise<IPCResult>;
+	resumeTaskSession: (taskId: string) => Promise<IPCResult>;
 
 	// Image operations
 	loadImageThumbnail: (
@@ -306,6 +309,14 @@ export interface ElectronAPI {
 		taskId: string,
 		options?: WorktreeCreatePROptions,
 	) => Promise<IPCResult<WorktreeCreatePRResult>>;
+	analyzeWorktreeImpact: (
+		taskId: string,
+		targetBranch?: string,
+	) => Promise<IPCResult<WorktreeAnalyzeImpactResult>>;
+	runVisualProof: (taskId: string) => Promise<IPCResult<VisualProofRun>>;
+	getVisualProofStatus: (
+		taskId: string,
+	) => Promise<IPCResult<{ running: boolean }>>;
 	getPRDetails: (
 		prNumber: number,
 		taskId?: string,
@@ -356,6 +367,19 @@ export interface ElectronAPI {
 			}>;
 		}>
 	>;
+	worktreeReadFile: (
+		worktreePath: string,
+		relativePath: string,
+	) => Promise<IPCResult<string>>;
+	worktreeWriteFile: (
+		worktreePath: string,
+		relativePath: string,
+		content: string,
+	) => Promise<IPCResult<{ written: boolean }>>;
+	worktreeDeleteFiles: (
+		worktreePath: string,
+		relativePaths: string[],
+	) => Promise<IPCResult<{ deleted: string[]; failed: string[] }>>;
 
 	// Task archive operations
 	archiveTasks: (
@@ -834,6 +858,11 @@ export interface ElectronAPI {
 	checkAzureDevOpsConnection: (
 		projectId: string,
 	) => Promise<IPCResult<AzureDevOpsSyncStatus>>;
+	syncAzureDevOpsTaskAC: (
+		projectId: string,
+		taskId: string,
+		workItemId: number,
+	) => Promise<IPCResult<{ acceptanceCriteria: string[] }>>;
 
 	// Jira integration operations
 	getJiraIssues: (
@@ -1378,6 +1407,9 @@ export interface ElectronAPI {
 	) => () => void;
 	onMergeProgress: (
 		callback: (taskId: string, progress: MergeProgress) => void,
+	) => () => void;
+	onVisualProofRunning: (
+		callback: (taskId: string, running: boolean) => void,
 	) => () => void;
 
 	// File explorer operations
