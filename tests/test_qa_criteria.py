@@ -34,6 +34,7 @@ _mocked_module_names = [
     "claude_agent_sdk.types",
     # Core infrastructure
     "core",
+    "core.agent_client",
     "core.client",
     "core.task_event",
     "client",
@@ -50,9 +51,11 @@ _mocked_module_names = [
     # Security
     "security",
     "security.constants",
+    "security.qa_scanner",
     "security.tool_input_validator",
     # Memory
     "agents",
+    "agents.agent_audit",
     "agents.memory_manager",
 ]
 

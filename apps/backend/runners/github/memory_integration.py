@@ -237,7 +237,7 @@ class GitHubMemoryIntegration:
                 # Initialize
                 await self._graphiti.initialize()
 
-            except Exception as e:
+            except Exception:
                 self._graphiti = None
                 return None
 

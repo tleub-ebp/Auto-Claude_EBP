@@ -28,6 +28,7 @@ from .cost_predictor import (
     SpecFootprint,
     extract_spec_footprint,
 )
+from .estimator import CostEstimate, PhaseEstimate, estimate_build_cost
 from .live_tracker import CostEvent, LiveCostTracker, TrackerSnapshot
 from .reservation import BudgetReservation, ReservationManager
 
@@ -55,4 +56,8 @@ __all__ = [
     "PredictionReport",
     "SpecFootprint",
     "extract_spec_footprint",
+    # Pre-build estimator
+    "CostEstimate",
+    "PhaseEstimate",
+    "estimate_build_cost",
 ]

@@ -5,6 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  electron-builder-squirrel-windows: ^26.8.2
+  dmg-builder: ^26.8.2
   '@electron/rebuild': 4.0.3
   vite: '>= 8.0.8'
   esbuild: '>= 0.25.0'
@@ -13,6 +15,7 @@ overrides:
   brace-expansion: '>= 2.0.3'
   picomatch: '>= 4.0.4'
   yaml: '>= 2.8.3'
+  tar: '>= 7.5.11'
   ajv: ^6.14.0
   rollup: '>= 4.59.0'
 
@@ -30,7 +33,7 @@ importers:
         specifier: ^1.8.0
         version: 1.8.0(react@19.2.4)
       tar:
-        specifier: ^7.5.13
+        specifier: '>= 7.5.11'
         version: 7.5.13
       unzipper:
         specifier: ^0.10.11
@@ -2471,15 +2474,15 @@ packages:
     resolution: {integrity: sha512-/UgCD8VrO79Wv8aBNpjMfsS1pIUfIPURoRn0Ik6tMe5avdZF+vQgl/juJgipcMmH3YS0BD573lCdCHyoi84USg==}
     engines: {node: '>=14.0.0'}
     peerDependencies:
-      dmg-builder: 26.7.0
-      electron-builder-squirrel-windows: 26.7.0
+      dmg-builder: ^26.8.2
+      electron-builder-squirrel-windows: ^26.8.2
 
   app-builder-lib@26.8.2:
     resolution: {integrity: sha512-z3ptLzJwNl35fyR0wxv4qWOfZuU36VysYHnbs8PDtf8S0QzIl2OWimdDFVmCxYMkIV1k/RT9CeTgcP7oUznFOw==}
     engines: {node: '>=14.0.0'}
     peerDependencies:
-      dmg-builder: 26.8.2
-      electron-builder-squirrel-windows: 26.8.2
+      dmg-builder: ^26.8.2
+      electron-builder-squirrel-windows: ^26.8.2
 
   argparse@2.0.1:
     resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}

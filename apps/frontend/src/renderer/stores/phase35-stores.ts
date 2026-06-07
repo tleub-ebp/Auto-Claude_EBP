@@ -42,7 +42,7 @@ function unwrap<T>(
 	res: { success: true } & T,
 	fallback?: never,
 ): T;
-function unwrap<T>(res: { success: false; error: string }): never;
+function unwrap<_T>(res: { success: false; error: string }): never;
 function unwrap<T>(res: { success: boolean; error?: string } & T): T {
 	if (!res.success) throw new Error(res.error ?? "Unknown backend error");
 	return res;

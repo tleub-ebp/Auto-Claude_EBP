@@ -19,6 +19,10 @@ import type {
 	AppUpdateProgress,
 } from "./app-update";
 import type {
+	ConflictPredictionEvent,
+	ConflictPredictionResult,
+} from "../../renderer/stores/conflict-predictor-store";
+import type {
 	BranchDiffOptions,
 	ChangelogGenerationProgress,
 	ChangelogGenerationRequest,
@@ -141,6 +145,8 @@ import type {
 	TaskRecoveryResult,
 	TaskStartOptions,
 	TaskStatus,
+	VisualProofRun,
+	WorktreeAnalyzeImpactResult,
 	WorktreeCreatePROptions,
 	WorktreeCreatePRResult,
 	WorktreeDiff,
@@ -205,6 +211,7 @@ export interface TabState {
 export interface ElectronAPI {
 	// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
 	[x: string]: any;
+
 	// Project operations
 	addProject: (projectPath: string) => Promise<IPCResult<Project>>;
 	removeProject: (projectId: string) => Promise<IPCResult>;
@@ -219,6 +226,11 @@ export interface ElectronAPI {
 	checkProjectVersion: (
 		projectId: string,
 	) => Promise<IPCResult<AutoBuildVersionInfo>>;
+	checkProjectPaths: () => Promise<IPCResult<Record<string, boolean>>>;
+	repathProject: (
+		projectId: string,
+		newPath: string,
+	) => Promise<IPCResult<Project>>;
 
 	// Tab State (persisted in the main process for reliability)
 	getTabState: () => Promise<IPCResult<TabState>>;
@@ -273,6 +285,7 @@ export interface ElectronAPI {
 	) => Promise<IPCResult<TaskRecoveryResult>>;
 	checkTaskRunning: (taskId: string) => Promise<IPCResult<boolean>>;
 	resumePausedTask: (taskId: string) => Promise<IPCResult>;
+	resumeTaskSession: (taskId: string) => Promise<IPCResult>;
 
 	// Image operations
 	loadImageThumbnail: (
@@ -296,6 +309,14 @@ export interface ElectronAPI {
 		taskId: string,
 		options?: WorktreeCreatePROptions,
 	) => Promise<IPCResult<WorktreeCreatePRResult>>;
+	analyzeWorktreeImpact: (
+		taskId: string,
+		targetBranch?: string,
+	) => Promise<IPCResult<WorktreeAnalyzeImpactResult>>;
+	runVisualProof: (taskId: string) => Promise<IPCResult<VisualProofRun>>;
+	getVisualProofStatus: (
+		taskId: string,
+	) => Promise<IPCResult<{ running: boolean }>>;
 	getPRDetails: (
 		prNumber: number,
 		taskId?: string,
@@ -346,6 +367,19 @@ export interface ElectronAPI {
 			}>;
 		}>
 	>;
+	worktreeReadFile: (
+		worktreePath: string,
+		relativePath: string,
+	) => Promise<IPCResult<string>>;
+	worktreeWriteFile: (
+		worktreePath: string,
+		relativePath: string,
+		content: string,
+	) => Promise<IPCResult<{ written: boolean }>>;
+	worktreeDeleteFiles: (
+		worktreePath: string,
+		relativePaths: string[],
+	) => Promise<IPCResult<{ deleted: string[]; failed: string[] }>>;
 
 	// Task archive operations
 	archiveTasks: (
@@ -666,6 +700,12 @@ export interface ElectronAPI {
 
 	// Dialog operations
 	selectDirectory: () => Promise<string | null>;
+	selectFiles: (options?: {
+		title?: string;
+		defaultPath?: string;
+		multi?: boolean;
+		filters?: { name: string; extensions: string[] }[];
+	}) => Promise<string[]>;
 	createProjectFolder: (
 		location: string,
 		name: string,
@@ -818,6 +858,11 @@ export interface ElectronAPI {
 	checkAzureDevOpsConnection: (
 		projectId: string,
 	) => Promise<IPCResult<AzureDevOpsSyncStatus>>;
+	syncAzureDevOpsTaskAC: (
+		projectId: string,
+		taskId: string,
+		workItemId: number,
+	) => Promise<IPCResult<{ acceptanceCriteria: string[] }>>;
 
 	// Jira integration operations
 	getJiraIssues: (
@@ -1363,6 +1408,9 @@ export interface ElectronAPI {
 	onMergeProgress: (
 		callback: (taskId: string, progress: MergeProgress) => void,
 	) => () => void;
+	onVisualProofRunning: (
+		callback: (taskId: string, running: boolean) => void,
+	) => () => void;
 
 	// File explorer operations
 	listDirectory: (dirPath: string) => Promise<IPCResult<FileNode[]>>;
@@ -1461,6 +1509,9 @@ export interface ElectronAPI {
 		IPCResult<import("./cli").ClaudeCodeVersionInfo>
 	>;
 	installClaudeCode: () => Promise<IPCResult<{ command: string }>>;
+	installClaudeCodeSilent: () => Promise<
+		IPCResult<{ stdout: string; stderr: string }>
+	>;
 	getClaudeCodeVersions: () => Promise<
 		IPCResult<import("./cli").ClaudeCodeVersionList>
 	>;
@@ -1512,11 +1563,9 @@ export interface ElectronAPI {
 	cancelConflictPrediction: () => Promise<boolean>;
 
 	// Conflict Predictor event listeners
-	// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
-	onConflictPredictionEvent: (callback: (event: any) => void) => () => void;
+	onConflictPredictionEvent: (callback: (event: ConflictPredictionEvent) => void) => () => void;
 	onConflictPredictionError: (callback: (error: string) => void) => () => void;
-	// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
-	onConflictPredictionComplete: (callback: (result: any) => void) => () => void;
+	onConflictPredictionComplete: (callback: (result: ConflictPredictionResult) => void) => () => void;
 
 	// Queue Routing API (rate limit recovery)
 	queue: import("../../preload/api/queue-api").QueueAPI;

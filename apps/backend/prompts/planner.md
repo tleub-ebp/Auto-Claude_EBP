@@ -248,6 +248,21 @@ If you are using Windsurf, OpenAI, Copilot, or any non-Claude provider:
 
 Based on the workflow type and services involved, create the implementation plan.
 
+### 🚨 CRITICAL PATH RULES — READ BEFORE WRITING ANY PATH
+
+All file paths in `files_to_modify`, `files_to_create`, `files_to_reference`, `patterns_from`, and any verification `command` MUST:
+
+1. **Be relative to the project root** (the directory you are currently in — where `.workpilot/` lives).
+2. **NEVER start with `../`** or contain any `../` segment. Paths that escape the project root are rejected by the coder agent and the task will fail.
+3. **NEVER be absolute** (no `C:\...`, no `/home/...`).
+
+✅ Correct: `src/auth/login.py`, `Sources/EBP.Invoicing.Module/Schema/Foo.cs`
+❌ Wrong: `../Sources/Foo.cs`, `../../other-repo/file.ts`, `C:\Users\...\file.cs`
+
+**If the code you need to modify is OUTSIDE the project root**, the project is misconfigured — its `project_dir` points to a sub-folder instead of the actual project root. In that case:
+- STOP planning.
+- Write a single-subtask plan with `status: "blocked"` and a `notes` field explaining: "Project misconfiguration: target files live outside project_dir. Reconfigure the project to point at the parent directory containing both `.workpilot/` and the source code."
+
 ### Plan Structure
 
 ```json
@@ -451,6 +466,11 @@ Use ONLY these values for the `type` field in phases:
 ## PHASE 3.5: DEFINE VERIFICATION STRATEGY
 
 After creating the phases and subtasks, define the verification strategy based on the task's complexity assessment.
+
+> **TDD mode:** If a "TDD MODE ENABLED" section is present at the end of this prompt,
+> set `verification_strategy.test_creation_phase` to `"pre_implementation"` (tests are
+> written before the production code) and follow the test-first rules in that section.
+> Otherwise keep the default `"post_implementation"`.
 
 ### Read Complexity Assessment
 

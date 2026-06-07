@@ -12,6 +12,8 @@ import json
 import logging
 import os
 import re
+import shlex
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -142,21 +144,42 @@ async def _execute_action(
             result["output"] = {"title": title, "message": message, "type": notif_type}
 
         elif action.type == ActionType.RUN_COMMAND:
-            command = _interpolate(
-                action.config.get("command", "echo 'no command'"), event.data
-            )
+            # Accept either an argv list (preferred — safe against
+            # injection because each element is one argument) or a string
+            # for legacy configs. With a string, we shlex.split BEFORE
+            # interpolation so attacker-controlled event data cannot inject
+            # extra args or shell metacharacters into the command line.
+            raw_command = action.config.get("command", ["echo", "no command"])
+            if isinstance(raw_command, list):
+                argv = _interpolate_argv(raw_command, event.data)
+            elif isinstance(raw_command, str):
+                argv = _interpolate_argv(shlex.split(raw_command), event.data)
+            else:
+                raise ValueError(
+                    "RUN_COMMAND action.config['command'] must be a list or string"
+                )
+            if not argv:
+                raise ValueError("RUN_COMMAND requires a non-empty command")
             cwd = action.config.get("cwd", os.getcwd())
-            logger.info("[HookEngine] Running command: %s", command)
-            proc = await asyncio.create_subprocess_shell(
-                command,
+            logger.info("[HookEngine] Running command: %r", argv)
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=action.timeout_ms / 1000.0 if action.timeout_ms else 30,
-            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=action.timeout_ms / 1000.0 if action.timeout_ms else 30,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
+                raise
             result["output"] = {
                 "stdout": stdout.decode(errors="replace")[:5000],
                 "stderr": stderr.decode(errors="replace")[:2000],
@@ -301,6 +324,16 @@ def _interpolate(template: str, data: dict[str, Any]) -> str:
     return template
 
 
+def _interpolate_argv(argv: list[str], data: dict[str, Any]) -> list[str]:
+    """Interpolate {{key}} placeholders inside each argv element.
+
+    Each element is treated as a single argument — values are NOT shell-split,
+    so attacker-controlled data cannot inject extra arguments or command
+    chaining.
+    """
+    return [_interpolate(arg, data) for arg in argv]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Hook Service
 # ─────────────────────────────────────────────────────────────────────────────
@@ -310,6 +343,10 @@ class HookService:
     """Core service for managing event-driven hooks."""
 
     _instance: HookService | None = None
+    # Lock prevents two threads from racing into _load() during bootstrap
+    # (which reads + parses the hooks JSON file twice and creates two
+    # HookService instances, each holding its own copy of the hooks dict).
+    _instance_lock: threading.Lock = threading.Lock()
 
     def __init__(self):
         self._hooks: dict[str, Hook] = {}
@@ -320,8 +357,11 @@ class HookService:
 
     @classmethod
     def get_instance(cls) -> HookService:
+        # Double-checked locking — fast path is lock-free.
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     # ── Persistence ───────────────────────────────────────────────────────

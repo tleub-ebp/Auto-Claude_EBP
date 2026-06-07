@@ -19,12 +19,13 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from claude_agent_sdk import tool
+    from claude_agent_sdk import ToolAnnotations, tool
 
     SDK_TOOLS_AVAILABLE = True
 except ImportError:
     SDK_TOOLS_AVAILABLE = False
     tool = None
+    ToolAnnotations = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ async def _save_to_graphiti_async(
             # Always close the memory connection (swallow exceptions to avoid overriding)
             try:
                 await memory.close()
-            except Exception as e:
+            except Exception:
                 logger.debug(
                     "Failed to close Graphiti memory connection", exc_info=True
                 )
@@ -282,6 +283,9 @@ def create_memory_tools(spec_dir: Path, project_dir: Path) -> list:
         "get_session_context",
         "Get context from previous sessions including discoveries, gotchas, and patterns.",
         {},
+        # Read-only: enables parallel execution alongside other read-only
+        # tools (get_build_progress, Read, Grep) in the same turn.
+        annotations=ToolAnnotations(readOnlyHint=True),
     )
     async def get_session_context(args: dict[str, Any]) -> dict[str, Any]:
         """Get accumulated session context."""

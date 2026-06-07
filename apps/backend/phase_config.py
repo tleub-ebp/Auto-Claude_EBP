@@ -12,6 +12,13 @@ import re
 from pathlib import Path
 from typing import Literal, TypedDict
 
+try:
+    from .models_registry import get_default
+except ImportError:
+    # Module is imported as a top-level "phase_config" (no package context),
+    # e.g. by tests that put apps/backend on sys.path directly.
+    from models_registry import get_default  # type: ignore[no-redef]
+
 # Model shorthand to full model ID mapping
 MODEL_ID_MAP: dict[str, str] = {
     "opus": "claude-opus-4-5-20251101",
@@ -56,29 +63,27 @@ DEFAULT_PHASE_MODELS: dict[str, str] = {
     "qa": "sonnet",
 }
 
-# Provider-specific default models (full model IDs, not Claude shorthands).
+# Provider-specific default models — resolved from registry at runtime
 # Used when a task has a provider set but no explicit model configuration.
 # Keys must match provider names from provider_api.py / ProviderContext.
-# Values are the "standard" tier model for each provider — a sensible default
-# that balances quality and cost across all phases.
 
-# Google Gemini default model
-GOOGLE_GEMINI_MODEL = "gemini-2.5-pro"
+_GOOGLE_ENTRY = get_default("google")
+GOOGLE_GEMINI_MODEL = _GOOGLE_ENTRY.model_id if _GOOGLE_ENTRY else "gemini-3.1-pro"
 
-# Meta LLaMA default model
-META_LLAMA_MODEL = "meta-llama/llama-4-scout"
+_META_ENTRY = get_default("meta")
+META_LLAMA_MODEL = _META_ENTRY.model_id if _META_ENTRY else "meta-llama/llama-4-scout"
 
-# AWS Bedrock default model
-AWS_BEDROCK_MODEL = "anthropic.claude-sonnet-4-5-v1"
+_AWS_ENTRY = get_default("aws")
+AWS_BEDROCK_MODEL = _AWS_ENTRY.model_id if _AWS_ENTRY else "anthropic.claude-opus-4-7"
 
-# Ollama default model
-OLLAMA_MODEL = "llama3.3"
+_OLLAMA_ENTRY = get_default("ollama")
+OLLAMA_MODEL = _OLLAMA_ENTRY.model_id if _OLLAMA_ENTRY else "llama3.3"
 
-# Windsurf default model
-WINDSURF_MODEL = "swe-1.6-fast"
+_WINDSURF_ENTRY = get_default("windsurf")
+WINDSURF_MODEL = _WINDSURF_ENTRY.model_id if _WINDSURF_ENTRY else "swe-1.6"
 
-# GitHub Copilot default model (must be accepted by api.githubcopilot.com for this account)
-COPILOT_MODEL = "claude-sonnet-4.6"
+_COPILOT_ENTRY = get_default("copilot")
+COPILOT_MODEL = _COPILOT_ENTRY.model_id if _COPILOT_ENTRY else "claude-sonnet-4.6"
 
 PROVIDER_DEFAULT_MODELS: dict[str, dict[str, str]] = {
     # Anthropic / Claude — use Claude shorthands (resolved by resolve_model_id)
@@ -348,12 +353,14 @@ def _resolve_provider_model(model: str, provider: str | None) -> str:
         # Caller should handle this; just pass through resolve_model_id as fallback
         return resolve_model_id(model)
 
-    # Detect Anthropic versioned model IDs (e.g. "claude-sonnet-4-5-20250929",
-    # "claude-opus-4-6") that are NOT valid for non-Anthropic providers.
+    # Detect Anthropic-native versioned model IDs (dash-separated versions, e.g.
+    # "claude-sonnet-4-5-20250929", "claude-opus-4-6") that are NOT valid for
+    # non-Anthropic providers.  Copilot uses dot-separated notation (e.g.
+    # "claude-sonnet-4.5", "claude-opus-4.7") which must NOT be intercepted here.
     # This happens when a task was started with Anthropic and its task_metadata.json
     # still contains the old versioned model after the provider was switched.
     # Fall back to the provider's default model instead of sending an invalid ID.
-    if re.match(r"^claude-(opus|sonnet|haiku)-\d", model):
+    if re.match(r"^claude-(opus|sonnet|haiku)-\d+-\d", model):
         provider_defaults = PROVIDER_DEFAULT_MODELS.get(provider, {})
         fallback = provider_defaults.get("spec") or provider_defaults.get("coding")
         if fallback:

@@ -261,6 +261,19 @@ class TestCreateMergeRequest:
             patch.object(
                 worktree_manager, "_extract_spec_summary", return_value="Test MR body"
             ),
+            # Bypass impact block (and its underlying git calls) so this
+            # test's strict subprocess.run side_effect list isn't consumed
+            # by the analyzer.
+            patch.object(
+                worktree_manager,
+                "_gather_pr_context",
+                return_value=("", ""),
+            ),
+            patch.object(
+                worktree_manager,
+                "_inject_impact_block",
+                side_effect=lambda spec_name, body, **kw: body,
+            ),
             patch.object(worktree_module.time, "sleep"),  # Skip sleep in tests
         ):
             result = worktree_manager.create_merge_request(spec_name=spec_name)
@@ -315,6 +328,7 @@ class TestPushAndCreatePR:
             target_branch="main",
             title="Test MR",
             draft=False,
+            body=None,
         )
 
         # Verify result

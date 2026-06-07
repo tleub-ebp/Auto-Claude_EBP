@@ -14,15 +14,11 @@ export function formatUsageValue(
 	if (value == null) return undefined;
 
 	if (typeof Intl !== "undefined" && Intl.NumberFormat) {
-		try {
-			return new Intl.NumberFormat(locale, {
-				notation: "compact",
-				compactDisplay: "short",
-				maximumFractionDigits: 2,
-			}).format(value);
-		} catch {
-			// Intl may fail in some environments, fall back to toString()
-		}
+		return new Intl.NumberFormat(locale, {
+			notation: "compact",
+			compactDisplay: "short",
+			maximumFractionDigits: 2,
+		}).format(value);
 	}
 	return value.toString();
 }

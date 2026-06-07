@@ -64,7 +64,7 @@
 		"mcpMarketplace": "Marketplace MCP",
 		"multiRepoOrchestration": "Multi-Repo",
 		"missionControl": "Contrôle de Mission",
-		"phase35Hub": "Fonctionnalités Phase 3-5",
+		"phase35Hub": "Fonctionnalités avancées",
 		"pixelOffice": "Bureau Pixel",
 		"agentReplay": "Agent de Replay",
 		"selfHealing": "Auto-Guérison",
@@ -115,7 +115,8 @@
 		"unpin": "Retirer des favoris",
 		"pinGroup": "Épingler le groupe aux favoris",
 		"unpinGroup": "Retirer le groupe des favoris",
-		"resetLayout": "Réinitialiser la disposition"
+		"resetLayout": "Réinitialiser la disposition",
+		"clearAllFavorites": "Supprimer tous les favoris"
 	},
 	"tooltips": {
 		"settings": "Paramètres de l'application",
@@ -173,7 +174,10 @@
 		"pathChangeWarningTitle": "Changer d'installation CLI ?",
 		"pathChangeWarningDescription": "Le changement d'installation CLI utilisera un binaire CLI IA différent. Les sessions en cours continueront à utiliser l'installation précédente jusqu'à leur redémarrage.",
 		"switchInstallationConfirm": "Changer",
-		"versionUnknown": "version inconnue"
+		"versionUnknown": "version inconnue",
+		"installFailed": "Échec de l'installation",
+		"versionSwitchFailed": "Échec du changement de version",
+		"terminalUnavailable": "Impossible d'ouvrir un terminal. Mettez à jour Claude Code depuis un terminal manuellement."
 	},
 	"codex": {
 		"checking": "Vérification Codex CLI...",

@@ -1,7 +1,11 @@
 ﻿import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { useEffect } from "react";
 import {
 	AlertTriangle,
 	CheckCircle2,
+	ChevronLeft,
+	ChevronRight,
+	FlaskConical,
 	GitMerge,
 	GitPullRequest,
 	Loader2,
@@ -20,14 +24,16 @@ import type {
 	WorktreeCreatePROptions,
 } from "../../../shared/types";
 import { useToast } from "../../hooks/use-toast";
-import { calculateProgress, cn } from "../../lib/utils";
+import { calculateProgress, cn, extractTextFromHtml } from "../../lib/utils";
 import { useProjectStore } from "../../stores/project-store";
 import {
 	deleteTask,
+	persistUpdateTask,
 	recoverStuckTask,
 	startTask,
 	stopTask,
 	submitReview,
+	updatePlanSubtasks,
 	useTaskStore,
 } from "../../stores/task-store";
 import { StreamingSessionButton } from "../streaming/StreamingSessionButton";
@@ -44,6 +50,10 @@ import {
 } from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import {
+	DialogMaximizeButton,
+	useDialogMaximize,
+} from "../ui/dialog-maximize";
 import { Progress } from "../ui/progress";
 import { ScrollArea } from "../ui/scroll-area";
 import { Separator } from "../ui/separator";
@@ -57,17 +67,67 @@ import {
 import { useTaskDetail } from "./hooks/useTaskDetail";
 import { TaskFiles } from "./TaskFiles";
 import { TaskLogs } from "./TaskLogs";
+import { TaskPauseControls } from "./TaskPauseControls";
+import { TaskPhaseBar } from "./TaskPhaseBar";
+import { pauseTask, resumeTask } from "../../stores/task-store";
 import { TaskMetadata as TaskMetadataComponent } from "./TaskMetadata";
 import { TaskReview } from "./TaskReview";
 import { TaskSubtasks } from "./TaskSubtasks";
+import { TaskVisualProof } from "./TaskVisualProof";
 import { TaskWarnings } from "./TaskWarnings";
 import { SyncFromBranchDialog } from "./task-review/SyncFromBranchDialog";
+import { TaskEmulator } from "./TaskEmulator";
 
 interface TaskDetailModalProps {
 	readonly open: boolean;
 	readonly task: Task | null;
 	readonly onOpenChange: (open: boolean) => void;
+	/** Navigue vers la tâche précédente dans l'ordre du Kanban. */
+	readonly onNavigatePrevious?: () => void;
+	/** Navigue vers la tâche suivante dans l'ordre du Kanban. */
+	readonly onNavigateNext?: () => void;
+	/** Indique s'il existe une tâche précédente. */
+	readonly hasPrevious?: boolean;
+	/** Indique s'il existe une tâche suivante. */
+	readonly hasNext?: boolean;
 }
+
+/**
+ * Strip HTML tags from a task title before rendering it in the modal header.
+ *
+ * Some imported tasks (Azure DevOps, Jira) carry their description into the
+ * `title` field as raw HTML, e.g. `<div><span><b>Description:</b><br></span></div>…`.
+ * React renders that verbatim — tags included — because JSX escapes strings.
+ * For the title we don't want to honour the HTML structure (it would dominate
+ * the header), just extract the human-readable text and let it `truncate`.
+ *
+ * If the title doesn't look like HTML we return it unchanged so the common
+ * case stays a cheap pass-through.
+ */
+function cleanTitleForDisplay(title: string): string {
+	if (!title) return "";
+	const trimmed = title.trim();
+	if (!trimmed.startsWith("<")) return title;
+	const text = extractTextFromHtml(title);
+	return text || title;
+}
+
+/**
+ * Empêche la popin de se fermer lorsque l'utilisateur interagit avec les
+ * chevrons de navigation. Ces boutons sont rendus dans le Portal mais hors
+ * du `Content`, donc Radix les considère comme « extérieurs » et déclenche la
+ * fermeture (pointerdown, focus ou interaction). On annule cette fermeture
+ * quand la cible appartient à un élément marqué `data-task-nav`.
+ */
+function preventCloseOnTaskNav(
+	event: { detail: { originalEvent: Event }; preventDefault: () => void },
+): void {
+	const target = event.detail.originalEvent.target as HTMLElement | null;
+	if (target?.closest("[data-task-nav]")) {
+		event.preventDefault();
+	}
+}
+
 
 const renderTaskStatusBadges = (
 	task: Task,
@@ -168,6 +228,10 @@ export function TaskDetailModal({
 	open,
 	task,
 	onOpenChange,
+	onNavigatePrevious,
+	onNavigateNext,
+	hasPrevious,
+	hasNext,
 }: TaskDetailModalProps) {
 	// Don't render anything if no task
 	if (!task) {
@@ -180,6 +244,10 @@ export function TaskDetailModal({
 			task={task}
 			onOpenChange={onOpenChange}
 			onCloseTask={() => onOpenChange(false)}
+			onNavigatePrevious={onNavigatePrevious}
+			onNavigateNext={onNavigateNext}
+			hasPrevious={hasPrevious}
+			hasNext={hasNext}
 		/>
 	);
 }
@@ -254,6 +322,8 @@ function useTaskDetailHandlers(
 		state.setIsSubmitting(false);
 		state.setFeedback("");
 		state.setFeedbackImages([]);
+		// No manual reload — the file watcher will push plan updates via TASK_PROGRESS
+		// when the QA subprocess writes new subtasks to implementation_plan.json
 	};
 
 	const handleDelete = async () => {
@@ -280,12 +350,80 @@ function useTaskDetailHandlers(
 		onOpenChange(false);
 	};
 
+	const handleUpdatePlan = async (
+		phases: Array<{
+			name: string;
+			subtasks: Array<{
+				id: string;
+				title?: string;
+				description?: string;
+				status: string;
+				files?: string[];
+				verification?: {
+					type: string;
+					run?: string;
+					scenario?: string;
+				};
+			}>;
+		}>,
+	) => {
+		const success = await updatePlanSubtasks(task.id, phases as Array<Record<string, unknown>>);
+		if (success) {
+			toast({
+				title: t("tasks:plan.changesSaved"),
+				duration: 3000,
+			});
+		} else {
+			toast({
+				title: t("tasks:plan.saveError"),
+				variant: "destructive",
+				duration: 5000,
+			});
+		}
+	};
+
+	const handleToggleTdd = async () => {
+		const project = useProjectStore
+			.getState()
+			.projects.find((p) => p.id === task.projectId);
+		const effective =
+			(task.metadata as TaskMetadata)?.tddMode ??
+			project?.settings?.tddMode ??
+			false;
+		const next = !effective;
+
+		const ok = await persistUpdateTask(task.id, {
+			metadata: { tddMode: next },
+		});
+
+		if (ok) {
+			toast({
+				title: next
+					? t("tasks:tdd.enabledTitle")
+					: t("tasks:tdd.disabledTitle"),
+				description: next
+					? t("tasks:tdd.enabledDescription")
+					: t("tasks:tdd.disabledDescription"),
+				duration: 3000,
+			});
+		} else {
+			toast({
+				title: t("tasks:tdd.errorTitle"),
+				description: t("tasks:tdd.errorDescription"),
+				variant: "destructive",
+				duration: 5000,
+			});
+		}
+	};
+
 	return {
 		handleStartStop,
 		handleRecover,
 		handleReject,
 		handleDelete,
 		handleClose,
+		handleUpdatePlan,
+		handleToggleTdd,
 	};
 }
 
@@ -295,14 +433,25 @@ function TaskDetailModalContent({
 	task,
 	onOpenChange,
 	onCloseTask,
+	onNavigatePrevious,
+	onNavigateNext,
+	hasPrevious,
+	hasNext,
 }: {
 	readonly open: boolean;
 	readonly task: Task;
 	readonly onOpenChange: (open: boolean) => void;
 	readonly onCloseTask?: () => void;
+	readonly onNavigatePrevious?: () => void;
+	readonly onNavigateNext?: () => void;
+	readonly hasPrevious?: boolean;
+	readonly hasNext?: boolean;
 }) {
 	const { t } = useTranslation(["tasks"]);
 	const state = useTaskDetail({ task });
+	const { maximized, toggle: toggleMaximized } = useDialogMaximize(
+		"workpilot:task-detail-maximized",
+	);
 	const activeProject = useProjectStore((s) => s.getActiveProject());
 	const allProjects = useProjectStore((s) => s.projects);
 	const taskProject = allProjects.find((p) => p.id === task.projectId);
@@ -313,6 +462,16 @@ function TaskDetailModalContent({
 	).length;
 	const totalSubtasks = task.subtasks.length;
 
+	// Activité en cours affichée dans la barre de phase : on privilégie le
+	// sous-tâche actuellement traité, avec repli sur les informations de
+	// progression d'exécution (message de phase, ex: « Creating implementation
+	// plan... »). Indispensable pour les phases sans sous-tâches (planning).
+	const currentPhaseActivity =
+		task.subtasks.find((s) => s.status === "in_progress")?.title ??
+		task.executionProgress?.currentSubtask ??
+		task.executionProgress?.message ??
+		null;
+
 	// Extract handlers using custom hook
 	const {
 		handleStartStop,
@@ -320,7 +479,70 @@ function TaskDetailModalContent({
 		handleReject,
 		handleDelete,
 		handleClose,
+		handleUpdatePlan,
+		handleToggleTdd,
 	} = useTaskDetailHandlers(task, state, onOpenChange);
+
+	// Effective per-task TDD state: explicit task override, else project default.
+	const tddEnabled =
+		(task.metadata as TaskMetadata)?.tddMode ??
+		taskProject?.settings?.tddMode ??
+		false;
+	const tddToggleDisabled = state.isRunning && !state.isStuck;
+
+	// Navigation clavier (← / →) entre les tâches, dans l'ordre du Kanban.
+	// Ignorée lorsqu'un champ est en cours d'édition ou qu'une sous-popin est ouverte.
+	useEffect(() => {
+		if (!open) return;
+		if (!onNavigatePrevious && !onNavigateNext) return;
+
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+			if (event.altKey || event.ctrlKey || event.metaKey) return;
+
+			const target = event.target as HTMLElement | null;
+			if (target) {
+				const tag = target.tagName;
+				if (
+					tag === "INPUT" ||
+					tag === "TEXTAREA" ||
+					tag === "SELECT" ||
+					target.isContentEditable
+				) {
+					return;
+				}
+			}
+
+			// Ne pas naviguer quand une popin secondaire est ouverte.
+			if (
+				state.isEditDialogOpen ||
+				state.showDeleteDialog ||
+				state.showSyncDialog
+			) {
+				return;
+			}
+
+			if (event.key === "ArrowLeft" && hasPrevious && onNavigatePrevious) {
+				event.preventDefault();
+				onNavigatePrevious();
+			} else if (event.key === "ArrowRight" && hasNext && onNavigateNext) {
+				event.preventDefault();
+				onNavigateNext();
+			}
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [
+		open,
+		hasPrevious,
+		hasNext,
+		onNavigatePrevious,
+		onNavigateNext,
+		state.isEditDialogOpen,
+		state.showDeleteDialog,
+		state.showSyncDialog,
+	]);
 
 	const handleMerge = async () => {
 		state.setIsMerging(true);
@@ -437,12 +659,12 @@ function TaskDetailModalContent({
 					{state.isRecovering ? (
 						<>
 							<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-							Recovering...
+							{t("tasks:modal.actions.recovering")}
 						</>
 					) : (
 						<>
 							<RotateCcw className="mr-2 h-4 w-4" />
-							Recover Task
+							{t("tasks:modal.actions.recoverTask")}
 						</>
 					)}
 				</Button>
@@ -459,12 +681,12 @@ function TaskDetailModalContent({
 					{state.isLoadingPlan ? (
 						<>
 							<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-							Loading Plan...
+							{t("tasks:modal.actions.loadingPlan")}
 						</>
 					) : (
 						<>
 							<Play className="mr-2 h-4 w-4" />
-							Resume Task
+							{t("tasks:modal.actions.resumeTask")}
 						</>
 					)}
 				</Button>
@@ -566,18 +788,24 @@ function TaskDetailModalContent({
 							"w-[95vw] max-w-5xl h-[calc(100vh-32px)]",
 							"bg-card border border-border rounded-xl",
 							"shadow-2xl overflow-hidden flex flex-col",
+							"transition-[top,width,max-width,height,border-radius] ease-out",
 							"data-[state=open]:animate-in data-[state=closed]:animate-out",
 							"data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
 							"data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
 							"duration-200",
+							// Appended last so tailwind-merge overrides the default sizing.
+							maximized && "top-0 w-screen max-w-none h-screen rounded-none",
 						)}
+						onPointerDownOutside={preventCloseOnTaskNav}
+						onFocusOutside={preventCloseOnTaskNav}
+						onInteractOutside={preventCloseOnTaskNav}
 					>
 						{/* Header */}
 						<div className="p-5 pb-4 border-b border-border shrink-0">
 							<div className="flex items-start justify-between gap-4">
 								<div className="flex-1 min-w-0 overflow-hidden">
 									<DialogPrimitive.Title className="text-xl font-semibold leading-tight text-foreground truncate">
-										{task.title}
+										{cleanTitleForDisplay(task.title)}
 									</DialogPrimitive.Title>
 									<DialogPrimitive.Description asChild>
 										<div className="mt-2.5 flex items-center gap-2 flex-wrap">
@@ -601,21 +829,51 @@ function TaskDetailModalContent({
 											)}
 										</div>
 									</DialogPrimitive.Description>
-									{globalThis.DEBUG && (
-										<div className="mt-1 text-[11px] text-muted-foreground font-mono">
-											status={task.status} reviewReason=
-											{task.reviewReason ?? "none"} phase=
-											{task.executionProgress?.phase ?? "none"} reviewRequired=
-											{task.metadata?.requireReviewBeforeCoding
-												? "true"
-												: "false"}
-											<br />
-											projectId={activeProject?.id ?? "none"} projectName=
-											{activeProject?.name ?? "none"}
-										</div>
-									)}
 								</div>
 								<div className="flex items-center gap-1 shrink-0 electron-no-drag">
+									{/* TDD override toggle — sexy emerald pill */}
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<button
+												type="button"
+												role="switch"
+												aria-checked={tddEnabled}
+												aria-label={t("tasks:tdd.toggleAria")}
+												onClick={handleToggleTdd}
+												disabled={tddToggleDisabled}
+												className={cn(
+													"group mr-1 inline-flex h-9 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold tracking-wide transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50 disabled:cursor-not-allowed disabled:opacity-50",
+													tddEnabled
+														? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300 shadow-[0_0_14px_-3px_rgba(16,185,129,0.7)] hover:bg-emerald-500/20"
+														: "border-border bg-transparent text-muted-foreground hover:border-emerald-500/30 hover:text-emerald-300/80",
+												)}
+											>
+												<FlaskConical
+													className={cn(
+														"h-3.5 w-3.5 transition-transform duration-200",
+														tddEnabled
+															? "scale-110"
+															: "group-hover:scale-110",
+													)}
+												/>
+												<span>{t("tasks:labels.tdd")}</span>
+												<span
+													className={cn(
+														"h-1.5 w-1.5 rounded-full transition-all duration-200",
+														tddEnabled
+															? "bg-emerald-400 shadow-[0_0_6px_1px_rgba(16,185,129,0.9)]"
+															: "bg-muted-foreground/40",
+													)}
+												/>
+											</button>
+										</TooltipTrigger>
+										<TooltipContent side="bottom" className="max-w-[230px]">
+											{tddEnabled
+												? t("tasks:tdd.tooltipOn")
+												: t("tasks:tdd.tooltipOff")}
+										</TooltipContent>
+									</Tooltip>
+
 									{/* Sync from branch — available for any status that may have a worktree */}
 									{task.status !== "done" && (
 										<Tooltip>
@@ -643,6 +901,22 @@ function TaskDetailModalContent({
 									>
 										<Pencil className="h-4 w-4" />
 									</Button>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<DialogMaximizeButton
+												maximized={maximized}
+												onToggle={toggleMaximized}
+												className="h-10 w-10 hover:bg-primary/10 hover:text-primary"
+												maximizeLabel={t("tasks:modal.actions.maximize")}
+												restoreLabel={t("tasks:modal.actions.restore")}
+											/>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">
+											{maximized
+												? t("tasks:modal.actions.restore")
+												: t("tasks:modal.actions.maximize")}
+										</TooltipContent>
+									</Tooltip>
 									<DialogPrimitive.Close asChild>
 										<Button
 											variant="ghost"
@@ -721,6 +995,18 @@ function TaskDetailModalContent({
 											{t("tasks:files.tab")}
 										</TabsTrigger>
 									)}
+									<TabsTrigger
+										value="visualProof"
+										className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2.5 text-sm"
+									>
+										{t("tasks:visualProof.tab")}
+									</TabsTrigger>
+									<TabsTrigger
+										value="emulator"
+										className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2.5 text-sm"
+									>
+										{t("tasks:emulator.tab")}
+									</TabsTrigger>
 								</TabsList>
 
 								{/* Overview Tab */}
@@ -775,6 +1061,7 @@ function TaskDetailModalContent({
 														isCreatingPR={state.isCreatingPR}
 														onShowPRDialog={state.setShowPRDialog}
 														onCreatePR={handleCreatePR}
+														onRefreshDiff={state.refreshWorktreeDiff}
 													/>
 												</>
 											)}
@@ -787,8 +1074,17 @@ function TaskDetailModalContent({
 									value="subtasks"
 									className="flex-1 min-h-0 overflow-hidden mt-0"
 								>
-									<TaskSubtasks task={task} />
+									<TaskSubtasks task={task} onUpdatePlan={handleUpdatePlan} />
 								</TabsContent>
+
+								{/* Phase bar - only visible on Logs tab */}
+								{state.activeTab === "logs" && (
+									<TaskPhaseBar
+										phaseLogs={state.phaseLogs}
+										currentPhase={state.currentLogPhase}
+										currentActivity={currentPhaseActivity}
+									/>
+								)}
 
 								{/* Logs Tab */}
 								<TabsContent
@@ -805,6 +1101,7 @@ function TaskDetailModalContent({
 										logsContainerRef={state.logsContainerRef}
 										onLogsScroll={state.handleLogsScroll}
 										onTogglePhase={state.togglePhase}
+										onVisiblePhaseChange={state.setCurrentLogPhase}
 									/>
 								</TabsContent>
 
@@ -817,28 +1114,140 @@ function TaskDetailModalContent({
 										<TaskFiles task={task} />
 									</TabsContent>
 								)}
+
+								{/* Visual Proof Tab */}
+								<TabsContent
+									value="visualProof"
+									className="flex-1 min-h-0 overflow-hidden mt-0"
+								>
+									<TaskVisualProof task={task} />
+								</TabsContent>
+
+								{/* Emulator Tab */}
+								<TabsContent
+									value="emulator"
+									className="flex-1 min-h-0 overflow-hidden mt-0"
+								>
+									<TaskEmulator
+										taskId={task.id}
+										project={taskProject ?? activeProject}
+										worktreePath={state.worktreeStatus?.worktreePath}
+									/>
+								</TabsContent>
 							</Tabs>
 						</div>
 
-						{/* Footer - Actions */}
-						<div className="flex items-center gap-3 px-5 py-3 border-t border-border shrink-0">
-							<Button
-								variant="ghost"
-								size="sm"
-								className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-								onClick={() => state.setShowDeleteDialog(true)}
-								disabled={state.isRunning && !state.isStuck}
-							>
-								<Trash2 className="mr-2 h-4 w-4" />
-								{t("tasks:modal.actions.deleteTask")}
-							</Button>
-							<div className="flex-1" />
-							{renderPrimaryAction()}
-							<Button variant="outline" onClick={handleClose}>
-								{t("tasks:modal.actions.close")}
-							</Button>
+						{/* Footer */}
+						<div className="border-t border-border shrink-0">
+							{/* Pause/Resume Controls - shown at bottom when paused or running */}
+							{(task.metadata?.paused?.enabled || (state.isRunning && !state.isStuck)) && (
+								<div className="px-5 py-3 border-b border-border">
+									<TaskPauseControls
+										task={task}
+										isPaused={task.metadata?.paused?.enabled}
+										isRunning={
+											task.metadata?.paused?.enabled
+												? state.pauseProcessAlive !== false
+												: state.isRunning
+										}
+										onPause={async (subtaskId) => {
+											await pauseTask(task.id, subtaskId);
+										}}
+										onResumeSameProvider={async () => {
+											await resumeTask(task.id);
+											await handleStartStop();
+										}}
+									/>
+								</div>
+							)}
+
+							{/* Action buttons */}
+							<div className="flex items-center gap-3 px-5 py-3">
+								<Button
+									variant="ghost"
+									size="sm"
+									className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+									onClick={() => state.setShowDeleteDialog(true)}
+									disabled={state.isRunning && !state.isStuck}
+								>
+									<Trash2 className="mr-2 h-4 w-4" />
+									{t("tasks:modal.actions.deleteTask")}
+								</Button>
+								<div className="flex-1" />
+								{renderPrimaryAction()}
+								<Button variant="outline" onClick={handleClose}>
+									{t("tasks:modal.actions.close")}
+								</Button>
+							</div>
 						</div>
 					</DialogPrimitive.Content>
+
+					{/* Chevrons de navigation entre tâches (ordre du Kanban) */}
+					{(onNavigatePrevious || onNavigateNext) && (
+						<>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										type="button"
+										data-task-nav="previous"
+										aria-label={t("tasks:modal.actions.previousTask")}
+										onClick={() => hasPrevious && onNavigatePrevious?.()}
+										disabled={!hasPrevious}
+										className={cn(
+											"group fixed top-1/2 z-50 -translate-y-1/2 pointer-events-auto",
+											"left-[max(0.75rem,calc(50%-min(47.5vw,32rem)-3.25rem))]",
+											"flex h-11 w-11 items-center justify-center rounded-full",
+											"border border-border/60 bg-card/80 backdrop-blur-md",
+											"text-muted-foreground shadow-lg shadow-black/20",
+											"transition-all duration-200",
+											"hover:scale-110 hover:bg-primary hover:text-primary-foreground hover:border-primary",
+											"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+											"disabled:pointer-events-none disabled:opacity-0",
+											// En plein écran le modal occupe tout l'écran : on épingle le
+											// chevron au bord plutôt qu'à la largeur du modal centré.
+											maximized && "left-3",
+										)}
+									>
+										<ChevronLeft className="h-5 w-5 transition-transform duration-200 group-hover:-translate-x-0.5" />
+									</button>
+								</TooltipTrigger>
+								<TooltipContent side="right">
+									{t("tasks:modal.actions.previousTask")}
+								</TooltipContent>
+							</Tooltip>
+
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										type="button"
+										data-task-nav="next"
+										aria-label={t("tasks:modal.actions.nextTask")}
+										onClick={() => hasNext && onNavigateNext?.()}
+										disabled={!hasNext}
+										className={cn(
+											"group fixed top-1/2 z-50 -translate-y-1/2 pointer-events-auto",
+											"right-[max(0.75rem,calc(50%-min(47.5vw,32rem)-3.25rem))]",
+											"flex h-11 w-11 items-center justify-center rounded-full",
+											"border border-border/60 bg-card/80 backdrop-blur-md",
+											"text-muted-foreground shadow-lg shadow-black/20",
+											"transition-all duration-200",
+											"hover:scale-110 hover:bg-primary hover:text-primary-foreground hover:border-primary",
+											"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+											"disabled:pointer-events-none disabled:opacity-0",
+											// En plein écran le modal occupe tout l'écran : on épingle le
+											// chevron au bord plutôt qu'à la largeur du modal centré.
+											maximized && "right-3",
+										)}
+									>
+										<ChevronRight className="h-5 w-5 transition-transform duration-200 group-hover:translate-x-0.5" />
+									</button>
+								</TooltipTrigger>
+								<TooltipContent side="left">
+									{t("tasks:modal.actions.nextTask")}
+								</TooltipContent>
+							</Tooltip>
+						</>
+					)}
 				</DialogPrimitive.Portal>
 			</DialogPrimitive.Root>
 

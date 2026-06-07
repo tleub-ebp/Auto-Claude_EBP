@@ -60,6 +60,7 @@ interface WorkspaceStatusProps {
 	readonly isMerging: boolean;
 	readonly isDiscarding: boolean;
 	readonly isCreatingPR?: boolean;
+	readonly existingPrUrl?: string | null;
 	readonly onShowDiffDialog: (show: boolean) => void;
 	readonly onShowDiscardDialog: (show: boolean) => void;
 	readonly onShowConflictDialog: (show: boolean) => void;
@@ -116,6 +117,7 @@ export function WorkspaceStatus({
 	isMerging,
 	isDiscarding,
 	isCreatingPR,
+	existingPrUrl,
 	onShowDiffDialog,
 	onShowDiscardDialog,
 	onShowConflictDialog,
@@ -856,23 +858,32 @@ export function WorkspaceStatus({
 							</Tooltip>
 						)}
 
-					{/* Create PR Button - hide for already_merged/superseded scenarios */}
+					{/* Create / Update PR Button - hide for already_merged/superseded scenarios */}
 					{onShowPRDialog && !isAlreadyMerged && !isSuperseded && (
 						<Button
 							variant="info"
 							onClick={() => onShowPRDialog(true)}
 							disabled={isMerging || isDiscarding || isCreatingPR}
 							className="flex-1"
+							title={
+								existingPrUrl
+									? t("taskReview:pr.updateTooltip")
+									: undefined
+							}
 						>
 							{isCreatingPR ? (
 								<>
 									<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-									{t("taskReview:pr.actions.creating")}
+									{existingPrUrl
+										? t("taskReview:pr.actions.updating")
+										: t("taskReview:pr.actions.creating")}
 								</>
 							) : (
 								<>
 									<GitPullRequest className="mr-2 h-4 w-4" />
-									{t("common:buttons.createPR")}
+									{existingPrUrl
+										? t("common:buttons.updatePR")
+										: t("common:buttons.createPR")}
 								</>
 							)}
 						</Button>

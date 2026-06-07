@@ -138,7 +138,31 @@ try:
             'createdDate': issue.created.isoformat() if issue.created else None,
             'projectKey': issue.project_key,
             'url': f"{instance_url}/browse/{issue.key}",
+            'acceptanceCriteria': issue.acceptance_criteria or None,
         } for issue in issues]
+        print(json.dumps({'data': result}))
+
+    elif operation == 'get_issue':
+        issue_key = params.get('issue_key')
+        if not issue_key:
+            print(json.dumps({'error': 'Jira issue key is required'}))
+            sys.exit(1)
+
+        issue = connector.get_issue(issue_key)
+        result = {
+            'id': issue.key,
+            'title': issue.summary,
+            'description': issue.description,
+            'state': issue.status.name,
+            'workItemType': issue.issue_type,
+            'assignedTo': issue.assignee.display_name if issue.assignee else None,
+            'tags': issue.labels,
+            'priority': issue.priority,
+            'createdDate': issue.created.isoformat() if issue.created else None,
+            'projectKey': issue.project_key,
+            'url': f"{instance_url}/browse/{issue.key}",
+            'acceptanceCriteria': issue.acceptance_criteria or None,
+        }
         print(json.dumps({'data': result}))
 
     else:
@@ -289,6 +313,57 @@ except Exception as e:
 				)) as JiraWorkItem[];
 
 				return { success: true, data: items };
+			} catch (error: unknown) {
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				return { success: false, error: errorMessage };
+			}
+		},
+	);
+
+	// Fetch a single issue directly by its key. Unlike GET_ISSUES (which lists
+	// the project backlog and is capped), this resolves any issue — including
+	// sub-tasks/custom types or issues outside the listed window — so the
+	// import search can find it by key.
+	ipcMain.handle(
+		IPC_CHANNELS.JIRA_GET_ISSUE,
+		async (
+			_,
+			projectId: string,
+			issueKey: string,
+		): Promise<IPCResult<JiraWorkItem>> => {
+			const project = projectStore.getProject(projectId);
+			if (!project) {
+				return { success: false, error: "Project not found" };
+			}
+
+			const config = getJiraConfig(project);
+			const envOverrides: Record<string, string> = {};
+			if (config.instanceUrl) envOverrides.JIRA_URL = config.instanceUrl;
+			if (config.email) envOverrides.JIRA_EMAIL = config.email;
+			if (config.apiToken) envOverrides.JIRA_API_TOKEN = config.apiToken;
+			if (config.projectKey) envOverrides.JIRA_PROJECT_KEY = config.projectKey;
+
+			if (!config.instanceUrl || !config.email || !config.apiToken) {
+				return {
+					success: false,
+					error: "Jira not configured for this project",
+				};
+			}
+
+			try {
+				const projectPath = path.join(
+					project.path,
+					project.autoBuildPath || "",
+				);
+				const item = (await callJiraPython(
+					projectPath,
+					"get_issue",
+					{ issue_key: issueKey },
+					envOverrides,
+				)) as JiraWorkItem;
+
+				return { success: true, data: item };
 			} catch (error: unknown) {
 				const errorMessage =
 					error instanceof Error ? error.message : String(error);

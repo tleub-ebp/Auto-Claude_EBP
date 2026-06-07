@@ -736,8 +736,6 @@ def _check_git_merge_conflicts(
         - base_branch: str
         - spec_branch: str
     """
-    import subprocess
-
     debug(MODULE, "Checking for git-level merge conflicts (non-destructive)...")
 
     spec_branch = f"workpilot/{spec_name}"
@@ -797,12 +795,13 @@ def _check_git_merge_conflicts(
         # Use git merge-tree to check for conflicts WITHOUT touching working directory
         # This is a plumbing command that does a 3-way merge in memory
         # Note: --write-tree mode only accepts 2 branches (it auto-finds the merge base)
+        # IMPORTANT: Do NOT pass --no-messages - it suppresses the CONFLICT markers
+        # needed to identify the exact conflicting files (see _parse_merge_tree_conflicts).
         merge_tree_result = subprocess.run(
             [
                 "git",
                 "merge-tree",
                 "--write-tree",
-                "--no-messages",
                 result["base_branch"],  # Use branch names, not commit hashes
                 spec_branch,
             ],
@@ -816,28 +815,18 @@ def _check_git_merge_conflicts(
             result["has_conflicts"] = True
             debug(MODULE, "Git merge-tree detected conflicts")
 
-            # Parse the output for conflicting files
-            # merge-tree --write-tree outputs conflict info to stderr
-            output = merge_tree_result.stdout + merge_tree_result.stderr
-            for line in output.split("\n"):
-                # Look for lines indicating conflicts
-                if "CONFLICT" in line:
-                    # Extract file path from conflict message
-                    import re
+            # Parse the output for the exact conflicting files
+            from core.workspace import _parse_merge_tree_conflicts
 
-                    match = re.search(
-                        r"(?:Merge conflict in|CONFLICT.*?:)\s*(.+?)(?:\s*$|\s+\()",
-                        line,
-                    )
-                    if match:
-                        file_path = match.group(1).strip()
-                        # Skip .workpilot files - they should never be merged
-                        if (
-                            file_path
-                            and file_path not in result["conflicting_files"]
-                            and not _is_workpilot_file(file_path)
-                        ):
-                            result["conflicting_files"].append(file_path)
+            output = merge_tree_result.stdout + merge_tree_result.stderr
+            for file_path in _parse_merge_tree_conflicts(output):
+                # Skip .workpilot files - they should never be merged
+                if (
+                    file_path
+                    and file_path not in result["conflicting_files"]
+                    and not _is_workpilot_file(file_path)
+                ):
+                    result["conflicting_files"].append(file_path)
 
             # Fallback: if we didn't parse conflicts, use diff to find files changed in both branches
             if not result["conflicting_files"]:
@@ -982,6 +971,40 @@ def handle_merge_preview_command(
             MODULE,
             f"Git diff against '{task_source_branch}' shows {len(all_changed_files)} changed files",
             changed_files=all_changed_files[:10],  # Log first 10
+        )
+
+        # Load discard list and filter out discarded files
+        discard_list_path = Path(worktree_path) / ".workpilot-discard-list"
+        discarded_files: list[str] = []
+        debug(
+            MODULE,
+            f"Checking for discard list at: {discard_list_path}",
+            exists=discard_list_path.exists(),
+        )
+        if discard_list_path.exists():
+            try:
+                with open(discard_list_path) as f:
+                    discarded_files = [
+                        line.strip()
+                        for line in f.readlines()
+                        if line.strip() and not line.strip().startswith("#")
+                    ]
+                debug(
+                    MODULE,
+                    f"Loaded {len(discarded_files)} discarded files from .workpilot-discard-list",
+                    discarded_files=discarded_files,
+                )
+            except Exception as e:
+                debug(
+                    MODULE,
+                    f"Failed to load discard list: {e}",
+                )
+
+        # Filter out discarded files from the changed files list
+        all_changed_files = [f for f in all_changed_files if f not in discarded_files]
+        debug(
+            MODULE,
+            f"After filtering discarded files: {len(all_changed_files)} files remain",
         )
 
         # OPTIMIZATION: Skip expensive refresh_from_git() and preview_merge() calls
@@ -1215,6 +1238,7 @@ def handle_create_pr_command(
     target_branch: str | None = None,
     title: str | None = None,
     draft: bool = False,
+    body: str | None = None,
 ) -> CreatePRResult:
     """
     Handle the --create-pr command: push branch and create a GitHub PR.
@@ -1225,6 +1249,8 @@ def handle_create_pr_command(
         target_branch: Target branch for PR (defaults to base branch)
         title: Custom PR title (defaults to spec name)
         draft: Whether to create as draft PR
+        body: Optional PR body. If provided, used verbatim (no AI generation,
+              no impact block auto-injection).
 
     Returns:
         CreatePRResult with success status, pr_url, and any errors
@@ -1266,6 +1292,7 @@ def handle_create_pr_command(
             target_branch=target_branch,
             title=title,
             draft=draft,
+            body=body,
         )
     except Exception as e:
         debug_error(MODULE, f"Exception during PR creation: {e}")
@@ -1318,6 +1345,51 @@ def handle_create_pr_command(
         # Output JSON for frontend parsing
         print(json.dumps(result))
         return result
+
+
+def handle_analyze_impact_command(
+    project_dir: Path,
+    spec_name: str,
+    target_branch: str | None = None,
+) -> dict:
+    """
+    Handle the --analyze-impact command: compute what the PR body and impact
+    analysis WOULD be, without pushing or creating a PR. Used by the frontend
+    review modal to pre-fill editable fields before the user confirms creation.
+
+    Outputs a single JSON line to stdout for the frontend to parse:
+        {"success": true, "body": "...", "rating": "3", "features": "..."}
+
+    On hard failure (no worktree, etc.):
+        {"success": false, "error": "..."}
+    """
+    worktree_path = get_existing_build_worktree(project_dir, spec_name)
+    if not worktree_path:
+        result = {"success": False, "error": "No build worktree found for this spec"}
+        print(json.dumps(result))
+        return result
+
+    try:
+        manager = WorktreeManager(project_dir, base_branch=target_branch)
+        preview = manager.preview_pr_body(
+            spec_name=spec_name,
+            target_branch=target_branch,
+            include_impact=True,
+        )
+    except Exception as e:
+        debug_warning("workspace_commands", f"analyze-impact failed: {e}")
+        result = {"success": False, "error": str(e)}
+        print(json.dumps(result))
+        return result
+
+    result = {
+        "success": True,
+        "body": preview.get("body", ""),
+        "rating": preview.get("rating", "N/A"),
+        "features": preview.get("features", "Non evalue"),
+    }
+    print(json.dumps(result))
+    return result
 
 
 def cleanup_old_worktrees_command(

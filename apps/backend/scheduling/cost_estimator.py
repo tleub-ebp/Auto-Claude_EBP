@@ -298,6 +298,10 @@ class CostEstimator:
         self._budgets: dict[str, ProjectBudget] = {}
         self._alerts: list[BudgetAlert] = []
         self._custom_pricing: dict[str, dict[str, dict[str, float]]] = {}
+        # Track the last alert level emitted per project so we don't append a
+        # new alert on every recorded usage once a threshold is crossed
+        # (which previously caused unbounded list growth + UI alert spam).
+        self._last_alert_level: dict[str, AlertLevel] = {}
 
     # ------------------------------------------------------------------
     # Pricing
@@ -323,9 +327,14 @@ class CostEstimator:
         if model in provider_models:
             return provider_models[model]
 
-        # Fuzzy match — check if model starts with a known prefix
+        # Fuzzy match — only accept date-suffix variants of the SAME base
+        # model. The previous `startswith` rule matched `gpt-4o-mini` against
+        # `gpt-4` (and vice-versa), which could mis-bill by 200x or silently
+        # undercount spend, breaking budget alarms. We now require an exact
+        # match or a `<base>-<suffix>` form so `gpt-4-0314` still resolves to
+        # `gpt-4` but `gpt-4o-mini` does not.
         for known_model, pricing in provider_models.items():
-            if model.startswith(known_model) or known_model.startswith(model):
+            if model == known_model or model.startswith(known_model + "-"):
                 return pricing
 
         return {"input": 0.0, "output": 0.0}
@@ -596,7 +605,16 @@ class CostEstimator:
             )
 
         if alert:
-            self._alerts.append(alert)
+            # Only append when the level CHANGES — previously every usage
+            # recorded after a threshold was crossed produced another alert.
+            previous = self._last_alert_level.get(project_id)
+            if previous != alert.level:
+                self._alerts.append(alert)
+                self._last_alert_level[project_id] = alert.level
+        else:
+            # Spend dropped back under all thresholds (e.g., budget reset);
+            # clear the level so the next breach re-fires an alert.
+            self._last_alert_level.pop(project_id, None)
 
         return alert
 

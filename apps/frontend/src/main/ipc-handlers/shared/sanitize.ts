@@ -46,6 +46,54 @@ export function sanitizeText(
 }
 
 /**
+ * Convertit du HTML enrichi (descriptions/titres Azure DevOps, etc.) en texte brut.
+ *
+ * Supprime toutes les balises, convertit les sauts de ligne structurels en `\n`,
+ * décode les entités HTML courantes et normalise les espaces. Utilise une boucle
+ * pour neutraliser les balises reconstruites (ex. `<<script>script>`).
+ */
+export function stripHtml(value: unknown): string {
+	if (typeof value !== "string") return "";
+
+	// Convertir les balises de bloc / sauts de ligne en retours à la ligne.
+	let text = value
+		.replace(/<br\s*\/?>/gi, "\n")
+		.replace(
+			/<\/?(p|div|li|ul|ol|h[1-6]|span|strong|em|b|i|a|table|tr|td|th|thead|tbody)[^>]*>/gi,
+			"\n",
+		);
+
+	// Supprimer les balises restantes jusqu'à stabilisation.
+	let prev = "";
+	while (prev !== text) {
+		prev = text;
+		text = text.replace(/<[^>]+>/g, "");
+	}
+
+	// Supprimer une balise tronquée en fin de chaîne (ex. un titre Azure coupé
+	// en plein milieu : « …<b style=… » sans `>` final). Les regex ci-dessus
+	// exigent un `>` fermant, donc une balise sans fermeture leur échappe et
+	// s'afficherait telle quelle. On retire tout depuis le dernier `<` ouvrant
+	// une balise (suivi d'une lettre ou `/`) jusqu'à la fin.
+	text = text.replace(/<\/?[a-zA-Z][^>]*$/g, "");
+
+	// Décoder les entités (décoder &amp; en dernier pour éviter un double décodage).
+	text = text
+		.replace(/&nbsp;/g, " ")
+		.replace(/&lt;/g, "<")
+		.replace(/&gt;/g, ">")
+		.replace(/&quot;/g, '"')
+		.replace(/&#0*39;/g, "'")
+		.replace(/&apos;/g, "'")
+		.replace(/&amp;/g, "&")
+		.replace(/[ \t]+\n/g, "\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+
+	return text;
+}
+
+/**
  * Sanitize an array of strings: type-check each entry, strip control chars,
  * enforce per-item length and max item count.
  */

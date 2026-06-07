@@ -14,6 +14,7 @@ import type {
 	TaskStatus,
 } from "../../shared/types";
 import { debugLog, debugWarn } from "../../shared/utils/debug-logger";
+import { extractSubtaskFiles } from "../../shared/utils/subtask-files";
 
 interface TaskState {
 	tasks: Task[];
@@ -465,7 +466,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 					title,
 					description,
 					status,
-					files: [],
+					files: extractSubtaskFiles(subtask),
 					verification: subtask.verification as Subtask["verification"],
 				};
 			};
@@ -614,6 +615,31 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 				}),
 			};
 		});
+
+		// Self-healing reconciliation (fix bouton figé sur « Démarrer la tâche ») :
+		// Si une phase d'exécution active arrive du backend alors que la tâche est
+		// encore dans un statut « pré-exécution » (backlog/queue), c'est la preuve
+		// que le process tourne réellement. On promeut donc le statut vers
+		// in_progress. Cela rattrape les cas où l'événement TASK_STATUS_CHANGE a été
+		// manqué ou supprimé (course XState), pendant que les logs/progress arrivent.
+		const incomingPhase = progress.phase;
+		const isActiveRunPhase =
+			!!incomingPhase &&
+			incomingPhase !== "idle" &&
+			incomingPhase !== "complete" &&
+			incomingPhase !== "failed";
+
+		if (isActiveRunPhase) {
+			const current = get().tasks.find(
+				(t) => t.id === taskId || t.specId === taskId,
+			);
+			if (
+				current &&
+				(current.status === "backlog" || current.status === "queue")
+			) {
+				get().updateTaskStatus(current.id, "in_progress");
+			}
+		}
 	},
 
 	appendLog: (taskId, log) =>
@@ -1518,4 +1544,113 @@ export function getTaskProgress(task: Task): {
 		task.subtasks?.filter((s) => s.status === "completed").length || 0;
 	const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
 	return { completed, total, percentage };
+}
+
+/**
+ * Update plan phases and subtasks
+ */
+export async function updatePlanSubtasks(
+	taskId: string,
+	phases: Array<Record<string, unknown>>,
+): Promise<boolean> {
+	const result = await globalThis.electronAPI.updatePlanSubtasks(
+		taskId,
+		phases,
+	);
+
+	if (result.success) {
+		debugLog(
+			"task-store",
+			`Plan updated for task ${taskId}`,
+		);
+	} else {
+		debugWarn(
+			"task-store",
+			`Failed to update plan for task ${taskId}: ${result.error}`,
+		);
+	}
+
+	return result.success;
+}
+
+/**
+ * Pause task execution and save current state
+ */
+export async function pauseTask(
+	taskId: string,
+	subtaskId?: string,
+): Promise<boolean> {
+	const result = await globalThis.electronAPI?.invoke?.(
+		"TASK_PAUSE",
+		taskId,
+		subtaskId,
+	);
+
+	if (result?.success) {
+		debugLog(
+			"task-store",
+			`Task ${taskId} paused at subtask ${subtaskId || "none"}`,
+		);
+		// Update the task metadata to reflect paused state
+		const store = useTaskStore.getState();
+		const task = store.tasks.find((t) => t.id === taskId);
+		if (task) {
+			store.updateTask(taskId, {
+				...task,
+				metadata: {
+					...task.metadata,
+					paused: {
+						enabled: true,
+						paused_at: new Date().toISOString(),
+						paused_subtask_id: subtaskId || null,
+						provider: task.metadata?.provider || "anthropic",
+						model: task.metadata?.model || "claude-opus-4-7",
+					},
+				},
+			});
+		}
+	} else {
+		debugWarn(
+			"task-store",
+			`Failed to pause task ${taskId}: ${result?.error}`,
+		);
+	}
+
+	return result?.success ?? false;
+}
+
+/**
+ * Resume task execution from paused state
+ */
+export async function resumeTask(taskId: string): Promise<boolean> {
+	const result = await globalThis.electronAPI?.invoke?.(
+		"TASK_RESUME",
+		taskId,
+	);
+
+	if (result?.success) {
+		debugLog("task-store", `Task ${taskId} resumed`);
+		// Update the task metadata to reflect resumed state
+		const store = useTaskStore.getState();
+		const task = store.tasks.find((t) => t.id === taskId);
+		if (task) {
+			store.updateTask(taskId, {
+				...task,
+				metadata: {
+					...task.metadata,
+					paused: {
+						enabled: false,
+						paused_at: null,
+						paused_subtask_id: null,
+						provider: task.metadata?.paused?.provider || task.metadata?.provider || "anthropic",
+						model: task.metadata?.paused?.model || task.metadata?.model || "claude-opus-4-7",
+					},
+				},
+			});
+		}
+	} else {
+		debugWarn("task-store", `Failed to resume task ${taskId}: ${result?.error}`);
+	}
+
+	return result?.success ?? false;
 }

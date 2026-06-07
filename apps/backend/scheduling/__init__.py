@@ -6,7 +6,7 @@ and an intelligent priority queue.
 Feature 8.1 — Scheduling de tâches (Cron-like).
 """
 
-from apps.backend.scheduling.scheduler import (
+from .scheduler import (
     CronExpression,
     ScheduledTask,
     TaskChain,

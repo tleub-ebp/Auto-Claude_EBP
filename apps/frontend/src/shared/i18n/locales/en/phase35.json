@@ -7,7 +7,29 @@
 		"errorLabel": "Error",
 		"projectPathRequired": "No project path selected",
 		"backendUnreachable": "Backend unreachable. Is the backend running on port 8765?",
-		"noData": "No data yet — run the analysis to see results."
+		"noData": "No data yet — run the analysis to see results.",
+		"required": "Required",
+		"invalidNumber": "Invalid number",
+		"invalidPath": "Invalid path",
+		"selectAtLeastOne": "Select at least one option",
+		"tooLong": "Text too long (limit: {{max}} characters)",
+		"clearAll": "Clear all",
+		"selectAll": "Select all",
+		"selected": "{{count}} selected",
+		"none": "None",
+		"status": "Status",
+		"violations": "violations",
+		"warnings": "warnings",
+		"backendErrors": {
+			"projectPathInvalid": "Invalid project path: {{path}}",
+			"projectPathRequired": "Project path is required",
+			"directoryNotFound": "Directory not found: {{path}}",
+			"fileNotFound": "File not found: {{path}}",
+			"unauthorized": "Access denied. Check directory permissions.",
+			"backendUnreachable": "Backend unreachable. Is the backend running on port 8765?",
+			"timeout": "Timed out — the backend did not respond in time.",
+			"unknown": "Backend error: {{message}}"
+		}
 	},
 	"longevity": {
 		"title": "Codebase Longevity Score",
@@ -51,35 +73,63 @@
 		"title": "Adaptive Model Routing",
 		"subtitle": "Pick the cheapest model that probably works for this task",
 		"prompt": "Task prompt",
+		"promptPlaceholder": "e.g. rename foo to bar",
 		"hint": "Task class hint (optional)",
 		"hintPlaceholder": "e.g. trivial, architecture, review",
 		"availableProviders": "Available providers",
+		"providersPlaceholder": "Select providers to compare",
+		"providerAnthropic": "Anthropic",
+		"providerOpenai": "OpenAI",
+		"providerGoogle": "Google",
+		"providerMistral": "Mistral",
+		"providerOllama": "Ollama (local)",
 		"compare": "Compare across tiers",
 		"chosen": "Chosen model",
 		"estimatedCost": "Estimated cost (USD)",
-		"reason": "Reason"
+		"reason": "Reason",
+		"colTier": "Tier",
+		"colModel": "Model",
+		"colCost": "$ / call",
+		"validation": {
+			"promptRequired": "Enter a prompt to route",
+			"providersRequired": "Pick at least one provider"
+		}
 	},
 	"domainAgents": {
 		"title": "Domain-Specific Agents",
 		"subtitle": "Select your project's domain to inject the right guardrails into the agents",
 		"domain": "Domain",
 		"role": "Agent role",
+		"roleCoder": "Coder",
+		"rolePlanner": "Planner",
+		"roleReviewer": "Reviewer",
+		"roleDocumenter": "Documenter",
 		"build": "Build bundle",
 		"guardrails": "Guardrails",
 		"requiredSkills": "Required skills",
 		"forbidden": "Forbidden patterns",
 		"validationRules": "Validation rules",
-		"prompt": "Generated prompt addendum"
+		"prompt": "Generated prompt addendum",
+		"validation": {
+			"domainRequired": "Select a domain",
+			"noDomainsLoaded": "No domains available — check the backend connection."
+		}
 	},
 	"cicdAnomaly": {
 		"title": "CI/CD Anomaly Detective",
 		"subtitle": "Paste a CI log to detect known infrastructure failure patterns",
 		"logLabel": "Log content",
+		"logPlaceholder": "Paste your CI log here…",
 		"scan": "Scan log",
 		"signals": "Detected signals",
 		"recurring": "Recurring across builds",
 		"recommendations": "Suggested fixes",
-		"hasCritical": "Critical issues present"
+		"hasCritical": "Critical issues present",
+		"line": "line",
+		"validation": {
+			"logRequired": "Paste a non-empty log",
+			"logTooLarge": "Log too large (limit: {{max}} characters)"
+		}
 	},
 	"license": {
 		"title": "License Governance",
@@ -92,7 +142,10 @@
 		"passed": "Compliant",
 		"failed": "Conflicts found",
 		"conflicts": "Conflicts",
-		"dependencies": "Dependencies"
+		"dependencies": "Dependencies",
+		"colPackage": "Package",
+		"colCategory": "Category",
+		"colRemediation": "Remediation"
 	},
 	"archDrift": {
 		"title": "Architecture Drift Detection",
@@ -119,43 +172,106 @@
 		"slowdowns": "Slowdowns",
 		"newFailures": "New failures",
 		"vanished": "Vanished tests",
-		"added": "New tests"
+		"added": "New tests",
+		"validation": {
+			"labelRequired": "Enter a generation label",
+			"junitRequired": "Paste JUnit XML content",
+			"junitInvalid": "Content does not look like valid JUnit XML",
+			"baselineRequired": "Enter an existing baseline label"
+		}
 	},
 	"i18nScaler": {
 		"title": "i18n Auto-Scaling",
 		"subtitle": "Scaffold and audit translation files across locales",
 		"localesDir": "Locales directory",
+		"localesDirPlaceholder": "apps/frontend/src/shared/i18n/locales",
+		"browseDir": "Browse…",
+		"clearDir": "Clear",
 		"sourceLocale": "Source locale",
+		"sourceLocaleCustom": "Other (manual entry)…",
+		"sourceLocaleCustomPlaceholder": "e.g. pt-BR",
+		"sourceLocaleCustomLabel": "Custom locale code",
 		"strategy": "Placeholder strategy",
 		"runReport": "Run report",
 		"coverage": "Coverage per locale",
 		"missingKeys": "Missing keys",
 		"obsoleteKeys": "Obsolete keys",
-		"placeholderMismatches": "Placeholder mismatches"
+		"placeholderMismatches": "Placeholder mismatches",
+		"colLocale": "Locale",
+		"colTranslated": "Translated",
+		"colPlaceholder": "Placeholder",
+		"colTotal": "Total",
+		"colCoverage": "Coverage",
+		"missing": "missing",
+		"obsolete": "obsolete",
+		"mismatches": "mismatches",
+		"validation": {
+			"localesDirRequired": "Enter the locales directory",
+			"sourceLocaleRequired": "Enter the source locale",
+			"sourceLocaleInvalid": "Invalid locale code (e.g. en, fr, fr-FR)"
+		}
 	},
 	"cogContext": {
 		"title": "Cognitive Context Optimizer",
 		"subtitle": "Pack the right files into the token budget for your task",
 		"prompt": "Task prompt",
 		"candidateFiles": "Candidate files (one per line)",
+		"candidateFilesPlaceholder": "/abs/path/file1.py\n/abs/path/file2.py",
 		"tokenBudget": "Token budget",
 		"optimize": "Optimize",
 		"included": "Included",
 		"truncated": "Truncated",
 		"skipped": "Skipped",
-		"fillRatio": "Fill ratio"
+		"fillRatio": "Fill ratio",
+		"colFile": "File",
+		"colScore": "Score",
+		"colTokens": "Tokens",
+		"colTruncated": "Truncated",
+		"addFiles": "Add files…",
+		"addManually": "Add manually",
+		"manualPathPlaceholder": "/abs/path/file.py",
+		"add": "Add",
+		"removeFile": "Remove this file",
+		"clearFiles": "Clear all",
+		"noFiles": "No files yet — click \"Add files…\" to pick some.",
+		"fileCount": "{{count}} file(s) selected",
+		"validation": {
+			"promptRequired": "Enter a prompt",
+			"filesRequired": "Provide at least one file",
+			"budgetTooSmall": "Budget must be ≥ 100 tokens",
+			"budgetTooLarge": "Budget must be ≤ 1,000,000 tokens",
+			"duplicatePath": "This file is already in the list",
+			"pathNotAbsolute": "Path must be absolute",
+			"pathTooLong": "Path too long (limit: {{max}} characters)"
+		},
+		"estimatedCost": "Estimated cost",
+		"costFor": "for {{provider}} / {{model}}",
+		"costBreakdown": "{{input}} input + {{output}} output ({{ratio}}% ratio)",
+		"costFlatRate": "Flat-rate seat licence — no per-token cost",
+		"costUnknown": "Pricing unknown for this model",
+		"costNoModel": "No model configured in settings",
+		"outputRatio": "Output / input ratio"
 	},
 	"audit": {
 		"title": "Audit Trail",
 		"subtitle": "Tamper-evident replay of every agent decision",
 		"storageDir": "Trail storage directory",
+		"storageDirPlaceholder": ".workpilot/audit",
 		"trailName": "Trail name",
 		"correlationId": "Correlation ID",
+		"correlationIdPlaceholder": "spec-001",
 		"replay": "Replay",
 		"verify": "Verify integrity",
 		"events": "Events",
 		"intact": "Chain is intact",
-		"tampered": "Chain has been tampered with"
+		"tampered": "Chain has been tampered with",
+		"eventsChecked": "events checked",
+		"replayLabel": "Replay",
+		"validation": {
+			"storageDirRequired": "Enter a storage directory",
+			"trailNameRequired": "Enter a trail name",
+			"correlationIdRequired": "Enter a correlation ID"
+		}
 	},
 	"pair": {
 		"title": "Real-time Pair Programming",
@@ -166,10 +282,21 @@
 		"leave": "Leave",
 		"yourName": "Your display name",
 		"role": "Role",
+		"roleDriver": "Driver",
+		"roleNavigator": "Navigator",
+		"roleAi": "AI",
 		"chatPlaceholder": "Type a message…",
 		"send": "Send",
 		"participants": "Participants",
 		"recentOps": "Recent operations",
-		"streaming": "Streaming live"
+		"streaming": "Streaming live",
+		"roomLabel": "room",
+		"validation": {
+			"roomIdRequired": "Enter a room ID",
+			"roomIdInvalid": "Invalid room ID (letters, digits, _ and -, 1–64 chars)",
+			"nameRequired": "Enter your display name",
+			"messageEmpty": "Message is empty",
+			"messageTooLong": "Message too long (limit: {{max}} characters)"
+		}
 	}
 }

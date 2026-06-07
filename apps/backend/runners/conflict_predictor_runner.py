@@ -273,10 +273,16 @@ class ConflictPredictorRunner:
         print(f"CONFLICT_PREDICTOR_EVENT:{json.dumps(event)}", flush=True)
 
     def _get_timestamp(self) -> str:
-        """Get current timestamp"""
-        from datetime import datetime
+        """Get current ISO timestamp in UTC.
 
-        return datetime.utcnow().isoformat()
+        Uses tz-aware `now(UTC)` then strips tzinfo to keep the existing
+        wire format (no trailing `+00:00`) — `datetime.utcnow()` is
+        deprecated since Python 3.12 but the consumers of this string
+        expected the naive ISO form.
+        """
+        from datetime import datetime, timezone
+
+        return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 def main():

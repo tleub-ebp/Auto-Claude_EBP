@@ -48,6 +48,11 @@ class SwarmConfig:
     profile_distribution: str = "round_robin"  # round_robin | least_loaded | dedicated
     enable_ai_merge: bool = True
     dry_run: bool = False
+    # Hard cap on a single subtask's subprocess. Without this, a wedged child
+    # (network hang, infinite loop) blocks asyncio.gather and stalls the
+    # entire swarm; cancel_all() only fires on explicit cancel. Default 30
+    # minutes is generous for real coding tasks while still bounding damage.
+    subtask_timeout_seconds: float = 30 * 60.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +63,7 @@ class SwarmConfig:
             "profile_distribution": self.profile_distribution,
             "enable_ai_merge": self.enable_ai_merge,
             "dry_run": self.dry_run,
+            "subtask_timeout_seconds": self.subtask_timeout_seconds,
         }
 
     @classmethod
@@ -70,6 +76,7 @@ class SwarmConfig:
             profile_distribution=data.get("profile_distribution", "round_robin"),
             enable_ai_merge=data.get("enable_ai_merge", True),
             dry_run=data.get("dry_run", False),
+            subtask_timeout_seconds=data.get("subtask_timeout_seconds", 30 * 60.0),
         )
 
 

@@ -521,7 +521,12 @@ class IntelligentRouter:
             task_type: Type of task (coding, planning, review, etc.).
             strategy: Override routing strategy (defaults to instance default).
             context: Additional context (complexity, urgency, etc.).
-            max_cost: Maximum cost constraint (per 1M tokens combined).
+            max_cost: Maximum allowable list-price sum (input + output rate
+                per 1M tokens). NOTE: this is a list-price filter, NOT an
+                expected per-call cost. A model with input=$3 and output=$15
+                requires max_cost >= 18. For asymmetric workloads (e.g.,
+                coding tasks with 3:1 input:output), use the cost_estimator
+                to compute expected per-call spend before deciding budget.
             pipeline_id: If set, use pipeline phase configuration.
 
         Returns:

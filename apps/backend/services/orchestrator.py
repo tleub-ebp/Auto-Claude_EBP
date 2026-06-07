@@ -281,8 +281,6 @@ class ServiceOrchestrator:
         Returns:
             OrchestrationResult with status
         """
-        result = OrchestrationResult()
-
         if self._compose_file:
             return self._start_docker_compose(timeout)
         else:
@@ -392,6 +390,9 @@ class ServiceOrchestrator:
             except Exception:
                 try:
                     proc.kill()
+                    # Reap the zombie so its pipes are released; without
+                    # this, fds linger until GC.
+                    proc.wait(timeout=5)
                 except Exception:
                     pass
         self._processes.clear()

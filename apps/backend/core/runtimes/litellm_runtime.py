@@ -5,9 +5,12 @@ Implements agent loop with tool execution for OpenAI-compatible LLMs
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 from core.llm_client import (
     ConcreteLLMClient,
@@ -98,7 +101,13 @@ class LiteLLMRuntime(AgentRuntime):
                     last_response = llm_response.content
                     break
             except Exception as e:
-                error_info = str(e)
+                # `str(e)` can include API key fragments for some LiteLLM
+                # provider errors. Log the full traceback locally; expose
+                # only the exception class name to the caller / persisted
+                # SessionResult so we don't leak credentials into audit logs
+                # or the streaming UI.
+                logger.exception("LLM call failed")
+                error_info = type(e).__name__
                 break
         status = SessionStatus.COMPLETE if last_response else SessionStatus.ERROR
         return SessionResult(
@@ -136,7 +145,10 @@ class LiteLLMRuntime(AgentRuntime):
                     yield StreamEvent(StreamEvent.Type.TEXT, llm_response.content)
                     break
             except Exception as e:
-                yield StreamEvent(StreamEvent.Type.ERROR, str(e))
+                logger.exception("LLM streaming call failed")
+                # Don't echo str(e) — provider errors can include API key
+                # fragments and are visible to all WS subscribers.
+                yield StreamEvent(StreamEvent.Type.ERROR, type(e).__name__)
                 break
         yield StreamEvent(StreamEvent.Type.DONE, None)
 

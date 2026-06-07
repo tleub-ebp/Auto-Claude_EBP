@@ -503,7 +503,7 @@ def validate_merged_syntax(
             return True, ""  # Timeout = assume ok
         except FileNotFoundError:
             return True, ""  # No esbuild = skip validation
-        except Exception as e:
+        except Exception:
             return True, ""  # Other errors = skip validation
 
     # Python validation
@@ -589,7 +589,7 @@ def create_conflict_file_with_git(
             Path(wt_path).unlink(missing_ok=True)
             Path(base_path).unlink(missing_ok=True)
 
-    except Exception as e:
+    except Exception:
         return None, False
 
 

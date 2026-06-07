@@ -18,13 +18,14 @@ import {
 	Sparkles,
 	Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	AVAILABLE_MODELS,
 	DEFAULT_AGENT_PROFILES,
 	DEFAULT_PHASE_MODELS,
 	DEFAULT_PHASE_THINKING,
+	getDefaultModelForProvider,
 	THINKING_LEVELS,
 } from "../../shared/constants";
 import type { ThinkingLevel } from "../../shared/types";
@@ -32,7 +33,10 @@ import type {
 	PhaseModelConfig,
 	PhaseThinkingConfig,
 } from "../../shared/types/settings";
+import { useProviderModelCatalog } from "../hooks";
 import { cn } from "../lib/utils";
+import { ModelCatalogStatus } from "./ModelCatalogStatus";
+import { useProviderContext } from "./ProviderContext";
 import { Label } from "./ui/label";
 import {
 	Select,
@@ -69,6 +73,8 @@ interface AgentProfileSelectorProps {
 	readonly onPhaseThinkingChange?: (phaseThinking: PhaseThinkingConfig) => void;
 	/** Whether the selector is disabled */
 	readonly disabled?: boolean;
+	/** Optional override for the active AI provider (defaults to the provider context). */
+	readonly provider?: string;
 }
 
 const iconMap: Record<string, React.ElementType> = {
@@ -113,9 +119,23 @@ export function AgentProfileSelector({
 	onPhaseModelsChange,
 	onPhaseThinkingChange,
 	disabled,
+	provider,
 }: AgentProfileSelectorProps) {
 	const { t } = useTranslation("settings");
 	const [showPhaseDetails, setShowPhaseDetails] = useState(false);
+
+	// Resolve the active provider: explicit prop > context > "" (defaults to anthropic-like)
+	const { selectedProvider } = useProviderContext();
+	const activeProvider = provider ?? selectedProvider ?? "";
+
+	// Live model catalog for the active provider. The hook unions the live
+	// API response with the local static catalog (legacy short aliases +
+	// curated entries) so freshly-released models like "claude-opus-4-7"
+	// appear automatically while preset profiles using "opus"/"sonnet" keep
+	// matching.
+	const liveCatalog = useProviderModelCatalog(activeProvider);
+	const providerModels: readonly { value: string; label: string }[] =
+		liveCatalog.models;
 
 	const isCustom = profileId === "custom";
 	const _isAuto = profileId === "auto";
@@ -123,6 +143,74 @@ export function AgentProfileSelector({
 	// Use provided phase configs or defaults
 	const currentPhaseModels = phaseModels || DEFAULT_PHASE_MODELS;
 	const currentPhaseThinking = phaseThinking || DEFAULT_PHASE_THINKING;
+
+	// When the active provider changes, migrate any phase model that is not
+	// available in the (live + static) catalog to the provider's flagship.
+	// Without this the Select trigger would render empty for stale values
+	// (e.g. "opus" left over from Anthropic when switching to OpenAI).
+	// We wait until the live catalog has loaded so we don't migrate against
+	// the static fallback only to migrate again once the live list arrives.
+	useEffect(() => {
+		if (!onPhaseModelsChange) return;
+		if (liveCatalog.loading) return;
+		if (providerModels.length === 0) return;
+		const validValues = new Set(providerModels.map((m) => m.value));
+		const hasInvalid = (
+			Object.keys(currentPhaseModels) as Array<keyof PhaseModelConfig>
+		).some((phase) => !validValues.has(currentPhaseModels[phase]));
+		if (!hasInvalid) return;
+		const fallback =
+			providerModels.find(
+				(m) => (m as { tier?: string }).tier === "flagship",
+			)?.value ||
+			providerModels[0]?.value ||
+			getDefaultModelForProvider(activeProvider);
+		if (!fallback) return;
+		onPhaseModelsChange({
+			spec: validValues.has(currentPhaseModels.spec)
+				? currentPhaseModels.spec
+				: fallback,
+			planning: validValues.has(currentPhaseModels.planning)
+				? currentPhaseModels.planning
+				: fallback,
+			coding: validValues.has(currentPhaseModels.coding)
+				? currentPhaseModels.coding
+				: fallback,
+			qa: validValues.has(currentPhaseModels.qa)
+				? currentPhaseModels.qa
+				: fallback,
+		});
+	}, [
+		activeProvider,
+		liveCatalog.loading,
+		providerModels,
+		currentPhaseModels,
+		onPhaseModelsChange,
+	]);
+
+	// Same migration for the custom-mode single model.
+	useEffect(() => {
+		if (!isCustom) return;
+		if (!model) return;
+		if (liveCatalog.loading) return;
+		if (providerModels.length === 0) return;
+		const validValues = new Set(providerModels.map((m) => m.value));
+		if (validValues.has(model)) return;
+		const fallback =
+			providerModels.find(
+				(m) => (m as { tier?: string }).tier === "flagship",
+			)?.value ||
+			providerModels[0]?.value ||
+			getDefaultModelForProvider(activeProvider);
+		if (fallback) onModelChange(fallback);
+	}, [
+		activeProvider,
+		isCustom,
+		liveCatalog.loading,
+		model,
+		providerModels,
+		onModelChange,
+	]);
 
 	const handleProfileSelect = (selectedId: string) => {
 		if (selectedId === "custom") {
@@ -287,6 +375,12 @@ export function AgentProfileSelector({
 							<ChevronDown className="h-4 w-4 text-muted-foreground" />
 						)}
 					</button>
+					{/* Catalog provenance + manual refresh button. */}
+					{showPhaseDetails && (
+						<div className="px-4 pb-2 -mt-2">
+							<ModelCatalogStatus catalog={liveCatalog} />
+						</div>
+					)}
 
 					{/* Compact summary when collapsed */}
 					{!showPhaseDetails && (
@@ -296,9 +390,9 @@ export function AgentProfileSelector({
 									Object.keys(PHASE_LABEL_KEYS) as Array<keyof PhaseModelConfig>
 								).map((phase) => {
 									const modelLabel =
-										AVAILABLE_MODELS.find(
-											(m) => m.value === currentPhaseModels[phase],
-										)?.label?.replace("Claude ", "") ||
+										providerModels
+											.find((m) => m.value === currentPhaseModels[phase])
+											?.label?.replace("Claude ", "") ||
 										currentPhaseModels[phase];
 									return (
 										<div
@@ -347,7 +441,7 @@ export function AgentProfileSelector({
 													<SelectValue />
 												</SelectTrigger>
 												<SelectContent>
-													{AVAILABLE_MODELS.map((m) => (
+													{providerModels.map((m) => (
 														<SelectItem key={m.value} value={m.value}>
 															{m.label}
 														</SelectItem>
@@ -409,7 +503,7 @@ export function AgentProfileSelector({
 								<SelectValue placeholder={t("agentProfile.selectModel")} />
 							</SelectTrigger>
 							<SelectContent>
-								{AVAILABLE_MODELS.map((m) => (
+								{providerModels.map((m) => (
 									<SelectItem key={m.value} value={m.value}>
 										{m.label}
 									</SelectItem>

@@ -20,7 +20,6 @@ from src.connectors.azure_devops.exceptions import (
     WorkItemNotFoundError,
 )
 from src.connectors.azure_devops.models import WorkItem
-from src.connectors.azure_devops.work_items import DEFAULT_BACKLOG_TYPES
 
 TEST_PROJECT = "TestProject"
 
@@ -286,6 +285,7 @@ class TestGetWorkItem:
 
         mock_wit_client.get_work_item.assert_called_once_with(
             id=42,
+            expand="fields",
         )
 
     def test_404_raises_work_item_not_found(self, work_items_client, mock_wit_client):
@@ -394,21 +394,25 @@ class TestListBacklogItems:
         assert len(result) == 1
         assert isinstance(result[0], WorkItem)
 
-    def test_uses_default_backlog_types(
+    def test_no_type_filter_when_none_specified(
         self,
         work_items_client,
         mock_wit_client,
         sample_wiql_result_empty,
     ):
-        """list_backlog_items() queries for default types when none specified."""
+        """list_backlog_items() does not restrict by type when none specified.
+
+        Every work item type — including custom/process-specific ones such as
+        EBP's "RSD" — must stay findable, so the WIQL query omits any
+        [System.WorkItemType] condition unless explicit types are passed.
+        """
         mock_wit_client.query_by_wiql.return_value = sample_wiql_result_empty
 
         work_items_client.list_backlog_items(TEST_PROJECT)
 
         wiql_arg = mock_wit_client.query_by_wiql.call_args.kwargs["wiql"]
         query = wiql_arg.query
-        for item_type in DEFAULT_BACKLOG_TYPES:
-            assert f"[System.WorkItemType] = '{item_type}'" in query
+        assert "[System.WorkItemType]" not in query
 
     def test_accepts_custom_item_types(
         self,

@@ -28,7 +28,7 @@ export interface SpecCreationData {
 function slugifyTitle(title: string): string {
 	return title
 		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/[^\p{L}\p{N}]+/gu, "-")
 		.replace(/^-|-$/g, "")
 		.substring(0, 50);
 }

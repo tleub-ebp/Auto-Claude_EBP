@@ -29,6 +29,7 @@ import {
 import { getUsageMonitor } from "../claude-profile/usage-monitor";
 import { getClaudeProfileManager } from "../claude-profile-manager";
 import {
+	clearToolCache,
 	configureTools,
 	type ExecFileAsyncOptionsWithVerbatim,
 	getClaudeDetectionPaths,
@@ -2005,6 +2006,101 @@ export function registerClaudeCodeHandlers(): void {
 
 					error: `Failed to check Claude Code version: ${errorMsg}`,
 				};
+			}
+		},
+	);
+
+	// Silent install/update of Claude Code — runs in background, no terminal.
+	// Use this when the user is already on a version of Claude that supports
+	// `claude install --force latest` (i.e. an update path). For fresh installs
+	// we still need a terminal because the bootstrap script (`irm | iex` /
+	// `curl | bash`) is interactive.
+	ipcMain.handle(
+		IPC_CHANNELS.CLAUDE_CODE_INSTALL_SILENT,
+		async (): Promise<IPCResult<{ stdout: string; stderr: string }>> => {
+			try {
+				const detectionResult = getToolInfo("claude");
+				const isUpdate = detectionResult.found && !!detectionResult.version;
+
+				if (!isUpdate || !detectionResult.path) {
+					// Fresh install requires the bootstrap script — caller should
+					// fall back to the terminal-based flow.
+					return {
+						success: false,
+						error:
+							"silent_install_unavailable: Claude is not installed; fresh install requires a terminal.",
+					};
+				}
+
+				// Self-update path: `<claude> install --force latest`. This is
+				// non-interactive and works on Windows / macOS / Linux.
+				const child = spawn(
+					detectionResult.path,
+					["install", "--force", "latest"],
+					{
+						shell: false,
+						windowsHide: true,
+						env: { ...process.env, CI: "1" },
+					},
+				);
+
+				let stdout = "";
+				let stderr = "";
+				child.stdout?.on("data", (chunk: Buffer) => {
+					stdout += chunk.toString("utf-8");
+				});
+				child.stderr?.on("data", (chunk: Buffer) => {
+					stderr += chunk.toString("utf-8");
+				});
+
+				const result = await new Promise<{
+					code: number | null;
+					stdout: string;
+					stderr: string;
+				}>((resolve, reject) => {
+					const timeout = setTimeout(
+						() => {
+							child.kill("SIGKILL");
+							reject(new Error("Claude install timed out after 5 minutes"));
+						},
+						5 * 60 * 1000,
+					);
+					child.on("error", (err) => {
+						clearTimeout(timeout);
+						reject(err);
+					});
+					child.on("close", (code) => {
+						clearTimeout(timeout);
+						resolve({ code, stdout, stderr });
+					});
+				});
+
+				// Invalidate the latest-version cache so the next check sees
+				// the freshly-installed binary.
+				cachedLatestVersion = null;
+				// Also invalidate the cli-tool-manager cache so getToolInfo
+				// re-detects the freshly-installed claude version.
+				clearToolCache();
+
+				if (result.code !== 0) {
+					return {
+						success: false,
+						error: `Claude install exited with code ${result.code}: ${
+							(result.stderr || result.stdout).trim().slice(0, 500) ||
+							"unknown error"
+						}`,
+					};
+				}
+
+				return {
+					success: true,
+					data: { stdout: result.stdout, stderr: result.stderr },
+				};
+			} catch (error) {
+				const errorMsg =
+					error instanceof Error ? error.message : "Unknown error";
+				console.error("[Claude Code] Silent install failed:", errorMsg, error);
+				return { success: false, error: errorMsg };
 			}
 		},
 	);

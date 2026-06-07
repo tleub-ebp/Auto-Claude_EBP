@@ -5,13 +5,49 @@ Fournit l'accès aux métriques d'utilisation de GitHub Copilot via l'API REST G
 Nécessite une authentification via GitHub CLI (gh) ou token GitHub avec les permissions appropriées.
 """
 
+import ipaddress
 import json
 import logging
+import socket
 import subprocess
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+def _is_safe_report_url(url: str) -> bool:
+    """Validate a Copilot signed-report URL against SSRF.
+
+    Reject any URL whose scheme isn't https, or whose host resolves to a
+    private/loopback/link-local address (cloud metadata, RFC1918, etc.).
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme != "https":
+        return False
+    host = parsed.hostname
+    if not host:
+        return False
+    try:
+        # getaddrinfo returns a list of (family, type, proto, canon, sockaddr).
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            ):
+                return False
+    except (socket.gaierror, ValueError):
+        return False
+    return True
 
 # GitHub CLI permission scope required for Copilot usage metrics
 ADMIN_ORG_PERMISSION = "admin:org"
@@ -36,21 +72,11 @@ class CopilotUsageConnector:
         self.gh_executable = self._find_gh_executable()
 
     def _find_gh_executable(self) -> str:
-        """Trouve l'exécutable GitHub CLI."""
-        try:
-            result = subprocess.run(
-                ["which", "gh"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                return result.stdout.strip()
-        except Exception:
-            pass
-        
-        # Fallback sur "gh" (doit être dans le PATH)
-        return "gh"
+        """Trouve l'exécutable GitHub CLI (cross-platform via shutil.which)."""
+        import shutil
+
+        resolved = shutil.which("gh")
+        return resolved or "gh"
 
     def _run_gh_command(self, args: list[str], timeout: int = 15) -> subprocess.CompletedProcess:
         """
@@ -84,10 +110,10 @@ class CopilotUsageConnector:
             error_msg += f"stdout: {e.stdout}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
-        except subprocess.TimeoutError as e:
+        except subprocess.TimeoutExpired:
             error_msg = f"Command timed out after {timeout}s: {' '.join(cmd)}"
             logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            raise RuntimeError(error_msg) from None
         except FileNotFoundError as e:
             error_msg = "GitHub CLI (gh) not found. Install from https://cli.github.com/"
             logger.error(error_msg)
@@ -192,18 +218,26 @@ class CopilotUsageConnector:
         Raises:
             RuntimeError: Si le téléchargement échoue
         """
+        if not _is_safe_report_url(report_url):
+            # Refuse anything that isn't an https URL pointing at a public
+            # IP. Guards against signed-URL spoofing pointing at cloud
+            # metadata (169.254.169.254), localhost, RFC1918, file://, etc.
+            raise RuntimeError("Refused unsafe report URL (SSRF guard)")
+
         try:
             import requests
-            response = requests.get(report_url, timeout=30)
+            # allow_redirects=False so a 30x to an internal host can't bypass
+            # the validation we just did above.
+            response = requests.get(report_url, timeout=30, allow_redirects=False)
             response.raise_for_status()
-            
+
             # Le rapport est généralement un fichier JSON
             if report_url.endswith('.json'):
                 return response.json()
             else:
                 # Pour les autres formats, essayer de parser comme JSON
                 return json.loads(response.text)
-                
+
         except Exception as e:
             logger.error(f"Failed to download report from {report_url}: {e}")
             raise RuntimeError(f"Failed to download report: {e}")
@@ -327,27 +361,112 @@ class CopilotUsageConnector:
         else:
             raise RuntimeError("No Copilot usage data found for any organization")
 
+    def get_copilot_personal_quotas(self) -> dict[str, Any]:
+        """
+        Récupère les quotas Copilot personnels de l'utilisateur connecté.
+
+        Utilise l'endpoint non-public `/copilot_internal/user` que la UI
+        github.com appelle pour afficher la jauge "Premium requests" et le
+        plan Copilot du compte. Ne nécessite pas `admin:org`, contrairement
+        aux endpoints `/orgs/.../copilot/metrics`.
+
+        Returns:
+            Dict avec premium_interactions / chat / completions snapshots,
+            plan, organisation, et date de reset du quota.
+
+        Raises:
+            RuntimeError: Si l'utilisateur n'a pas de siège Copilot ou si
+            l'endpoint est indisponible.
+        """
+        result = self._run_gh_command(["api", "/copilot_internal/user"])
+        data = json.loads(result.stdout)
+
+        quotas = data.get("quota_snapshots", {}) or {}
+        premium = quotas.get("premium_interactions") or {}
+        chat = quotas.get("chat") or {}
+        completions = quotas.get("completions") or {}
+
+        premium_entitlement = premium.get("entitlement", 0) or 0
+        premium_remaining = premium.get("remaining", 0) or 0
+        premium_pct_remaining = premium.get("percent_remaining")
+        premium_used = max(premium_entitlement - premium_remaining, 0)
+        premium_pct_used = (
+            round(100.0 - float(premium_pct_remaining), 2)
+            if premium_pct_remaining is not None
+            else 0.0
+        )
+
+        orgs = data.get("organization_list") or []
+        org_name = None
+        if orgs and isinstance(orgs, list):
+            first_org = orgs[0]
+            if isinstance(first_org, dict):
+                org_name = first_org.get("name") or first_org.get("login")
+
+        return {
+            "provider": "copilot",
+            "level": "user",
+            "scope": "personal-quotas",
+            "available": True,
+            "plan": data.get("copilot_plan"),
+            "login": data.get("login"),
+            "organization": org_name,
+            "premium_requests": {
+                "used": premium_used,
+                "entitlement": premium_entitlement,
+                "remaining": premium_remaining,
+                "percent_used": premium_pct_used,
+                "percent_remaining": premium_pct_remaining,
+                "overage_count": premium.get("overage_count", 0),
+                "overage_permitted": premium.get("overage_permitted", False),
+                "unlimited": premium.get("unlimited", False),
+            },
+            "chat": {
+                "unlimited": chat.get("unlimited", False),
+                "percent_remaining": chat.get("percent_remaining"),
+                "remaining": chat.get("remaining"),
+                "entitlement": chat.get("entitlement"),
+            },
+            "completions": {
+                "unlimited": completions.get("unlimited", False),
+                "percent_remaining": completions.get("percent_remaining"),
+                "remaining": completions.get("remaining"),
+                "entitlement": completions.get("entitlement"),
+            },
+            "quota_reset_date": data.get("quota_reset_date")
+            or data.get("quota_reset_date_utc"),
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     def get_copilot_usage_summary(self) -> dict[str, Any]:
         """
         Récupère un résumé des métriques d'utilisation Copilot.
-        
-        Cette méthode essaie d'abord les métriques d'entreprise, puis d'organisation,
-        et retourne les premières données disponibles.
-        
+
+        Stratégie:
+        1. `/copilot_internal/user` (quotas personnels: premium requests).
+           Endpoint utilisé par la UI github.com — pas de droits admin requis.
+        2. Fallback `enterprise` / `organization` metrics (suggestions /
+           acceptances agrégées) si l'utilisateur a `admin:org`.
+
         Returns:
             Dictionnaire contenant le résumé des métriques
         """
+        try:
+            return self.get_copilot_personal_quotas()
+        except RuntimeError as e:
+            logger.info(f"Personal Copilot quotas unavailable, falling back: {e}")
+
         enterprise_error = None
         organization_error = None
-        
+
         try:
-            # Essayer les métriques d'entreprise d'abord
+            # Essayer les métriques d'entreprise (admin-only)
             return self.get_copilot_enterprise_usage()
         except RuntimeError as e:
             enterprise_error = e
-            
+
         try:
-            # Fallback sur les métriques d'organisation
+            # Fallback sur les métriques d'organisation (admin-only)
             return self.get_copilot_organization_usage()
         except RuntimeError as e:
             organization_error = e

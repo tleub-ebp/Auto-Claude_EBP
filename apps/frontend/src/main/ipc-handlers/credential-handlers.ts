@@ -367,12 +367,12 @@ export function registerCredentialHandlers(): void {
 		},
 	);
 
-	/**
-	 * Obtenir les variables d'environnement pour le processus Python
-	 */
-	ipcMain.handle("credential:getEnv", (): Record<string, string> => {
-		return credentialManager.getEnvironmentVariables();
-	});
+	// NOTE: `credential:getEnv` IPC handler removed (was dead code).
+	// Exposing plaintext API keys via IPC is dangerous because any renderer
+	// context — including a contextBridge slip-up or a future devtools
+	// extension — could read all configured provider keys. Main-process
+	// code should call `credentialManager.getEnvironmentVariables()`
+	// directly when building Python subprocess envs.
 
 	/**
 	 * S'abonner aux événements de credentials

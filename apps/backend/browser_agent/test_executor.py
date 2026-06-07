@@ -7,11 +7,28 @@ Returns structured results for the Browser Agent dashboard.
 """
 
 import json
+import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
 
 from .models import TestInfo, TestResult, TestRunResult
+
+
+def _resolve_npx() -> str:
+    """Find the npx executable, accounting for Windows shell wrappers.
+
+    On Windows, `npx` is `npx.cmd` (or `.ps1` / `.bat`); calling
+    `subprocess.run(["npx", ...], shell=False)` raises FileNotFoundError
+    even when npm is installed. shutil.which finds the right one.
+    """
+    found = shutil.which("npx")
+    if found:
+        return found
+    # Last-resort fallback that lets subprocess raise FileNotFoundError
+    # consistently across platforms.
+    return "npx.cmd" if os.name == "nt" else "npx"
 
 
 class TestExecutor:
@@ -84,10 +101,20 @@ class TestExecutor:
         playwright_tests = [t for t in discovered if t.type == "playwright"]
         pytest_tests = [t for t in discovered if t.type == "pytest"]
 
-        # Filter if specific files requested
+        # Filter if specific files requested. Discovered paths are relative
+        # to project_dir; callers may pass absolute paths. Normalize both
+        # sides via resolve() to avoid the silent "0 results" surprise.
         if test_files:
-            playwright_tests = [t for t in playwright_tests if t.path in test_files]
-            pytest_tests = [t for t in pytest_tests if t.path in test_files]
+            requested = {str((self.project_dir / t).resolve()) for t in test_files}
+
+            def _matches(t: TestInfo) -> bool:
+                return (
+                    t.path in test_files
+                    or str((self.project_dir / t.path).resolve()) in requested
+                )
+
+            playwright_tests = [t for t in playwright_tests if _matches(t)]
+            pytest_tests = [t for t in pytest_tests if _matches(t)]
 
         all_results: list[TestResult] = []
         start_time = time.time()
@@ -128,7 +155,7 @@ class TestExecutor:
             json_report.parent.mkdir(parents=True, exist_ok=True)
 
             cmd = [
-                "npx",
+                _resolve_npx(),
                 "playwright",
                 "test",
                 "--reporter=json",

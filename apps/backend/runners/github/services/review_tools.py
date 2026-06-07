@@ -388,6 +388,10 @@ async def run_tests(
         except asyncio.TimeoutError:
             logger.error("[Orchestrator] Tests timed out after 5 minutes")
             proc.kill()
+            try:
+                await proc.wait()
+            except Exception:
+                pass
             return TestResult(executed=True, passed=False, error="Timeout after 5min")
 
         passed = proc.returncode == 0

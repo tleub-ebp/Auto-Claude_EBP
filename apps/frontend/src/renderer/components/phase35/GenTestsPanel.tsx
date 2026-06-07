@@ -5,7 +5,7 @@
  * to a stored baseline → see regressions, vanished tests, slowdowns.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useGenTestsStore } from "../../stores/phase35-stores";
 import { Badge } from "../ui/badge";
@@ -15,6 +15,15 @@ import { PanelShell } from "./_panel-shell";
 interface GenTestsPanelProps {
 	projectPath: string;
 }
+
+const LABEL_MAX_LEN = 64;
+const JUNIT_MAX_LEN = 5_000_000;
+
+const looksLikeJunit = (xml: string): boolean => {
+	const trimmed = xml.trim();
+	if (!trimmed.startsWith("<")) return false;
+	return /<testsuite[\s>]|<testsuites[\s>]/.test(trimmed);
+};
 
 export function GenTestsPanel({ projectPath }: GenTestsPanelProps) {
 	const { t } = useTranslation("phase35");
@@ -39,6 +48,33 @@ export function GenTestsPanel({ projectPath }: GenTestsPanelProps) {
 
 	const isRunning = phase === "running";
 
+	const labelError = useMemo(
+		() => (label.trim().length === 0 ? t("genTests.validation.labelRequired") : null),
+		[label, t],
+	);
+	const junitError = useMemo(() => {
+		if (junit.trim().length === 0) return t("genTests.validation.junitRequired");
+		if (!looksLikeJunit(junit)) return t("genTests.validation.junitInvalid");
+		if (junit.length > JUNIT_MAX_LEN)
+			return t("common.tooLong", { max: JUNIT_MAX_LEN });
+		return null;
+	}, [junit, t]);
+	const baselineError = useMemo(
+		() => (baseline.trim().length === 0 ? t("genTests.validation.baselineRequired") : null),
+		[baseline, t],
+	);
+	const currentJunitError = useMemo(() => {
+		if (currentJunit.trim().length === 0) return t("genTests.validation.junitRequired");
+		if (!looksLikeJunit(currentJunit)) return t("genTests.validation.junitInvalid");
+		if (currentJunit.length > JUNIT_MAX_LEN)
+			return t("common.tooLong", { max: JUNIT_MAX_LEN });
+		return null;
+	}, [currentJunit, t]);
+
+	const captureDisabled = isRunning || Boolean(labelError) || Boolean(junitError);
+	const compareDisabled =
+		isRunning || Boolean(baselineError) || Boolean(currentJunitError);
+
 	return (
 		<PanelShell
 			title={t("genTests.title")}
@@ -56,23 +92,43 @@ export function GenTestsPanel({ projectPath }: GenTestsPanelProps) {
 						{t("genTests.capture")}
 					</summary>
 					<div className="mt-2 space-y-2">
-						<input
-							value={label}
-							onChange={(e) => setLabel(e.target.value)}
-							placeholder={t("genTests.label")}
-							className="w-full rounded border bg-background p-2 text-sm"
-						/>
-						<textarea
-							value={junit}
-							onChange={(e) => setJunit(e.target.value)}
-							rows={4}
-							placeholder={t("genTests.junitXml")}
-							className="w-full rounded border bg-background p-2 font-mono text-xs"
-						/>
+						<div>
+							<input
+								value={label}
+								onChange={(e) => setLabel(e.target.value.slice(0, LABEL_MAX_LEN))}
+								maxLength={LABEL_MAX_LEN}
+								aria-invalid={Boolean(labelError) || undefined}
+								aria-describedby={labelError ? "label-error" : undefined}
+								placeholder={t("genTests.label")}
+								className="w-full rounded border bg-background p-2 text-sm"
+							/>
+							{labelError && (
+								<p id="label-error" className="mt-1 text-xs text-destructive">
+									{labelError}
+								</p>
+							)}
+						</div>
+						<div>
+							<textarea
+								value={junit}
+								onChange={(e) => setJunit(e.target.value.slice(0, JUNIT_MAX_LEN))}
+								rows={4}
+								maxLength={JUNIT_MAX_LEN}
+								aria-invalid={Boolean(junitError) || undefined}
+								aria-describedby={junitError ? "junit-error" : undefined}
+								placeholder={t("genTests.junitXml")}
+								className="w-full rounded border bg-background p-2 font-mono text-xs"
+							/>
+							{junitError && (
+								<p id="junit-error" className="mt-1 text-xs text-destructive">
+									{junitError}
+								</p>
+							)}
+						</div>
 						<Button
 							size="sm"
-							onClick={() => capture(projectPath, label, junit)}
-							disabled={isRunning || !label || !junit}
+							onClick={() => capture(projectPath, label.trim(), junit)}
+							disabled={captureDisabled || !projectPath}
 						>
 							{t("genTests.capture")}
 						</Button>
@@ -111,23 +167,52 @@ export function GenTestsPanel({ projectPath }: GenTestsPanelProps) {
 						{t("genTests.compare")}
 					</summary>
 					<div className="mt-2 space-y-2">
-						<input
-							value={baseline}
-							onChange={(e) => setBaseline(e.target.value)}
-							placeholder={t("genTests.baseline")}
-							className="w-full rounded border bg-background p-2 text-sm"
-						/>
-						<textarea
-							value={currentJunit}
-							onChange={(e) => setCurrentJunit(e.target.value)}
-							rows={4}
-							placeholder={t("genTests.current")}
-							className="w-full rounded border bg-background p-2 font-mono text-xs"
-						/>
+						<div>
+							<input
+								value={baseline}
+								onChange={(e) =>
+									setBaseline(e.target.value.slice(0, LABEL_MAX_LEN))
+								}
+								maxLength={LABEL_MAX_LEN}
+								aria-invalid={Boolean(baselineError) || undefined}
+								aria-describedby={baselineError ? "baseline-error" : undefined}
+								placeholder={t("genTests.baseline")}
+								className="w-full rounded border bg-background p-2 text-sm"
+							/>
+							{baselineError && (
+								<p id="baseline-error" className="mt-1 text-xs text-destructive">
+									{baselineError}
+								</p>
+							)}
+						</div>
+						<div>
+							<textarea
+								value={currentJunit}
+								onChange={(e) =>
+									setCurrentJunit(e.target.value.slice(0, JUNIT_MAX_LEN))
+								}
+								rows={4}
+								maxLength={JUNIT_MAX_LEN}
+								aria-invalid={Boolean(currentJunitError) || undefined}
+								aria-describedby={
+									currentJunitError ? "current-junit-error" : undefined
+								}
+								placeholder={t("genTests.current")}
+								className="w-full rounded border bg-background p-2 font-mono text-xs"
+							/>
+							{currentJunitError && (
+								<p
+									id="current-junit-error"
+									className="mt-1 text-xs text-destructive"
+								>
+									{currentJunitError}
+								</p>
+							)}
+						</div>
 						<Button
 							size="sm"
-							onClick={() => compare(projectPath, baseline, currentJunit)}
-							disabled={isRunning || !baseline || !currentJunit}
+							onClick={() => compare(projectPath, baseline.trim(), currentJunit)}
+							disabled={compareDisabled || !projectPath}
 						>
 							{t("genTests.compare")}
 						</Button>

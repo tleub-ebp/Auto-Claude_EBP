@@ -13,9 +13,17 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from agents.agent_audit import audit_decision, audit_event
+from agents.feature_wiring import (
+    apply_router_override,
+    cognitive_context_enabled,
+    load_domain_addendum,
+    suggest_routed_model,
+)
 from core.client import create_agent_client
 from core.task_event import TaskEventEmitter
 from core.workflow_logger import workflow_logger
+from qa.criteria import save_implementation_plan
 
 try:
     from core.usage_tracker import (
@@ -58,6 +66,7 @@ from prompts import is_first_run
 from recovery import RecoveryManager
 from security.constants import PROJECT_DIR_ENV_VAR
 from task_logger import (
+    LogEntryType,
     LogPhase,
     get_task_logger,
 )
@@ -91,9 +100,14 @@ from .base import (
     sanitize_error_message,
 )
 from .memory_manager import debug_memory_system_status, get_graphiti_context
-from .session import post_session_processing, run_agent_session
+from .session import (
+    is_prompt_too_long_error,
+    post_session_processing,
+    run_agent_session,
+)
 from .utils import (
     find_phase_for_subtask,
+    find_subtask_in_plan,
     get_commit_count,
     get_latest_commit,
     load_implementation_plan,
@@ -118,6 +132,46 @@ AGENT_NAME = "Claude Code"
 # =============================================================================
 # FILE VALIDATION UTILITIES
 # =============================================================================
+
+
+def _find_git_root(start: Path) -> Path | None:
+    """Walk up from `start` looking for a directory containing `.git`. Return it, or None."""
+    current = start.resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _suggest_project_dir_fix(project_dir: Path, invalid_paths: list[str]) -> str:
+    """
+    Build an actionable suggestion when paths escape project_dir.
+
+    The common cause is that project_dir points to a sub-folder of the actual project
+    root. If a Git root exists above project_dir AND the escaping paths resolve inside
+    that Git root, recommend reconfiguring the project to point at the Git root.
+    """
+    resolved_project = Path(project_dir).resolve()
+    git_root = _find_git_root(resolved_project)
+
+    if git_root and git_root != resolved_project:
+        all_resolve_inside_git_root = all(
+            (resolved_project / p).resolve().is_relative_to(git_root)
+            for p in invalid_paths
+        )
+        if all_resolve_inside_git_root:
+            return (
+                f"Project misconfiguration likely: project_dir is set to a sub-folder "
+                f"({resolved_project}). All offending paths resolve inside the Git root "
+                f"at {git_root}. Reconfigure the project in WorkPilot to point at "
+                f"{git_root} instead, then re-plan. As an interim fix, you may also "
+                f"rewrite the paths to be relative to project_dir (without `../`)."
+            )
+
+    return (
+        "Update implementation plan to use paths within the project directory "
+        "(no `../` segments, no absolute paths)."
+    )
 
 
 def validate_subtask_files(subtask: dict, project_dir: Path) -> dict:
@@ -154,7 +208,7 @@ def validate_subtask_files(subtask: dict, project_dir: Path) -> dict:
             "error": f"Paths resolve outside project boundary: {', '.join(invalid_paths)}",
             "missing_files": missing_files,
             "invalid_paths": invalid_paths,
-            "suggestion": "Update implementation plan to use paths within the project directory",
+            "suggestion": _suggest_project_dir_fix(project_dir, invalid_paths),
         }
 
     if missing_files:
@@ -346,16 +400,43 @@ def _validate_meridiem_hour(hour: int, meridiem: str) -> bool:
 
 
 def _parse_absolute_time(message: str) -> int | None:
-    """Parse 'at HH:MM' pattern from message."""
-    at_time_match = re.search(r"at\s+(\d{1,2}):(\d{2})(?:\s*(am|pm))?", message, re.I)
-    if not at_time_match:
-        return None
+    """Parse absolute clock times from CLI messages.
 
-    try:
-        hour = int(at_time_match.group(1))
-        minute = int(at_time_match.group(2))
+    Handles both shapes the Claude CLI emits:
+      - ``"resets at 10:30 pm"`` / ``"resets at 22:30"`` (legacy)
+      - ``"resets 3:20pm (Europe/Paris)"`` / ``"resets 10am"`` (newer session-limit
+        and weekly-limit banners — no ``at`` prefix, minute portion sometimes
+        omitted)
+
+    Missing the no-``at`` variant let the rate-limit shield fail to compute a
+    reset timestamp, so the caller fell back to its retry loop and the
+    conversation summary kept re-injecting until the prompt overflowed.
+    """
+    # Try minute-precision first (HH:MM with optional meridiem).
+    at_time_match = re.search(
+        r"(?:at|resets)\s+(\d{1,2}):(\d{2})\s*(am|pm)?", message, re.I
+    )
+    if not at_time_match:
+        # Fall back to hour-only ("resets 10am" / "resets 3pm").
+        hour_only = re.search(r"(?:at|resets)\s+(\d{1,2})\s*(am|pm)", message, re.I)
+        if not hour_only:
+            return None
+        # Synthesise a zero-minute match so the rest of the function stays one branch.
+        try:
+            hour = int(hour_only.group(1))
+        except ValueError:
+            return None
+        minute = 0
+        meridiem = hour_only.group(2)
+    else:
+        try:
+            hour = int(at_time_match.group(1))
+            minute = int(at_time_match.group(2))
+        except ValueError:
+            return None
         meridiem = at_time_match.group(3)
 
+    try:
         # Validate hour range when meridiem is present
         if meridiem and not _validate_meridiem_hour(hour, meridiem):
             return None
@@ -451,6 +532,108 @@ async def run_autonomous_agent(
             "streaming_session_id": streaming_session_id,
         },
     )
+    audit_event(
+        project_dir,
+        kind="agent_invoked",
+        actor="coder",
+        correlation_id=spec_dir.name,
+        summary="coder autonomous loop invoked",
+        payload={
+            "model": model,
+            "max_iterations": max_iterations,
+            "spec_dir": str(spec_dir),
+        },
+    )
+
+    # --- Feature wiring (opt-in) --------------------------------------------
+    # ModelRouter:
+    #   * Default mode (override flag OFF): suggest a cheaper model and log
+    #     the divergence. The user's configured model is kept.
+    #   * Override mode (WORKPILOT_MODEL_ROUTER_ENABLED=1) AND no explicit
+    #     user choice: substitute `model` with the router's suggestion. We
+    #     never overrule a CLI/UI/spec-file choice silently.
+    try:
+        new_model, override_info = apply_router_override(
+            model,
+            spec_dir=spec_dir,
+            phase="coding",
+            prompt_hint=f"coder run on spec {spec_dir.name}",
+        )
+        if override_info is not None:
+            # Override took effect — record it as a decision and replace model.
+            audit_decision(
+                project_dir,
+                actor="model_router",
+                spec_dir=spec_dir,
+                decision_id=f"router-override-{spec_dir.name}",
+                title="Model substituted by router (no explicit user choice)",
+                chosen=new_model,
+                rejected=(model,),
+                rationale=(
+                    f"ModelRouter substituted {model} → {new_model} "
+                    f"(~${override_info['estimated_cost_usd']:.4f}, "
+                    f"{override_info['reason']}). "
+                    f"Override active because no CLI/task_metadata model was set."
+                ),
+            )
+            model = new_model  # noqa: PLW2901 — intentional reassignment
+        else:
+            # Override mode off OR user picked explicitly — log the suggestion
+            # for cost analyses but keep the user's choice.
+            suggestion = suggest_routed_model(
+                prompt=f"coder run on spec {spec_dir.name}",
+                task_hint="coding",
+            )
+            if suggestion and suggestion["model"] != model:
+                audit_decision(
+                    project_dir,
+                    actor="model_router",
+                    spec_dir=spec_dir,
+                    decision_id=f"router-suggest-{spec_dir.name}",
+                    title="Cheaper model available",
+                    chosen=model,
+                    rejected=(suggestion["model"],),
+                    rationale=(
+                        f"ModelRouter suggested {suggestion['model']} "
+                        f"(~${suggestion['estimated_cost_usd']:.4f}, "
+                        f"{suggestion['reason']}); user choice {model} kept."
+                    ),
+                )
+    except Exception:
+        # Wiring is best-effort. Never break the build.
+        pass
+
+    # Domain Agents: log when a domain addendum is available so downstream
+    # tooling (and the audit trail) can show that a domain-specific
+    # context was active for this run. Injecting the addendum into the
+    # actual SDK system prompt is intentionally NOT done here — that
+    # requires a coordinated change to the runtime/client layer and is
+    # tracked separately. For now we surface the signal.
+    try:
+        domain_addendum = load_domain_addendum(spec_dir, role="coder")
+        if domain_addendum:
+            audit_event(
+                project_dir,
+                kind="system_event",
+                actor="domain_agents",
+                correlation_id=spec_dir.name,
+                summary="domain addendum available for coder",
+                payload={"addendum_chars": len(domain_addendum)},
+            )
+    except Exception:
+        pass
+
+    # Cognitive Context Optimizer flag — record whether opt-in was active
+    # so reproducibility audits can correlate output quality vs context size.
+    if cognitive_context_enabled():
+        audit_event(
+            project_dir,
+            kind="system_event",
+            actor="cognitive_context",
+            correlation_id=spec_dir.name,
+            summary="cognitive context optimizer flag enabled for this run",
+        )
+    # ------------------------------------------------------------------------
 
     # Start build tracking (best-effort)
     if _ut_start_build is not None:
@@ -631,6 +814,15 @@ async def run_autonomous_agent(
         None  # Context to pass to agent after concurrency error
     )
 
+    # Generic-error de-duplication: if the same error message recurs more than
+    # MAX_REPEATED_GENERIC_ERRORS times back-to-back we bail out instead of
+    # retrying forever. This is what prevented the session-limit / prompt-too-
+    # long loop from filling the logs with duplicated "session limit · resets …"
+    # banners while the conversation summary kept growing.
+    MAX_REPEATED_GENERIC_ERRORS = 3
+    last_generic_error_signature: str | None = None
+    repeated_generic_error_count = 0
+
     def _reset_concurrency_state() -> None:
         """Reset concurrency error tracking state after a successful session or non-concurrency error."""
         nonlocal \
@@ -643,6 +835,83 @@ async def run_autonomous_agent(
 
     while True:
         iteration += 1
+
+        # Anti-burnout loop detector (opt-in via WORKPILOT_LOOP_DETECTION_ENABLED).
+        # If iteration N produces the same diff as a recent earlier iteration,
+        # we're flip-flopping — pause the agent for human review instead of
+        # burning more tokens.
+        try:
+            from agents.loop_detection import (
+                get_detector,
+                loop_detection_enabled,
+            )
+
+            if loop_detection_enabled() and iteration > 1:
+                detector = get_detector(spec_dir)
+                diff_hash = detector.hash_diff(project_dir)
+                if detector.record_and_check(diff_hash):
+                    audit_event(
+                        project_dir,
+                        kind="policy_violated",
+                        actor="coder",
+                        correlation_id=spec_dir.name,
+                        summary=(
+                            f"Circular fix detected at iteration {iteration} — "
+                            "agent paused for human review"
+                        ),
+                        payload={
+                            "iteration": iteration,
+                            "diff_hash_prefix": diff_hash[:16],
+                            "buffer": detector.buffer_snapshot(),
+                        },
+                    )
+                    print_status(
+                        "Circular fix detected — pausing for human intervention",
+                        "warning",
+                    )
+                    pause_file = spec_dir / HUMAN_INTERVENTION_FILE
+                    pause_file.write_text(
+                        f"Loop detector triggered at iteration {iteration}.\n"
+                        f"The coder produced the same diff it had a few "
+                        f"iterations ago — likely a flip-flop between two "
+                        f"fixes. Inspect the diff and decide whether to:\n"
+                        f"  - delete this PAUSE file to resume,\n"
+                        f"  - or restart with a different approach.\n",
+                        encoding="utf-8",
+                    )
+                    status_manager.update(state=BuildState.PAUSED)
+                    return
+        except Exception as exc:
+            logger.debug(f"Loop detection check skipped: {exc}")
+
+        # Check for pause state in implementation plan
+        from .utils import get_pause_state, is_paused
+
+        plan = load_implementation_plan(spec_dir)
+        if plan and is_paused(plan):
+            pause_state = get_pause_state(plan)
+            print()
+            print_status("TASK PAUSED", "warning")
+            print(muted(f"Paused at: {pause_state.get('paused_at')}"))
+            if pause_state.get("paused_subtask_id"):
+                print(muted(f"Paused subtask: {pause_state.get('paused_subtask_id')}"))
+            if pause_state.get("provider"):
+                print(
+                    muted(
+                        f"Provider: {pause_state.get('provider')} ({pause_state.get('model')})"
+                    )
+                )
+
+            # Check if provider has changed since pause
+            if pause_state.get("provider") and pause_state.get("provider") != model:
+                model = pause_state.get("provider")
+                print_status(f"Provider updated to {model}", "success")
+
+            # Resume from paused subtask if specified
+            if pause_state.get("paused_subtask_id"):
+                print_status("Resuming from paused subtask", "success")
+
+            return
 
         # Check for human intervention (PAUSE file)
         pause_file = spec_dir / HUMAN_INTERVENTION_FILE
@@ -763,6 +1032,53 @@ async def run_autonomous_agent(
                 if sync_spec_to_source(spec_dir, source_spec_dir):
                     print_status("Phase transition synced to main project", "success")
 
+            # PRE-CHECK: Look for any subtask with manual verification
+            # These may be pending OR blocked (blocked by post-processing after 0 commits)
+            if not next_subtask:
+                plan = load_implementation_plan(spec_dir)
+                if plan:
+                    print(
+                        muted(
+                            f"[DEBUG] Scanning {len(plan.get('phases', []))} phases for manual tasks"
+                        )
+                    )
+                    for phase in plan.get("phases", []):
+                        print(
+                            muted(
+                                f"  Phase '{phase.get('name')}': {len(phase.get('subtasks', []))} subtasks"
+                            )
+                        )
+                        for subtask in phase.get("subtasks", []):
+                            status = subtask.get("status")
+                            verification = subtask.get("verification", {})
+                            print(
+                                muted(
+                                    f"    - {subtask.get('id')}: status={status}, verification={verification.get('type')}"
+                                )
+                            )
+                            # Check for manual verification tasks in pending or blocked state
+                            if (
+                                status in ("pending", "blocked")
+                                and verification.get("type") == "manual"
+                            ):
+                                # Found a manual verification task - treat it as next
+                                next_subtask = {
+                                    **subtask,
+                                    "phase_id": phase.get("id"),
+                                    "phase_name": phase.get("name"),
+                                    "phase_num": phase.get("phase"),
+                                }
+                                subtask_id = next_subtask.get("id")
+                                print_status(
+                                    f"Found manual verification subtask: {subtask_id} (status={status})",
+                                    "warning",
+                                )
+                                break
+                        if next_subtask:
+                            break
+                else:
+                    print(muted("[DEBUG] Could not load implementation plan"))
+
             if not next_subtask:
                 # FIX for Issue #495: Race condition after planning phase
                 # The implementation_plan.json may not be fully flushed to disk yet,
@@ -846,6 +1162,53 @@ async def run_autonomous_agent(
                 # Small delay before retry
                 await asyncio.sleep(AUTO_CONTINUE_DELAY_SECONDS)
                 continue  # Skip to next iteration
+
+            # PRE-CHECK: If this is a manual verification task, skip the coder session
+            # and mark it as completed to remove from queue
+            verification = next_subtask.get("verification", {})
+            if verification.get("type") == "manual":
+                print()
+                print_status(
+                    f"Subtask {subtask_id} requires manual verification",
+                    "warning",
+                )
+                print(
+                    muted(
+                        "Skipping coder session - marking as completed for human review"
+                    )
+                )
+
+                # Mark as completed (not blocked) so it's removed from queue
+                # This prevents infinite waiting since no automated testing can run
+                plan = load_implementation_plan(spec_dir)
+                if plan:
+                    subtask = find_subtask_in_plan(plan, subtask_id)
+                    if subtask:
+                        subtask["status"] = "completed"
+                        # Add metadata that this requires manual review
+                        subtask["_manual_review_required"] = True
+
+                        try:
+                            save_implementation_plan(spec_dir, plan)
+                            print_status(
+                                f"✓ Subtask {subtask_id} marked as COMPLETED (manual review needed)",
+                                "warning",
+                            )
+
+                            # Log the decision
+                            if task_logger:
+                                task_logger.log(
+                                    f"Subtask {subtask_id}: Manual verification task - marked completed for human review",
+                                    LogEntryType.TEXT,
+                                    LogPhase.CODING,
+                                )
+                        except Exception as e:
+                            logger.error(f"Failed to mark as completed: {e}")
+                            print(f"  ✗ Warning: Could not mark as completed: {e}")
+
+                # Continue to next subtask without launching coder
+                await asyncio.sleep(AUTO_CONTINUE_DELAY_SECONDS)
+                continue
 
             # Get attempt count for recovery context
             attempt_count = recovery_manager.get_attempt_count(subtask_id)
@@ -932,6 +1295,37 @@ async def run_autonomous_agent(
                     response[:500]
                 )  # Limit response length
 
+            # AUTO-ANSWER: If the LLM asked "should I mark this as blocked?",
+            # automatically send the answer to continue execution
+            if (
+                status == "continue"
+                and response
+                and "should I mark" in response.lower()
+                and "blocked" in response.lower()
+            ):
+                print_status(
+                    "Detected blocking question from agent - auto-answering to continue...",
+                    "warning",
+                )
+                # The agent asked whether to block the manual testing subtask.
+                # Automatically answer: Yes, mark it as blocked and continue.
+                auto_answer = (
+                    "Yes, please mark this subtask as 'blocked' and continue to the next subtask. "
+                    "The manual testing requires a human tester with Visual Studio access."
+                )
+
+                # Send the auto-answer as a new session
+                async with client:
+                    await client.query(auto_answer)
+                    response_text = ""
+                    async for msg in client.receive_response():
+                        if hasattr(msg, "content"):
+                            for block in msg.content:
+                                if hasattr(block, "text"):
+                                    response_text += block.text
+                    response = response_text
+                # This will execute the blocking and continue automatically
+
         plan_validated = False
         if is_planning_phase and status != "error":
             valid, errors = _validate_and_fix_implementation_plan()
@@ -1016,8 +1410,19 @@ async def run_autonomous_agent(
 
         # Handle session status
         if status == "complete":
-            # Don't emit COMPLETE here - subtasks are done but QA hasn't run yet
-            # QA loop will emit COMPLETE after actual approval
+            # Emit ALL_SUBTASKS_DONE so frontend XState transitions coding → qa_review.
+            # Without this, the process may exit without a terminal event, causing
+            # the kanban card to stay stuck in the "In Progress" column.
+            try:
+                completed, total = count_subtasks(spec_dir)
+                task_event_emitter = TaskEventEmitter.from_spec_dir(spec_dir)
+                task_event_emitter.emit(
+                    "ALL_SUBTASKS_DONE",
+                    {"totalCount": total},
+                )
+            except Exception:
+                logger.debug("Failed to emit ALL_SUBTASKS_DONE event", exc_info=True)
+
             print_build_complete_banner(spec_dir)
             status_manager.update(state=BuildState.COMPLETE)
 
@@ -1048,6 +1453,30 @@ async def run_autonomous_agent(
                     )
             except Exception as e:
                 logger.debug(f"Learning loop post-build analysis skipped: {e}")
+
+            # Coder self-review handoff (opt-in via WORKPILOT_SELF_REVIEW_ENABLED).
+            # Writes self_review.md at the spec root so the QA reviewer starts
+            # with the coder's own risk notes instead of a blank slate. We pass
+            # `client=None` here — the SDK-backed call would re-spawn the coder
+            # for one extra turn which is a coordinated change to plumb properly,
+            # so for now we just write the deterministic stub from the diff.
+            try:
+                from agents.self_review import (
+                    run_self_review,
+                    self_review_enabled,
+                )
+
+                if self_review_enabled():
+                    written = await run_self_review(
+                        client=None, spec_dir=spec_dir, project_dir=project_dir
+                    )
+                    if written is not None:
+                        print_status(
+                            f"Self-review handoff written to {written.name}",
+                            "info",
+                        )
+            except Exception as e:
+                logger.debug(f"Self-review skipped: {e}")
 
             break
 
@@ -1175,6 +1604,37 @@ async def run_autonomous_agent(
                 current_retry_delay = min(
                     current_retry_delay * 2, MAX_RETRY_DELAY_SECONDS
                 )
+
+            elif error_info and (
+                error_info.get("type") == "prompt_too_long"
+                or is_prompt_too_long_error(RuntimeError(error_info.get("message", "")))
+            ):
+                # Prompt too long for the LLM context window — retrying with
+                # the same conversation will fail identically. Halt the loop
+                # and surface the right remediation to the user.
+                #
+                # We accept BOTH the new explicit type tag and the legacy
+                # string-match path so a partial deploy (only one side updated)
+                # still breaks the loop instead of spinning on the error.
+                _reset_concurrency_state()
+                from services.rate_limit_shield import handle_prompt_too_long
+
+                handle_prompt_too_long(
+                    RuntimeError(error_info.get("message", "")),
+                    spec_dir,
+                    "coder",
+                )
+                print_status(
+                    "Prompt too long — task halted (reset conversation or "
+                    "switch provider)",
+                    "error",
+                )
+                emit_phase(
+                    ExecutionPhase.FAILED,
+                    "Prompt too long for LLM context window",
+                )
+                status_manager.update(state=BuildState.ERROR)
+                break
 
             elif error_info and error_info.get("type") == "rate_limit":
                 # Rate limit error - intelligent wait for reset
@@ -1306,7 +1766,46 @@ async def run_autonomous_agent(
                 continue  # Resume the loop
 
             else:
-                # Other errors - use standard retry logic
+                # Other errors - use standard retry logic, but bail out if the
+                # same error keeps recurring so we don't loop forever (and don't
+                # pollute the logs with duplicate banners). This catches the
+                # case where, for whatever reason, the rate-limit / prompt-too-
+                # long detectors don't match a new CLI banner shape: instead of
+                # retrying with the conversation-continuation summary (which
+                # makes the prompt grow every iteration) we surface the failure.
+                current_signature = (
+                    (error_info or {}).get("message", "")
+                    if error_info
+                    else str(error_info)
+                )
+                # Normalise the signature so timestamps / reset-time tails don't
+                # defeat the comparison ("resets 3:20pm" vs "resets 3:21pm").
+                normalised_signature = re.sub(
+                    r"\s+", " ", current_signature[:200]
+                ).strip()
+
+                if (
+                    last_generic_error_signature is not None
+                    and normalised_signature == last_generic_error_signature
+                ):
+                    repeated_generic_error_count += 1
+                else:
+                    last_generic_error_signature = normalised_signature
+                    repeated_generic_error_count = 1
+
+                if repeated_generic_error_count >= MAX_REPEATED_GENERIC_ERRORS:
+                    print_status(
+                        f"Same error repeated {repeated_generic_error_count} times — halting "
+                        "instead of growing the conversation summary further.",
+                        "error",
+                    )
+                    emit_phase(
+                        ExecutionPhase.FAILED,
+                        "Repeated error (retry would not change outcome)",
+                    )
+                    status_manager.update(state=BuildState.ERROR)
+                    break
+
                 print_status("Session encountered an error", "error")
                 print(muted("Will retry with a fresh session..."))
                 status_manager.update(state=BuildState.ERROR)
@@ -1390,6 +1889,18 @@ async def run_autonomous_agent(
             },
             agent_trace_id,
         )
+        audit_event(
+            project_dir,
+            kind="agent_completed",
+            actor="coder",
+            correlation_id=spec_dir.name,
+            summary=f"coder completed: {completed}/{total} subtasks",
+            payload={
+                "completed_subtasks": completed,
+                "total_subtasks": total,
+                "total_sessions": iteration,
+            },
+        )
     else:
         status_manager.update(state=BuildState.PAUSED)
         if _ut_finish_build is not None:
@@ -1416,6 +1927,18 @@ async def run_autonomous_agent(
                 "spec_dir": str(spec_dir.name),
             },
             agent_trace_id,
+        )
+        audit_event(
+            project_dir,
+            kind="agent_paused",
+            actor="coder",
+            correlation_id=spec_dir.name,
+            summary=f"coder paused: {completed}/{total} subtasks",
+            payload={
+                "completed_subtasks": completed,
+                "total_subtasks": total,
+                "remaining": total - completed,
+            },
         )
 
     # Clean up streaming session

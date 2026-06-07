@@ -4,6 +4,7 @@ import {
 	sanitizeText,
 	sanitizeUrl,
 	stripControlChars,
+	stripHtml,
 } from "../sanitize";
 
 describe("stripControlChars", () => {
@@ -280,5 +281,65 @@ describe("sanitizeUrl", () => {
 			const url = "https://example.com";
 			expect(sanitizeUrl(url, 100)).toBe("https://example.com/");
 		});
+	});
+});
+
+describe("stripHtml", () => {
+	it("should return empty string for non-string input", () => {
+		expect(stripHtml(undefined)).toBe("");
+		expect(stripHtml(null)).toBe("");
+		expect(stripHtml(42)).toBe("");
+	});
+
+	it("should pass through plain text unchanged", () => {
+		expect(stripHtml("Hello world")).toBe("Hello world");
+	});
+
+	it("should remove simple HTML tags keeping only text", () => {
+		expect(stripHtml("<b>Bold</b> text").replace(/\s+/g, " ").trim()).toBe(
+			"Bold text",
+		);
+	});
+
+	it("should strip nested/styled Azure DevOps title markup to text", () => {
+		const html =
+			'<div><div style="box-sizing:border-box;"><b style="color:#000">N° de version</b></div></div>';
+		// Une fois normalisé en une ligne (comme pour les titres).
+		expect(stripHtml(html).replace(/\s+/g, " ").trim()).toBe("N° de version");
+	});
+
+	it("should remove deeply nested tags leaving only text", () => {
+		const html = "<div><span><b>text</b></span></div>";
+		const out = stripHtml(html);
+		expect(out).not.toContain("<");
+		expect(out.replace(/\s+/g, " ").trim()).toBe("text");
+	});
+
+	it("should convert <br> to newlines", () => {
+		expect(stripHtml("line1<br>line2")).toBe("line1\nline2");
+	});
+
+	it("should decode common HTML entities", () => {
+		expect(stripHtml("a &amp; b &lt;tag&gt; &quot;q&quot; &#39;x&#39;")).toBe(
+			'a & b <tag> "q" \'x\'',
+		);
+	});
+
+	it("should collapse excessive blank lines", () => {
+		expect(stripHtml("a<p></p><p></p><p></p>b")).not.toContain("\n\n\n");
+	});
+
+	it("should drop a trailing truncated tag with no closing '>'", () => {
+		// Azure spec titles get truncated mid-attribute (e.g. "…<b style=…").
+		// Such a fragment has no closing '>' so the normal tag regex can't match
+		// it — it must still be stripped, not leak into the title.
+		const html = '<div><div style="box-sizing:border-box;"><b style=';
+		expect(stripHtml(html).replace(/\s+/g, " ").trim()).toBe("");
+	});
+
+	it("should keep meaningful text before a dangling tag", () => {
+		expect(stripHtml("N° de version <b style=").replace(/\s+/g, " ").trim()).toBe(
+			"N° de version",
+		);
 	});
 });

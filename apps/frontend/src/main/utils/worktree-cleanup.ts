@@ -38,6 +38,13 @@ export interface WorktreeCleanupOptions {
 	logPrefix?: string;
 	/** Whether to delete the associated branch (default: true) */
 	deleteBranch?: boolean;
+	/**
+	 * URL de la PR associée à fermer en même temps que le worktree.
+	 * Si renseigné, `gh pr close <n> --delete-branch` est exécuté pour
+	 * éviter de laisser une PR orpheline pointant vers une branche supprimée.
+	 * Les erreurs ne bloquent pas la suppression du worktree.
+	 */
+	prUrl?: string;
 	/** Timeout in milliseconds for git operations (default: 30000) */
 	timeout?: number;
 	/** Maximum retries for directory deletion on Windows (default: 3) */
@@ -56,8 +63,27 @@ export interface WorktreeCleanupResult {
 	branch?: string;
 	/** Whether uncommitted changes were auto-committed */
 	autoCommitted?: boolean;
+	/** True si la PR associée a été fermée avec succès via gh CLI. */
+	prClosed?: boolean;
+	/** Numéro de la PR fermée (si applicable). */
+	closedPrNumber?: number;
 	/** Warnings that occurred during cleanup (non-fatal issues) */
 	warnings: string[];
+}
+
+/**
+ * Extrait le numéro de PR d'une URL GitHub.
+ * Accepte les formats `https://github.com/owner/repo/pull/123`
+ * ou variantes avec query/fragment.
+ * Retourne `null` si l'URL ne correspond pas.
+ */
+export function extractPrNumber(prUrl: string): number | null {
+	const match = prUrl.match(/\/pull\/(\d+)(?:[/?#]|$)/);
+	if (!match) {
+		return null;
+	}
+	const n = Number.parseInt(match[1], 10);
+	return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /**
@@ -181,6 +207,7 @@ export async function cleanupWorktree(
 		commitMessage = "Auto-save before deletion",
 		logPrefix = "[WORKTREE_CLEANUP]",
 		deleteBranch = true,
+		prUrl,
 		timeout = 30000,
 		maxRetries = 3,
 		retryDelay = 500,
@@ -188,6 +215,8 @@ export async function cleanupWorktree(
 
 	const warnings: string[] = [];
 	let autoCommitted = false;
+	let prClosed = false;
+	let closedPrNumber: number | undefined;
 
 	// Security: Validate that worktreePath is within the expected worktree directory
 	// This prevents path traversal attacks and accidental deletion of wrong directories
@@ -336,11 +365,61 @@ export async function cleanupWorktree(
 		}
 	}
 
+	// 6. Fermeture de la PR distante associée (si fournie) afin de ne
+	// pas laisser de PR orpheline qui pointerait vers une branche supprimée.
+	// `gh pr close --delete-branch` ferme la PR ET supprime la branche
+	// distante côté remote en une seule opération.
+	if (prUrl) {
+		const prNumber = extractPrNumber(prUrl);
+		if (prNumber === null) {
+			console.warn(
+				`${logPrefix} PR URL invalide, fermeture ignorée: ${prUrl}`,
+			);
+			warnings.push(`Invalid PR URL: ${prUrl}`);
+		} else {
+			try {
+				execFileSync(
+					getToolPath("gh"),
+					[
+						"pr",
+						"close",
+						String(prNumber),
+						"--delete-branch",
+						"--comment",
+						"Tâche supprimée depuis WorkPilot — PR fermée automatiquement.",
+					],
+					{
+						cwd: projectPath,
+						encoding: "utf-8",
+						env: getIsolatedGitEnv(),
+						timeout,
+						stdio: ["pipe", "pipe", "pipe"],
+					},
+				);
+				prClosed = true;
+				closedPrNumber = prNumber;
+				console.warn(`${logPrefix} PR #${prNumber} fermée et branche distante supprimée`);
+			} catch (prError) {
+				// Non bloquant : la PR peut déjà être fermée/mergée, le repo non
+				// trouvé, ou gh CLI non authentifié. On laisse la suppression
+				// du worktree aboutir mais on remonte un warning explicite.
+				const msg =
+					prError instanceof Error ? prError.message : String(prError);
+				console.warn(
+					`${logPrefix} Échec fermeture PR #${prNumber} (non bloquant): ${msg}`,
+				);
+				warnings.push(`PR close failed (#${prNumber}): ${msg}`);
+			}
+		}
+	}
+
 	console.warn(`${logPrefix} Cleanup completed successfully`);
 	return {
 		success: true,
 		branch: branch || undefined,
 		autoCommitted,
+		prClosed,
+		closedPrNumber,
 		warnings,
 	};
 }

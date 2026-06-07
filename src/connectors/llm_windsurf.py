@@ -13,7 +13,7 @@ Mode 2 (REST Fallback): Uses the OpenAI-compatible REST API at
 import asyncio
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
 
 from .llm_base import BaseLLMProvider
 
@@ -43,9 +43,9 @@ class WindsurfProvider(BaseLLMProvider):
         )
         self.model = model
         self.base_url = base_url
-        self._client = None
-        self._use_local_grpc = False
-        self._credentials = None
+        self._client: Optional[Any] = None
+        self._use_local_grpc: bool = False
+        self._credentials: Optional[Any] = None
 
     def connect(self) -> None:
         """Establish connection — tries REST API first if token available, then local gRPC."""

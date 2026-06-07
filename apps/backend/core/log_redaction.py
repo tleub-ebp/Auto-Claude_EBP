@@ -190,16 +190,33 @@ def install_global_redaction(
     new_filter = RedactingFilter(extra_patterns=extra_patterns)
     root.addFilter(new_filter)
 
-    # Most production setups attach handlers to the root or to a few
-    # named loggers. Filters attached to the *root* logger DO NOT
-    # automatically apply to handlers attached to *other* loggers — we
-    # need to walk the existing handlers too.
-    for handler in root.handlers:
+    # Filter on the root logger only catches records that propagate to root.
+    # If a child logger has `propagate=False` (common for uvicorn, asyncio,
+    # etc.) and its own handlers, redaction is bypassed. Walk every handler
+    # on every existing logger.
+    for handler in _all_handlers():
         if not any(isinstance(f, RedactingFilter) for f in handler.filters):
             handler.addFilter(new_filter)
 
     _INSTALLED = True
     return new_filter
+
+
+def _all_handlers() -> list[logging.Handler]:
+    """Return every handler attached to the root logger or any named logger.
+
+    Uses the logging manager's loggerDict, which holds every Logger that has
+    been requested via getLogger(name). Returned list may contain duplicates
+    if the same handler instance is attached to multiple loggers; that is
+    fine since the caller dedupes via the `isinstance` check.
+    """
+    handlers: list[logging.Handler] = list(logging.getLogger().handlers)
+    for logger_or_placeholder in logging.Logger.manager.loggerDict.values():
+        # loggerDict can contain PlaceHolder instances for not-yet-created
+        # logger names; those have no handlers attribute.
+        if isinstance(logger_or_placeholder, logging.Logger):
+            handlers.extend(logger_or_placeholder.handlers)
+    return handlers
 
 
 def is_installed() -> bool:
@@ -214,7 +231,7 @@ def reset_for_tests() -> None:
     for f in list(root.filters):
         if isinstance(f, RedactingFilter):
             root.removeFilter(f)
-    for handler in root.handlers:
+    for handler in _all_handlers():
         for f in list(handler.filters):
             if isinstance(f, RedactingFilter):
                 handler.removeFilter(f)

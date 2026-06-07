@@ -77,7 +77,7 @@ export const PhaseProgressIndicator = memo(function PhaseProgressIndicator({
 			([entry]) => {
 				const nowVisible = entry.isIntersecting;
 
-				if (prevVisibleRef.current !== nowVisible && window.DEBUG) {
+				if (prevVisibleRef.current !== nowVisible && globalThis.DEBUG) {
 					// noop
 				}
 
@@ -127,17 +127,23 @@ export const PhaseProgressIndicator = memo(function PhaseProgressIndicator({
 	const phaseLabel = t(PHASE_LABEL_KEYS[phase] || PHASE_LABEL_KEYS.idle);
 	const activeEntries = getActivePhaseEntries();
 
+	// Determine the progress label to display
+	let progressLabel: string;
+	if (isStuck) {
+		progressLabel = t("execution.labels.interrupted");
+	} else if (showSubtaskProgress) {
+		progressLabel = t("execution.labels.progress");
+	} else {
+		progressLabel = phaseLabel;
+	}
+
 	return (
 		<div ref={containerRef} className={cn("space-y-1.5", className)}>
 			{/* Progress label row */}
 			<div className="flex items-center justify-between">
 				<div className="flex items-center gap-2">
 					<span className="text-xs text-muted-foreground">
-						{isStuck
-							? t("execution.labels.interrupted")
-							: showSubtaskProgress
-								? t("execution.labels.progress")
-								: phaseLabel}
+						{progressLabel}
 					</span>
 					{/* Activity indicator dot for non-coding phases - only animate when visible */}
 					{isRunning && !isStuck && isIndeterminatePhase && (
@@ -177,7 +183,7 @@ export const PhaseProgressIndicator = memo(function PhaseProgressIndicator({
 						// biome-ignore lint/style/noNonNullAssertion: value is guaranteed by context
 						`${Math.round(Math.min(phaseProgress!, 100))}%`
 					) : (
-						"â€”"
+						"—"
 					)}
 				</span>
 			</div>
@@ -415,9 +421,9 @@ const PhaseStepsIndicator = memo(function PhaseStepsIndicator({
 							<div
 								className={cn(
 									"w-2 h-px mx-0.5",
-									getPhaseState(phases[index + 1].key) !== "pending"
-										? "bg-success/50"
-										: "bg-border",
+									getPhaseState(phases[index + 1].key) === "pending"
+										? "bg-border"
+										: "bg-success/50",
 								)}
 							/>
 						)}

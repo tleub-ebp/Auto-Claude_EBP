@@ -2,7 +2,7 @@ import { AlertTriangle, Pencil, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { TASK_STATUS_LABELS } from "../../../shared/constants";
 import type { Project, Task } from "../../../shared/types";
-import { cn } from "../../lib/utils";
+import { cn, extractTextFromHtml } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Progress } from "../ui/progress";
@@ -21,6 +21,19 @@ interface TaskDetailModalHeaderProps {
 	readonly activeProject?: Project;
 	readonly onRecover: () => void;
 	readonly onResume: () => void;
+}
+
+/**
+ * Strip HTML tags from imported task titles before rendering. See
+ * TaskDetailModal.tsx for the rationale (Azure DevOps / Jira sometimes
+ * push HTML into the title field).
+ */
+function cleanTitleForDisplay(title: string): string {
+	if (!title) return "";
+	const trimmed = title.trim();
+	if (!trimmed.startsWith("<")) return title;
+	const text = extractTextFromHtml(title);
+	return text || title;
 }
 
 export function TaskDetailModalHeader({
@@ -130,7 +143,7 @@ export function TaskDetailModalHeader({
 			<div className="flex items-start justify-between gap-4">
 				<div className="flex-1 min-w-0 overflow-hidden">
 					<h2 className="text-xl font-semibold leading-tight text-foreground truncate">
-						{task.title}
+						{cleanTitleForDisplay(task.title)}
 					</h2>
 					<div className="mt-2.5 flex items-center gap-2 flex-wrap">
 						<Badge variant="outline" className="text-xs font-mono">
@@ -147,16 +160,6 @@ export function TaskDetailModalHeader({
 							</span>
 						)}
 					</div>
-					{globalThis.window.DEBUG && (
-						<div className="mt-1 text-[11px] text-muted-foreground font-mono">
-							status={task.status} reviewReason={task.reviewReason ?? "none"}{" "}
-							phase={task.executionProgress?.phase ?? "none"} reviewRequired=
-							{task.metadata?.requireReviewBeforeCoding ? "true" : "false"}
-							<br />
-							projectId={activeProject?.id ?? "none"} projectName=
-							{activeProject?.name ?? "none"}
-						</div>
-					)}
 				</div>
 				<div className="flex items-center gap-1 shrink-0 electron-no-drag">
 					<Button

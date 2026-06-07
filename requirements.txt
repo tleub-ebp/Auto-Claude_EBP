@@ -1,6 +1,10 @@
 # ============================================================
 # WorkPilot AI — Root Requirements (meta-package)
 # ============================================================
-# Les dépendances réelles sont dans apps/backend/requirements.txt.
-# Pour installer les dépendances, utilisez: pip install -r apps/backend/requirements.txt
+# Les dépendances réelles sont déclarées dans apps/backend/requirements.txt.
+# Ce fichier les inclut via un -r pour que `pip install -r requirements.txt`
+# au repo root fonctionne (sinon les nouveaux contributeurs et CI installent
+# silencieusement zéro dépendance).
 # ============================================================
+
+-r apps/backend/requirements.txt

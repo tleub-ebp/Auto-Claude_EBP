@@ -1102,3 +1102,173 @@ class TestRebaseErrorHandling:
                 cwd=temp_git_repo,
                 capture_output=True,
             )
+
+
+class TestParseMergeTreeConflicts:
+    """Tests for _parse_merge_tree_conflicts (regression for the --no-messages bug).
+
+    The `--no-messages` flag previously passed to `git merge-tree --write-tree`
+    suppressed the "CONFLICT ...: Merge conflict in <file>" lines, so real
+    conflicts were misclassified as "diverged but no conflicts" and bypassed AI
+    resolution. The parser must detect conflicts from BOTH the conflicted-file-info
+    section AND the informational CONFLICT messages.
+    """
+
+    def test_parses_conflict_messages(self):
+        from core.workspace import _parse_merge_tree_conflicts
+
+        output = (
+            "0ea15e33cab898218dd9b1207bb0f47087301fce\n"
+            "100644 18a965e1 1\tf.txt\n"
+            "100644 5dcd92cb 2\tf.txt\n"
+            "100644 7b322c37 3\tf.txt\n"
+            "Auto-merging f.txt\n"
+            "CONFLICT (content): Merge conflict in f.txt"
+        )
+        assert _parse_merge_tree_conflicts(output) == ["f.txt"]
+
+    def test_parses_conflicts_without_messages(self):
+        """Conflicted-file-info section alone must still surface conflicts.
+
+        This is the exact scenario that the --no-messages flag produced.
+        """
+        from core.workspace import _parse_merge_tree_conflicts
+
+        output = (
+            "0ea15e33cab898218dd9b1207bb0f47087301fce\n"
+            "100644 18a965e1 1\tf.txt\n"
+            "100644 5dcd92cb 2\tf.txt\n"
+            "100644 7b322c37 3\tf.txt"
+        )
+        assert _parse_merge_tree_conflicts(output) == ["f.txt"]
+
+    def test_clean_merge_returns_empty(self):
+        from core.workspace import _parse_merge_tree_conflicts
+
+        # Clean merge output is just the toplevel tree OID
+        assert _parse_merge_tree_conflicts("0ea15e33cab898218dd9b1207bb0f47") == []
+
+    def test_handles_paths_with_spaces(self):
+        from core.workspace import _parse_merge_tree_conflicts
+
+        output = (
+            "0ea15e33\n"
+            "100644 18a965e1 1\tsrc/my dir/some file.cs\n"
+            "100644 5dcd92cb 2\tsrc/my dir/some file.cs\n"
+            "100644 7b322c37 3\tsrc/my dir/some file.cs"
+        )
+        assert _parse_merge_tree_conflicts(output) == ["src/my dir/some file.cs"]
+
+    def test_deduplicates_multiple_files(self):
+        from core.workspace import _parse_merge_tree_conflicts
+
+        output = (
+            "0ea15e33\n"
+            "100644 aaa 1\ta.txt\n"
+            "100644 bbb 2\ta.txt\n"
+            "100644 ccc 3\ta.txt\n"
+            "100644 ddd 1\tb.txt\n"
+            "100644 eee 2\tb.txt\n"
+            "100644 fff 3\tb.txt\n"
+            "CONFLICT (content): Merge conflict in a.txt\n"
+            "CONFLICT (content): Merge conflict in b.txt"
+        )
+        assert _parse_merge_tree_conflicts(output) == ["a.txt", "b.txt"]
+
+
+class TestCheckGitConflictsDetection:
+    """Regression tests ensuring real conflicts are detected (not misclassified)."""
+
+    def test_check_git_conflicts_detects_real_conflict(self, temp_git_repo: Path):
+        """When both branches change the same line, has_conflicts must be True.
+
+        Regression for the --no-messages bug where overlapping changes were
+        misclassified as diverged_but_no_conflicts and bypassed AI resolution.
+        """
+        from core.workspace import _check_git_conflicts
+
+        # Seed a shared file on main
+        shared = temp_git_repo / "shared.txt"
+        shared.write_text("line1\nbase\nline3\n")
+        subprocess.run(["git", "add", "."], cwd=temp_git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Add shared file"],
+            cwd=temp_git_repo,
+            capture_output=True,
+        )
+
+        # Spec branch changes the middle line
+        spec_branch = "workpilot/test-spec"
+        subprocess.run(
+            ["git", "checkout", "-b", spec_branch],
+            cwd=temp_git_repo,
+            capture_output=True,
+        )
+        shared.write_text("line1\nSPEC\nline3\n")
+        subprocess.run(["git", "add", "."], cwd=temp_git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Spec change"],
+            cwd=temp_git_repo,
+            capture_output=True,
+        )
+
+        # main changes the SAME middle line differently
+        subprocess.run(
+            ["git", "checkout", "main"],
+            cwd=temp_git_repo,
+            capture_output=True,
+        )
+        shared.write_text("line1\nMAIN\nline3\n")
+        subprocess.run(["git", "add", "."], cwd=temp_git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Main change"],
+            cwd=temp_git_repo,
+            capture_output=True,
+        )
+
+        result = _check_git_conflicts(temp_git_repo, "test-spec")
+
+        assert result is not None
+        assert result.get("has_conflicts") is True, (
+            "Overlapping changes must be detected as a conflict"
+        )
+        assert "shared.txt" in result.get("conflicting_files", [])
+        # Must NOT be flagged as a clean divergence
+        assert not result.get("diverged_but_no_conflicts")
+
+    def test_check_git_conflicts_non_overlapping_is_clean(self, temp_git_repo: Path):
+        """Non-overlapping changes stay diverged_but_no_conflicts (no false positive)."""
+        from core.workspace import _check_git_conflicts
+
+        spec_branch = "workpilot/test-spec"
+        subprocess.run(
+            ["git", "checkout", "-b", spec_branch],
+            cwd=temp_git_repo,
+            capture_output=True,
+        )
+        (temp_git_repo / "spec_only.txt").write_text("spec\n")
+        subprocess.run(["git", "add", "."], cwd=temp_git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Spec only file"],
+            cwd=temp_git_repo,
+            capture_output=True,
+        )
+
+        subprocess.run(
+            ["git", "checkout", "main"],
+            cwd=temp_git_repo,
+            capture_output=True,
+        )
+        (temp_git_repo / "main_only.txt").write_text("main\n")
+        subprocess.run(["git", "add", "."], cwd=temp_git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Main only file"],
+            cwd=temp_git_repo,
+            capture_output=True,
+        )
+
+        result = _check_git_conflicts(temp_git_repo, "test-spec")
+
+        assert result is not None
+        assert result.get("has_conflicts") is False
+        assert result.get("conflicting_files") == []

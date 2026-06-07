@@ -1,26 +1,24 @@
 import {
 	AlertCircle,
 	CheckCircle2,
+	ChevronRight,
 	Download,
 	Loader2,
 	RefreshCw,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { AVAILABLE_MODELS } from "../../../shared/constants";
+import { DEFAULT_AGENT_PROFILES } from "../../../shared/constants";
 import type {
 	AutoBuildVersionInfo,
 	Project,
 	ProjectSettings as ProjectSettingsType,
 } from "../../../shared/types";
+import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
+import { cn } from "../../lib/utils";
+import { useSettingsStore } from "../../stores/settings-store";
+import { useProviderContext } from "../ProviderContext";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "../ui/select";
 import { Separator } from "../ui/separator";
 import { Switch } from "../ui/switch";
 
@@ -46,6 +44,29 @@ export function GeneralSettings({
 	handleInitialize,
 }: GeneralSettingsProps) {
 	const { t } = useTranslation(["settings"]);
+	const { selectedProvider } = useProviderContext();
+	const provider = selectedProvider || "anthropic";
+	const liveCatalog = useProviderModelCatalog(provider);
+
+	// Resolve the active agent profile + its flagship for a read-only summary.
+	// The actual model picker lives in Settings → Agent (AgentProfileSettings).
+	const appSettings = useSettingsStore((s) => s.settings);
+	const selectedProfileId = appSettings.selectedAgentProfile || "auto";
+	const selectedProfile =
+		DEFAULT_AGENT_PROFILES.find((p) => p.id === selectedProfileId) ||
+		DEFAULT_AGENT_PROFILES[0];
+	const flagshipModel = liveCatalog.models.find(
+		(m) => (m as { tier?: string }).tier === "flagship",
+	);
+	const flagshipLabel = flagshipModel?.label || liveCatalog.models[0]?.label;
+
+	const handleOpenAgentSettings = () => {
+		globalThis.dispatchEvent(
+			new CustomEvent("app-settings:navigate", {
+				detail: { section: "agent" },
+			}),
+		);
+	};
 
 	return (
 		<>
@@ -126,31 +147,33 @@ export function GeneralSettings({
 						<h3 className="text-sm font-semibold text-foreground">
 							{t("projectSections.agentConfiguration.title")}
 						</h3>
-						<div className="space-y-2">
-							<Label
-								htmlFor="model"
-								className="text-sm font-medium text-foreground"
-							>
-								{t("projectSections.agentConfiguration.model")}
-							</Label>
-							<Select
-								value={settings.model}
-								onValueChange={(value) =>
-									setSettings({ ...settings, model: value })
-								}
-							>
-								<SelectTrigger id="model">
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									{AVAILABLE_MODELS.map((model) => (
-										<SelectItem key={model.value} value={model.value}>
-											{model.label}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
+						<button
+							type="button"
+							onClick={handleOpenAgentSettings}
+							className={cn(
+								"flex w-full items-center justify-between rounded-lg",
+								"border border-border bg-muted/30 p-3 text-left",
+								"transition-colors hover:bg-muted/50",
+								"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+							)}
+						>
+							<div className="space-y-0.5">
+								<p className="text-sm font-medium text-foreground">
+									{t("projectSections.agentConfiguration.summary", {
+										defaultValue: "Profil : {{profile}} · Modèle phare : {{model}}",
+										profile: selectedProfile.name,
+										model: flagshipLabel || "—",
+									})}
+								</p>
+								<p className="text-xs text-muted-foreground">
+									{t("projectSections.agentConfiguration.managedInSettings", {
+										defaultValue:
+											"Géré dans Paramètres → Agent. Cliquez pour modifier.",
+									})}
+								</p>
+							</div>
+							<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+						</button>
 						<div className="flex items-center justify-between pt-2">
 							<div className="space-y-0.5">
 								<Label className="font-normal text-foreground">
@@ -164,6 +187,22 @@ export function GeneralSettings({
 								checked={settings.useClaudeMd ?? true}
 								onCheckedChange={(checked) =>
 									setSettings({ ...settings, useClaudeMd: checked })
+								}
+							/>
+						</div>
+						<div className="flex items-center justify-between pt-2">
+							<div className="space-y-0.5">
+								<Label className="font-normal text-foreground">
+									{t("projectSections.general.tddMode")}
+								</Label>
+								<p className="text-xs text-muted-foreground">
+									{t("projectSections.general.tddModeDescription")}
+								</p>
+							</div>
+							<Switch
+								checked={settings.tddMode ?? false}
+								onCheckedChange={(checked) =>
+									setSettings({ ...settings, tddMode: checked })
 								}
 							/>
 						</div>

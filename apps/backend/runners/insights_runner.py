@@ -236,11 +236,14 @@ Current question: {message}"""
             # Stream the response
             response_text = ""
             current_tool = None
+            result_msg = None  # Captured for cost/usage tracking after the loop.
 
             async for msg in client.receive_response():
                 msg_type = type(msg).__name__
                 debug_detailed("insights_runner", "Received message", msg_type=msg_type)
 
+                if msg_type == "ResultMessage":
+                    result_msg = msg
                 if msg_type == "AssistantMessage" and hasattr(msg, "content"):
                     for block in msg.content:
                         block_type = type(block).__name__
@@ -267,10 +270,11 @@ Current question: {message}"""
                                     if "pattern" in inp:
                                         tool_input = f"pattern: {inp['pattern']}"
                                     elif "file_path" in inp:
-                                        # Shorten path for display
-                                        fp = inp["file_path"]
-                                        if len(fp) > 50:
-                                            fp = "..." + fp[-47:]
+                                        # Show the full path so the UI reveals
+                                        # exactly which file is being touched.
+                                        fp = str(inp["file_path"])
+                                        if len(fp) > 2000:
+                                            fp = "..." + fp[-1997:]
                                         tool_input = fp
                                     elif "path" in inp:
                                         tool_input = inp["path"]
@@ -330,6 +334,39 @@ Current question: {message}"""
                 "Response complete",
                 response_length=len(response_text),
             )
+
+            # Best-effort usage tracking — surfaces insights-mode cost in the
+            # same dashboard as the Kanban builds. Uses a synthetic spec_dir
+            # under <project>/.workpilot/insights/ because the chat panel has
+            # no real spec to point at.
+            if result_msg is not None:
+                try:
+                    from core.usage_tracker import record_session_usage
+
+                    _synthetic_spec_dir = project_path / ".workpilot" / "insights"
+                    _synthetic_spec_dir.mkdir(parents=True, exist_ok=True)
+                    _usage = getattr(result_msg, "usage", None) or {}
+                    _cost = getattr(result_msg, "total_cost_usd", None) or 0.0
+                    if isinstance(_usage, dict):
+                        record_session_usage(
+                            spec_dir=_synthetic_spec_dir,
+                            project_dir=project_path,
+                            phase="insights",
+                            agent_type="insights",
+                            model=resolve_model_id(model) or model,
+                            provider="anthropic",
+                            input_tokens=_usage.get("input_tokens", 0),
+                            output_tokens=_usage.get("output_tokens", 0),
+                            cost_usd=_cost,
+                            cache_creation_input_tokens=_usage.get(
+                                "cache_creation_input_tokens", 0
+                            ),
+                            cache_read_input_tokens=_usage.get(
+                                "cache_read_input_tokens", 0
+                            ),
+                        )
+                except Exception as _ute:
+                    debug_error("insights_runner", f"usage tracking skipped: {_ute}")
 
     except Exception as e:
         print(f"Error using Claude SDK: {e}", file=sys.stderr)

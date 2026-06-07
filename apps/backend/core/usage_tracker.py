@@ -72,6 +72,8 @@ def start_build(
         "started_at": datetime.now(timezone.utc).isoformat(),
         "total_input_tokens": 0,
         "total_output_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
         "total_cost": 0.0,
     }
     logger.debug("[usage_tracker] Build started: %s (%s)", build_id, spec_id)
@@ -107,20 +109,24 @@ def record_session_usage(
     input_tokens: int,
     output_tokens: int,
     cost_usd: float,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
 ) -> None:
     """
     Record usage from one agent session. All writes are best-effort.
 
     Args:
-        spec_dir:       Spec directory (.workpilot/specs/001-name/)
-        project_dir:    Project root directory
-        phase:          Phase name ("planning", "coding", "qa_review", etc.)
-        agent_type:     Agent type ("planner", "coder", "qa_reviewer", etc.)
-        model:          Model name used (e.g. "claude-sonnet-4-6")
-        provider:       Provider name (e.g. "anthropic")
-        input_tokens:   Number of input tokens consumed
-        output_tokens:  Number of output tokens consumed
-        cost_usd:       Total cost in USD
+        spec_dir:                     Spec directory (.workpilot/specs/001-name/)
+        project_dir:                  Project root directory
+        phase:                        Phase name ("planning", "coding", "qa_review", etc.)
+        agent_type:                   Agent type ("planner", "coder", "qa_reviewer", etc.)
+        model:                        Model name used (e.g. "claude-sonnet-4-6")
+        provider:                     Provider name (e.g. "anthropic")
+        input_tokens:                 Non-cached input tokens billed at full rate
+        output_tokens:                Output tokens consumed
+        cost_usd:                     Total cost in USD (SDK estimate)
+        cache_creation_input_tokens:  Tokens written to a new cache entry (premium rate)
+        cache_read_input_tokens:      Tokens read from an existing cache entry (reduced rate)
     """
     spec_id = spec_dir.name
 
@@ -129,6 +135,14 @@ def record_session_usage(
     if key in _active_builds:
         _active_builds[key]["total_input_tokens"] += input_tokens
         _active_builds[key]["total_output_tokens"] += output_tokens
+        _active_builds[key]["total_cache_creation_tokens"] = (
+            _active_builds[key].get("total_cache_creation_tokens", 0)
+            + cache_creation_input_tokens
+        )
+        _active_builds[key]["total_cache_read_tokens"] = (
+            _active_builds[key].get("total_cache_read_tokens", 0)
+            + cache_read_input_tokens
+        )
         _active_builds[key]["total_cost"] += cost_usd
 
     # 1 — cost_data.json (for CostEstimator IPC handler)
@@ -143,6 +157,8 @@ def record_session_usage(
             cost_usd,
             agent_type,
             phase,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
         )
     except Exception as exc:
         logger.warning("[usage_tracker] cost_data.json write failed: %s", exc)
@@ -172,6 +188,8 @@ def record_session_usage(
             input_tokens,
             output_tokens,
             cost_usd,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
         )
     except Exception as exc:
         logger.warning("[usage_tracker] dashboard_snapshot write failed: %s", exc)
@@ -192,6 +210,8 @@ def _append_cost_data(
     cost_usd: float,
     agent_type: str,
     phase: str,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
 ) -> None:
     """Append a usage record to {project_dir}/.workpilot/cost_data.json."""
     data_path = project_dir / ".workpilot" / "cost_data.json"
@@ -214,6 +234,8 @@ def _append_cost_data(
                 "model": model,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "cache_creation_input_tokens": cache_creation_input_tokens,
+                "cache_read_input_tokens": cache_read_input_tokens,
                 "cost": cost_usd,
                 "task_id": spec_id,
                 "agent_type": agent_type,
@@ -353,6 +375,8 @@ def _update_dashboard_snapshot(
     input_tokens: int,
     output_tokens: int,
     cost_usd: float,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
 ) -> None:
     """Update {project_dir}/.workpilot/dashboard_snapshot.json.
     Accumulates token/cost totals and per-provider/model breakdowns."""
@@ -371,6 +395,8 @@ def _update_dashboard_snapshot(
 
         snap.setdefault("total_tokens", 0)
         snap.setdefault("total_cost", 0.0)
+        snap.setdefault("total_cache_creation_tokens", 0)
+        snap.setdefault("total_cache_read_tokens", 0)
         snap.setdefault("tokens_by_provider", {})
         snap.setdefault("cost_by_model", {})
         snap.setdefault("tasks_by_status", {})
@@ -383,6 +409,12 @@ def _update_dashboard_snapshot(
         total = input_tokens + output_tokens
         snap["total_tokens"] += total
         snap["total_cost"] = (snap["total_cost"] or 0.0) + cost_usd
+        snap["total_cache_creation_tokens"] = (
+            snap.get("total_cache_creation_tokens") or 0
+        ) + cache_creation_input_tokens
+        snap["total_cache_read_tokens"] = (
+            snap.get("total_cache_read_tokens") or 0
+        ) + cache_read_input_tokens
         snap["tokens_by_provider"][provider] = (
             snap["tokens_by_provider"].get(provider, 0) + total
         )

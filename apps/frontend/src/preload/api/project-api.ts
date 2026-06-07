@@ -44,6 +44,23 @@ export interface ProjectAPI {
 		projectId: string,
 	) => Promise<IPCResult<AutoBuildVersionInfo>>;
 
+	/**
+	 * Returns a map of `projectId → exists` indicating whether each known
+	 * project's on-disk path still resolves to a directory. Cheap enough
+	 * to call on every window focus.
+	 */
+	checkProjectPaths: () => Promise<IPCResult<Record<string, boolean>>>;
+
+	/**
+	 * Update the on-disk path of a project. Use after the user has picked
+	 * a new folder via the directory picker. Validates the path exists
+	 * and is a directory before persisting.
+	 */
+	repathProject: (
+		projectId: string,
+		newPath: string,
+	) => Promise<IPCResult<Project>>;
+
 	// Tab State (persisted in main process for reliability)
 	getTabState: () => Promise<IPCResult<TabState>>;
 	saveTabState: (tabState: TabState) => Promise<IPCResult>;
@@ -83,6 +100,12 @@ export interface ProjectAPI {
 
 	// Dialog Operations
 	selectDirectory: () => Promise<string | null>;
+	selectFiles: (options?: {
+		title?: string;
+		defaultPath?: string;
+		multi?: boolean;
+		filters?: { name: string; extensions: string[] }[];
+	}) => Promise<string[]>;
 	createProjectFolder: (
 		location: string,
 		name: string,
@@ -251,6 +274,15 @@ export const createProjectAPI = (): ProjectAPI => ({
 	): Promise<IPCResult<AutoBuildVersionInfo>> =>
 		ipcRenderer.invoke(IPC_CHANNELS.PROJECT_CHECK_VERSION, projectId),
 
+	checkProjectPaths: (): Promise<IPCResult<Record<string, boolean>>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.PROJECT_CHECK_PATHS),
+
+	repathProject: (
+		projectId: string,
+		newPath: string,
+	): Promise<IPCResult<Project>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.PROJECT_REPATH, projectId, newPath),
+
 	// Tab State (persisted in main process for reliability)
 	getTabState: (): Promise<IPCResult<TabState>> =>
 		ipcRenderer.invoke(IPC_CHANNELS.TAB_STATE_GET),
@@ -307,6 +339,14 @@ export const createProjectAPI = (): ProjectAPI => ({
 	// Dialog Operations
 	selectDirectory: (): Promise<string | null> =>
 		ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SELECT_DIRECTORY),
+
+	selectFiles: (options?: {
+		title?: string;
+		defaultPath?: string;
+		multi?: boolean;
+		filters?: { name: string; extensions: string[] }[];
+	}): Promise<string[]> =>
+		ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SELECT_FILES, options),
 
 	createProjectFolder: (
 		location: string,

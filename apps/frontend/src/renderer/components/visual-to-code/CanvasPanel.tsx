@@ -604,11 +604,11 @@ export const CanvasPanel: React.FC = () => {
 		onEdgesChange(changes);
 	};
 
-	const getFallbackExplorerRoot = () => {
+	const getFallbackExplorerRoot = useCallback(() => {
 		// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
 		if ((globalThis as any).platform?.isWindows) return "C:\\";
 		return "/";
-	};
+	}, []);
 	const [explorerRoot, setExplorerRoot] = useState(getFallbackExplorerRoot());
 	const [explorerRootInput, setExplorerRootInput] = useState(explorerRoot);
 
@@ -633,8 +633,7 @@ export const CanvasPanel: React.FC = () => {
 		return () => {
 			cancelled = true;
 		};
-		// biome-ignore lint/correctness/useExhaustiveDependencies: getFallbackExplorerRoot is stable
-	}, []);
+	}, [getFallbackExplorerRoot]);
 
 	React.useEffect(() => {
 		if (showSaveAsDialog) {

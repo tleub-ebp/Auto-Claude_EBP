@@ -26,6 +26,12 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 	// ---- Anthropic (Claude) ----
 	anthropic: [
 		{
+			value: "claude-opus-4-8",
+			label: "Claude Opus 4.8",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
 			value: "claude-opus-4-7",
 			label: "Claude Opus 4.7",
 			tier: "flagship",
@@ -71,19 +77,70 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 
 	// ---- GitHub Copilot ----
 	// Source: docs.github.com/en/copilot/reference/ai-models/supported-models
+	// Updated: May 2026 — includes Claude 4.x Opus/Sonnet, GPT-5.x, o3/o4 families
 	copilot: [
-		{ value: "gpt-4o", label: "GPT-4o (Copilot)", tier: "flagship" },
-		{ value: "gpt-4.1", label: "GPT-4.1 (Copilot)", tier: "flagship" },
+		// ── Flagship ─────────────────────────────────────────────────────────
 		{
-			value: "claude-sonnet-4-5",
-			label: "Claude Sonnet 4.5 (Copilot)",
+			value: "claude-opus-4.8",
+			label: "Claude Opus 4.8 (Copilot)",
 			tier: "flagship",
 			supportsThinking: true,
 		},
 		{
-			value: "claude-opus-4-5",
+			value: "claude-opus-4.7",
+			label: "Claude Opus 4.7 (Copilot)",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "claude-opus-4.6",
+			label: "Claude Opus 4.6 (Copilot)",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "claude-opus-4.5",
 			label: "Claude Opus 4.5 (Copilot)",
 			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "gpt-5.5",
+			label: "GPT-5.5 (Copilot)",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "gpt-5.4",
+			label: "GPT-5.4 (Copilot)",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{ value: "gpt-4.1", label: "GPT-4.1 (Copilot)", tier: "flagship" },
+		{ value: "gpt-4o", label: "GPT-4o (Copilot)", tier: "flagship" },
+		// ── Standard ─────────────────────────────────────────────────────────
+		{
+			value: "claude-sonnet-4.6",
+			label: "Claude Sonnet 4.6 (Copilot)",
+			tier: "standard",
+			supportsThinking: true,
+		},
+		{
+			value: "claude-sonnet-4.5",
+			label: "Claude Sonnet 4.5 (Copilot)",
+			tier: "standard",
+			supportsThinking: true,
+		},
+		{
+			value: "o4-mini",
+			label: "o4-mini (Copilot)",
+			tier: "standard",
+			supportsThinking: true,
+		},
+		{
+			value: "o3",
+			label: "o3 (Copilot)",
+			tier: "standard",
 			supportsThinking: true,
 		},
 		{
@@ -99,17 +156,6 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 			supportsThinking: true,
 		},
 		{
-			value: "o1-mini",
-			label: "o1-mini (Copilot)",
-			tier: "standard",
-			supportsThinking: true,
-		},
-		{
-			value: "gpt-4.1-mini",
-			label: "GPT-4.1 mini (Copilot)",
-			tier: "standard",
-		},
-		{
 			value: "claude-3.7-sonnet",
 			label: "Claude 3.7 Sonnet (Copilot)",
 			tier: "standard",
@@ -121,8 +167,9 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 			tier: "standard",
 			supportsThinking: true,
 		},
+		// ── Fast ─────────────────────────────────────────────────────────────
 		{
-			value: "claude-haiku-4-5",
+			value: "claude-haiku-4.5",
 			label: "Claude Haiku 4.5 (Copilot)",
 			tier: "fast",
 		},
@@ -131,18 +178,50 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 			label: "Gemini 2.0 Flash (Copilot)",
 			tier: "fast",
 		},
+		{
+			value: "gpt-4.1-mini",
+			label: "GPT-4.1 mini (Copilot)",
+			tier: "fast",
+		},
+		{
+			value: "o1-mini",
+			label: "o1-mini (Copilot)",
+			tier: "fast",
+			supportsThinking: true,
+		},
 		{ value: "gpt-4o-mini", label: "GPT-4o mini (Copilot)", tier: "fast" },
 	],
 
 	// ---- OpenAI ----
-	// Source: platform.openai.com/docs/models
+	// Source: platform.openai.com/docs/models — GPT-5.5 family released April 2026
 	openai: [
-		{ value: "gpt-4o", label: "GPT-4o", tier: "flagship" },
-		{ value: "gpt-4.1", label: "GPT-4.1", tier: "flagship" },
-		{ value: "o3", label: "o3", tier: "flagship", supportsThinking: true },
 		{
-			value: "o1-pro",
-			label: "o1 Pro",
+			value: "gpt-5.5-pro",
+			label: "GPT-5.5 Pro",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "gpt-5.5",
+			label: "GPT-5.5",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "gpt-5.5-mini",
+			label: "GPT-5.5 mini",
+			tier: "standard",
+			supportsThinking: true,
+		},
+		{
+			value: "gpt-5.2",
+			label: "GPT-5.2",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "o4",
+			label: "o4",
 			tier: "flagship",
 			supportsThinking: true,
 		},
@@ -152,23 +231,8 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 			tier: "standard",
 			supportsThinking: true,
 		},
-		{ value: "gpt-4.1-mini", label: "GPT-4.1 mini", tier: "standard" },
-		{ value: "o1", label: "o1", tier: "standard", supportsThinking: true },
-		{
-			value: "o3-mini",
-			label: "o3-mini",
-			tier: "standard",
-			supportsThinking: true,
-		},
-		{ value: "gpt-4o-mini", label: "GPT-4o mini", tier: "fast" },
-		{ value: "gpt-4.1-nano", label: "GPT-4.1 nano", tier: "fast" },
-		{
-			value: "o1-mini",
-			label: "o1-mini",
-			tier: "fast",
-			supportsThinking: true,
-		},
-		{ value: "gpt-4-turbo", label: "GPT-4 Turbo", tier: "standard" },
+		{ value: "gpt-4.1", label: "GPT-4.1", tier: "standard" },
+		{ value: "gpt-4.1-mini", label: "GPT-4.1 mini", tier: "fast" },
 	],
 
 	// ---- Google Gemini ----
@@ -238,7 +302,26 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 	],
 
 	// ---- Grok (xAI) ----
+	// Source: docs.x.ai/developers/models — Grok 4.3 flagship as of April 30, 2026
 	grok: [
+		{
+			value: "grok-4.3",
+			label: "Grok 4.3",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "grok-4.20-reasoning",
+			label: "Grok 4.20 Reasoning",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "grok-4.1-fast",
+			label: "Grok 4.1 Fast",
+			tier: "fast",
+			supportsThinking: true,
+		},
 		{
 			value: "grok-4",
 			label: "Grok 4",
@@ -246,25 +329,11 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 			supportsThinking: true,
 		},
 		{
-			value: "grok-4-fast",
-			label: "Grok 4 Fast",
-			tier: "fast",
-			supportsThinking: true,
-		},
-		{
 			value: "grok-3",
 			label: "Grok 3",
-			tier: "flagship",
-			supportsThinking: true,
-		},
-		{
-			value: "grok-3-mini",
-			label: "Grok 3 Mini",
 			tier: "standard",
 			supportsThinking: true,
 		},
-		{ value: "grok-2", label: "Grok 2", tier: "standard" },
-		{ value: "grok-2-mini", label: "Grok 2 Mini", tier: "fast" },
 	],
 
 	// ---- Meta (LLaMA) ----
@@ -289,6 +358,18 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 
 	// ---- AWS Bedrock ----
 	aws: [
+		{
+			value: "anthropic.claude-opus-4-8-v1",
+			label: "Claude Opus 4.8 (Bedrock)",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "anthropic.claude-opus-4-7-v1",
+			label: "Claude Opus 4.7 (Bedrock)",
+			tier: "flagship",
+			supportsThinking: true,
+		},
 		{
 			value: "anthropic.claude-opus-4-6-v1",
 			label: "Claude Opus 4.6 (Bedrock)",
@@ -379,24 +460,37 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 	],
 
 	// ---- Windsurf (Codeium) ----
-	// Source: docs.windsurf.com/windsurf/models
+	// Source: docs.windsurf.com/windsurf/models — supports Opus 4.7, GPT-5.5, SWE-1.6
 	windsurf: [
-		{ value: "swe-1.5", label: "SWE-1.5", tier: "flagship" },
+		{ value: "swe-1.6", label: "SWE-1.6", tier: "flagship" },
+		{ value: "swe-1.5", label: "SWE-1.5", tier: "standard" },
 		{
-			value: "swe-1.5-thinking",
-			label: "SWE-1.5 Thinking",
+			value: "claude-opus-4-8",
+			label: "Claude Opus 4.8 (Windsurf)",
 			tier: "flagship",
 			supportsThinking: true,
 		},
 		{
-			value: "claude-sonnet-4",
-			label: "Claude Sonnet 4 (Windsurf)",
+			value: "claude-opus-4-7",
+			label: "Claude Opus 4.7 (Windsurf)",
 			tier: "flagship",
 			supportsThinking: true,
 		},
 		{
-			value: "claude-opus-4",
-			label: "Claude Opus 4 (Windsurf)",
+			value: "claude-sonnet-4-6",
+			label: "Claude Sonnet 4.6 (Windsurf)",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "gpt-5.5",
+			label: "GPT-5.5 (Windsurf)",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
+			value: "gemini-3.1-pro",
+			label: "Gemini 3.1 Pro (Windsurf)",
 			tier: "flagship",
 			supportsThinking: true,
 		},
@@ -405,26 +499,6 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 			label: "Claude 3.7 Sonnet (Windsurf)",
 			tier: "standard",
 			supportsThinking: true,
-		},
-		{ value: "gpt-4.1", label: "GPT-4.1 (Windsurf)", tier: "standard" },
-		{ value: "gpt-4o", label: "GPT-4o (Windsurf)", tier: "standard" },
-		{
-			value: "gemini-2.5-pro",
-			label: "Gemini 2.5 Pro (Windsurf)",
-			tier: "standard",
-			supportsThinking: true,
-		},
-		{
-			value: "deepseek-r1",
-			label: "DeepSeek R1 (Windsurf)",
-			tier: "standard",
-			supportsThinking: true,
-		},
-		{ value: "deepseek-v3", label: "DeepSeek V3 (Windsurf)", tier: "standard" },
-		{
-			value: "gemini-2.0-flash",
-			label: "Gemini 2.0 Flash (Windsurf)",
-			tier: "fast",
 		},
 		{ value: "swe-1.5-fast", label: "SWE-1.5 Fast", tier: "fast" },
 	],
@@ -443,6 +517,82 @@ export function getDefaultModelForProvider(provider: string): string {
 	const models = getModelsForProvider(provider);
 	const flagship = models.find((m) => m.tier === "flagship") ?? models[0];
 	return flagship?.value ?? "";
+}
+
+/**
+ * Détecte un identifiant de modèle Claude au format natif Anthropic, c.-à-d.
+ * versionné avec des tirets (ex. "claude-sonnet-4-5-20250929", "claude-opus-4-6").
+ *
+ * Ces IDs ne sont PAS valides pour les fournisseurs non-Anthropic (Copilot,
+ * etc.). Copilot utilise la notation pointée (ex. "claude-opus-4.8",
+ * "claude-sonnet-4.6") qui doit être préservée et NE DOIT PAS être interceptée.
+ *
+ * Le motif exige au moins deux groupes numériques séparés par un tiret après le
+ * nom du modèle (`-\d+-\d`), ce qui distingue la forme Anthropic (tirets) de la
+ * forme Copilot (point). Ce comportement reflète celui du backend
+ * (`phase_config._resolve_provider_model`).
+ */
+export function isAnthropicNativeVersionedModelId(model: string): boolean {
+	return /^claude-(opus|sonnet|haiku)-\d+-\d/.test(model);
+}
+
+// ============================================
+// Fenêtres de contexte des modèles (tokens)
+// ============================================
+
+/**
+ * Fenêtre de contexte par défaut quand le modèle est inconnu.
+ * 128k est la valeur la plus courante (GPT-4o, GPT-4.1 via Copilot, etc.).
+ */
+export const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+/**
+ * Fenêtres de contexte natives (approximatives) par préfixe d'identifiant de
+ * modèle. La recherche se fait par sous-chaîne (premier préfixe correspondant),
+ * ce qui couvre les variantes datées/suffixées (ex. "claude-sonnet-4-5-2025...").
+ *
+ * Sert à calculer le « % de fenêtre de contexte consommée » façon Claude Code.
+ * Les valeurs sont indicatives : à ajuster si GitHub/les fournisseurs évoluent.
+ */
+export const CONTEXT_WINDOW_BY_MODEL_PREFIX: ReadonlyArray<
+	readonly [prefix: string, contextWindow: number]
+> = [
+	// Anthropic / Claude (natif 200k)
+	["claude-opus", 200_000],
+	["claude-sonnet", 200_000],
+	["claude-haiku", 200_000],
+	["claude-3.7", 200_000],
+	["claude-3-7", 200_000],
+	["claude", 200_000],
+	// OpenAI GPT-5.x (256k)
+	["gpt-5", 256_000],
+	// OpenAI GPT-4.1 (1M natif)
+	["gpt-4.1", 1_000_000],
+	["gpt-4-1", 1_000_000],
+	// OpenAI GPT-4o / 4-turbo (128k)
+	["gpt-4o", 128_000],
+	["gpt-4", 128_000],
+	// OpenAI raisonnement o-series (200k)
+	["o4", 200_000],
+	["o3", 200_000],
+	["o1", 200_000],
+	// Google Gemini 2.5 (1M)
+	["gemini", 1_000_000],
+];
+
+/**
+ * Retourne la fenêtre de contexte (en tokens) pour un modèle donné.
+ *
+ * @param model Identifiant du modèle (ex. "gpt-4o", "claude-sonnet-4.6").
+ * @returns Taille de la fenêtre de contexte, ou {@link DEFAULT_CONTEXT_WINDOW}.
+ */
+export function getContextWindowForModel(model: string | undefined): number {
+	if (!model) return DEFAULT_CONTEXT_WINDOW;
+	const normalized = model.toLowerCase().trim();
+	for (const [prefix, window] of CONTEXT_WINDOW_BY_MODEL_PREFIX) {
+		if (normalized.includes(prefix)) return window;
+	}
+	return DEFAULT_CONTEXT_WINDOW;
 }
 
 /** Returns whether the selected provider supports extended thinking */
@@ -466,6 +616,8 @@ export function providerSupportsThinking(provider: string): boolean {
 // ============================================
 
 export const AVAILABLE_MODELS = [
+	{ value: "opus-4-8", label: "Claude Opus 4.8" },
+	{ value: "opus-4-7", label: "Claude Opus 4.7" },
 	{ value: "opus", label: "Claude Opus 4.6" },
 	{ value: "sonnet", label: "Claude Sonnet 4.6" },
 	{ value: "haiku", label: "Claude Haiku 4.6" },
@@ -474,14 +626,19 @@ export const AVAILABLE_MODELS = [
 	{ value: "haiku-4-5", label: "Claude Haiku 4.5" },
 ] as const;
 
-// Maps model shorthand to actual Claude model IDs
+// Maps model shorthand to actual Claude model IDs.
+// Short aliases (opus/sonnet/haiku) intentionally still point to 4.6 so
+// existing tasks persisted with these values keep working. Newer versions
+// are exposed under explicit version-suffixed keys (e.g. "opus-4-7").
 export const MODEL_ID_MAP: Record<string, string> = {
+	"opus-4-8": "claude-opus-4-8",
+	"opus-4-7": "claude-opus-4-7",
 	opus: "claude-opus-4-6",
 	sonnet: "claude-sonnet-4-6",
 	haiku: "claude-haiku-4-6",
-	"opus-4-5": "claude-opus-4-5-20251101",
-	"sonnet-4-5": "claude-sonnet-4-5-20250929",
-	"haiku-4-5": "claude-haiku-4-5-20251001",
+	"opus-4-5": "claude-opus-4-5",
+	"sonnet-4-5": "claude-sonnet-4-5",
+	"haiku-4-5": "claude-haiku-4-5",
 } as const;
 
 // Maps thinking levels to budget tokens (null = no extended thinking)

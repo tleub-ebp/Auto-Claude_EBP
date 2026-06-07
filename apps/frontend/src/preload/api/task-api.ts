@@ -16,6 +16,8 @@ import type {
 	TaskRecoveryResult,
 	TaskStartOptions,
 	TaskStatus,
+	VisualProofRun,
+	WorktreeAnalyzeImpactResult,
 	WorktreeCreatePROptions,
 	WorktreeCreatePRResult,
 } from "../../shared/types";
@@ -35,7 +37,11 @@ export interface TaskAPI {
 	deleteTask: (taskId: string) => Promise<IPCResult>;
 	updateTask: (
 		taskId: string,
-		updates: { title?: string; description?: string },
+		updates: {
+			title?: string;
+			description?: string;
+			metadata?: Partial<TaskMetadata>;
+		},
 	) => Promise<IPCResult<Task>>;
 	startTask: (taskId: string, options?: TaskStartOptions) => void;
 	stopTask: (taskId: string) => void;
@@ -50,12 +56,23 @@ export interface TaskAPI {
 		status: TaskStatus,
 		options?: { forceCleanup?: boolean },
 	) => Promise<IPCResult & { worktreeExists?: boolean; worktreePath?: string }>;
+	updatePlanSubtasks: (
+		taskId: string,
+		phases: Array<Record<string, unknown>>,
+	) => Promise<IPCResult>;
 	recoverStuckTask: (
 		taskId: string,
 		options?: import("../../shared/types").TaskRecoveryOptions,
 	) => Promise<IPCResult<TaskRecoveryResult>>;
 	checkTaskRunning: (taskId: string) => Promise<IPCResult<boolean>>;
 	resumePausedTask: (taskId: string) => Promise<IPCResult>;
+	resumeTaskSession: (taskId: string) => Promise<IPCResult>;
+	resumeTaskWithProvider: (
+		taskId: string,
+		providerName: string,
+		model?: string,
+	) => Promise<IPCResult>;
+	resetTaskConversation: (taskId: string) => Promise<IPCResult>;
 
 	// Image Operations
 	loadImageThumbnail: (
@@ -124,6 +141,19 @@ export interface TaskAPI {
 			}>;
 		}>
 	>;
+	worktreeReadFile: (
+		worktreePath: string,
+		relativePath: string,
+	) => Promise<IPCResult<string>>;
+	worktreeWriteFile: (
+		worktreePath: string,
+		relativePath: string,
+		content: string,
+	) => Promise<IPCResult<{ written: boolean }>>;
+	worktreeDeleteFiles: (
+		worktreePath: string,
+		relativePaths: string[],
+	) => Promise<IPCResult<{ deleted: string[]; failed: string[] }>>;
 	archiveTasks: (
 		projectId: string,
 		taskIds: string[],
@@ -137,6 +167,14 @@ export interface TaskAPI {
 		taskId: string,
 		options?: WorktreeCreatePROptions,
 	) => Promise<IPCResult<WorktreeCreatePRResult>>;
+	analyzeWorktreeImpact: (
+		taskId: string,
+		targetBranch?: string,
+	) => Promise<IPCResult<WorktreeAnalyzeImpactResult>>;
+	runVisualProof: (taskId: string) => Promise<IPCResult<VisualProofRun>>;
+	getVisualProofStatus: (
+		taskId: string,
+	) => Promise<IPCResult<{ running: boolean }>>;
 	getPRDetails: (
 		prNumber: number,
 		taskId?: string,
@@ -191,6 +229,11 @@ export interface TaskAPI {
 	onMergeProgress: (
 		callback: (taskId: string, progress: MergeProgress) => void,
 	) => () => void;
+
+	// Visual Proof Events
+	onVisualProofRunning: (
+		callback: (taskId: string, running: boolean) => void,
+	) => () => void;
 }
 
 export const createTaskAPI = (): TaskAPI => ({
@@ -220,7 +263,11 @@ export const createTaskAPI = (): TaskAPI => ({
 
 	updateTask: (
 		taskId: string,
-		updates: { title?: string; description?: string },
+		updates: {
+			title?: string;
+			description?: string;
+			metadata?: Partial<TaskMetadata>;
+		},
 	): Promise<IPCResult<Task>> =>
 		ipcRenderer.invoke(IPC_CHANNELS.TASK_UPDATE, taskId, updates),
 
@@ -256,6 +303,12 @@ export const createTaskAPI = (): TaskAPI => ({
 			options,
 		),
 
+	updatePlanSubtasks: (
+		taskId: string,
+		phases: Array<Record<string, unknown>>,
+	): Promise<IPCResult> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_UPDATE_PLAN, taskId, phases),
+
 	recoverStuckTask: (
 		taskId: string,
 		options?: import("../../shared/types").TaskRecoveryOptions,
@@ -267,6 +320,24 @@ export const createTaskAPI = (): TaskAPI => ({
 
 	resumePausedTask: (taskId: string): Promise<IPCResult> =>
 		ipcRenderer.invoke(IPC_CHANNELS.TASK_RESUME_PAUSED, taskId),
+
+	resumeTaskSession: (taskId: string): Promise<IPCResult> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_RESUME_SESSION, taskId),
+
+	resumeTaskWithProvider: (
+		taskId: string,
+		providerName: string,
+		model?: string,
+	): Promise<IPCResult> =>
+		ipcRenderer.invoke(
+			IPC_CHANNELS.TASK_RESUME_WITH_PROVIDER,
+			taskId,
+			providerName,
+			model,
+		),
+
+	resetTaskConversation: (taskId: string): Promise<IPCResult> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_RESET_CONVERSATION, taskId),
 
 	// Image Operations
 	loadImageThumbnail: (
@@ -387,6 +458,32 @@ export const createTaskAPI = (): TaskAPI => ({
 		}>
 	> => ipcRenderer.invoke(IPC_CHANNELS.TASK_WORKTREE_DETECT_TOOLS),
 
+	worktreeReadFile: (worktreePath: string, relativePath: string) =>
+		ipcRenderer.invoke(
+			IPC_CHANNELS.TASK_WORKTREE_READ_FILE,
+			worktreePath,
+			relativePath,
+		),
+
+	worktreeWriteFile: (
+		worktreePath: string,
+		relativePath: string,
+		content: string,
+	) =>
+		ipcRenderer.invoke(
+			IPC_CHANNELS.TASK_WORKTREE_WRITE_FILE,
+			worktreePath,
+			relativePath,
+			content,
+		),
+
+	worktreeDeleteFiles: (worktreePath: string, relativePaths: string[]) =>
+		ipcRenderer.invoke(
+			IPC_CHANNELS.TASK_WORKTREE_DELETE_FILES,
+			worktreePath,
+			relativePaths,
+		),
+
 	archiveTasks: (
 		projectId: string,
 		taskIds: string[],
@@ -405,6 +502,24 @@ export const createTaskAPI = (): TaskAPI => ({
 		options?: WorktreeCreatePROptions,
 	): Promise<IPCResult<WorktreeCreatePRResult>> =>
 		ipcRenderer.invoke(IPC_CHANNELS.TASK_WORKTREE_CREATE_PR, taskId, options),
+
+	analyzeWorktreeImpact: (
+		taskId: string,
+		targetBranch?: string,
+	): Promise<IPCResult<WorktreeAnalyzeImpactResult>> =>
+		ipcRenderer.invoke(
+			IPC_CHANNELS.TASK_WORKTREE_ANALYZE_IMPACT,
+			taskId,
+			targetBranch,
+		),
+
+	runVisualProof: (taskId: string): Promise<IPCResult<VisualProofRun>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_VISUAL_PROOF_RUN, taskId),
+
+	getVisualProofStatus: (
+		taskId: string,
+	): Promise<IPCResult<{ running: boolean }>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_VISUAL_PROOF_STATUS, taskId),
 
 	getPRDetails: (
 		prNumber: number,
@@ -571,6 +686,22 @@ export const createTaskAPI = (): TaskAPI => ({
 		ipcRenderer.on(IPC_CHANNELS.TASK_MERGE_PROGRESS, handler);
 		return () => {
 			ipcRenderer.removeListener(IPC_CHANNELS.TASK_MERGE_PROGRESS, handler);
+		};
+	},
+
+	onVisualProofRunning: (
+		callback: (taskId: string, running: boolean) => void,
+	): (() => void) => {
+		const handler = (
+			_event: Electron.IpcRendererEvent,
+			taskId: string,
+			running: boolean,
+		): void => {
+			callback(taskId, running);
+		};
+		ipcRenderer.on(IPC_CHANNELS.TASK_VISUAL_PROOF_RUNNING, handler);
+		return () => {
+			ipcRenderer.removeListener(IPC_CHANNELS.TASK_VISUAL_PROOF_RUNNING, handler);
 		};
 	},
 });

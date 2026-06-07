@@ -118,15 +118,37 @@ class SessionRecorder:
         return recording
 
     def save_recording(self, recording: SessionRecording) -> Path:
-        """Save a recording to disk."""
+        """Save a recording to disk atomically.
+
+        Writes via tempfile + os.replace so a crash mid-write doesn't leave
+        a half-written JSON that breaks `list_recordings`. Without this, a
+        Ctrl+C during save corrupted the file and silently broke the
+        listing UI for every recording in the directory.
+        """
+        import os
+        import tempfile
+
         timestamp = datetime.fromtimestamp(recording.start_time).strftime(
             "%Y%m%d_%H%M%S"
         )
         filename = f"{timestamp}_{recording.session_id}.json"
         filepath = self._recordings_dir / filename
 
-        with open(filepath, "w") as f:
-            json.dump(recording.to_dict(), f, indent=2)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self._recordings_dir),
+            prefix=f".{filename}.tmp.",
+            suffix="",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(recording.to_dict(), f, indent=2)
+            os.replace(tmp_path, filepath)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
         return filepath
 

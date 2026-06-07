@@ -64,7 +64,7 @@
 		"mcpMarketplace": "MCP Marketplace",
 		"multiRepoOrchestration": "Multi-Repo",
 		"missionControl": "Mission Control",
-		"phase35Hub": "Phase 3-5 Features",
+		"phase35Hub": "Advanced Features",
 		"pixelOffice": "Pixel Office",
 		"agentReplay": "Agent Replay",
 		"selfHealing": "Self-Healing",
@@ -115,7 +115,8 @@
 		"unpin": "Remove from favorites",
 		"pinGroup": "Pin group to favorites",
 		"unpinGroup": "Remove group from favorites",
-		"resetLayout": "Reset layout"
+		"resetLayout": "Reset layout",
+		"clearAllFavorites": "Clear all favorites"
 	},
 	"tooltips": {
 		"settings": "Application Settings",
@@ -173,7 +174,10 @@
 		"pathChangeWarningTitle": "Switch CLI installation?",
 		"pathChangeWarningDescription": "Switching CLI installations will use a different Claude Code binary. Any running sessions will continue using the previous installation until restarted.",
 		"switchInstallationConfirm": "Switch",
-		"versionUnknown": "version unknown"
+		"versionUnknown": "version unknown",
+		"installFailed": "Installation failed",
+		"versionSwitchFailed": "Failed to switch version",
+		"terminalUnavailable": "Could not open a terminal. Update Claude Code from a terminal manually."
 	},
 	"codex": {
 		"checking": "Checking Codex CLI...",

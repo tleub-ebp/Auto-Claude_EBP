@@ -62,7 +62,7 @@ def check_process_restart():
     try:
         import subprocess
         result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq electron.exe'],
-                              capture_output=True, text=True, shell=True)
+                              capture_output=True, text=True)
         
         if 'electron.exe' in result.stdout:
             print("⚠️  Electron process is still running")

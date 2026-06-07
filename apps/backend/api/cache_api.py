@@ -57,13 +57,13 @@ FAILED_TO_START_CACHE_EXPORT = "Failed to start cache export"
 FAILED_TO_PERFORM_HEALTH_CHECK = "Failed to perform health check"
 
 # Import cache services
-from .cache_freshness_system import (
+from services.cache_freshness_system import (
     InvalidationEngine,
     InvalidationRule,
     InvalidationStrategy,
 )
-from .git_cache_invalidation import GitBasedCacheInvalidator
-from .intelligent_context_cache import CacheConfig, get_context_cache
+from services.git_cache_invalidation import GitBasedCacheInvalidator
+from services.intelligent_context_cache import CacheConfig, get_context_cache
 
 _SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9._\- ]+$")
 
@@ -154,7 +154,9 @@ class InvalidationRuleRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     strategy: str = Field(..., description="Invalidation strategy name")
     conditions: dict[str, Any] = Field(default_factory=dict)
-    action: str = Field(default="invalidate", regex="^(invalidate|refresh|downgrade)$")
+    action: str = Field(
+        default="invalidate", pattern="^(invalidate|refresh|downgrade)$"
+    )
     priority: int = Field(default=50, ge=0, le=100)
 
 

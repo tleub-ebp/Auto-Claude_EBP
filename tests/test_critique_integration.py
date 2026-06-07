@@ -51,7 +51,7 @@ def _force_real_package(name: str) -> None:
 _force_real_package("spec")
 _force_real_package("implementation_plan")
 
-from critique import (
+from spec.critique import (
     CritiqueResult,
     format_critique_summary,
     generate_critique_prompt,

@@ -163,6 +163,9 @@ export function TaskEditDialog({
 		task.metadata?.requireReviewBeforeCoding ?? false,
 	);
 
+	// TDD override (per-task)
+	const [tddMode, setTddMode] = useState(task.metadata?.tddMode ?? false);
+
 	// Reset form when task changes or dialog opens
 	useEffect(() => {
 		if (open) {
@@ -214,6 +217,7 @@ export function TaskEditDialog({
 			setRequireReviewBeforeCoding(
 				task.metadata?.requireReviewBeforeCoding ?? false,
 			);
+			setTddMode(task.metadata?.tddMode ?? false);
 			setError(null);
 
 			// Auto-expand classification if it has content
@@ -237,6 +241,37 @@ export function TaskEditDialog({
 		selectedProfile.phaseModels,
 		selectedProfile.phaseThinking,
 	]);
+
+	// Resolve Azure DevOps attachment images (PAT-protected URLs the renderer
+	// cannot load) into inlined data URIs so they render in the WYSIWYG editor,
+	// mirroring the read-only detail view. Only applies while the description is
+	// still untouched, so it never clobbers in-progress edits.
+	useEffect(() => {
+		if (!open) return;
+		if (!task.description?.includes("/_apis/wit/attachments/")) return;
+
+		let cancelled = false;
+		(async () => {
+			try {
+				const res =
+					await globalThis.electronAPI?.hydrateAzureDevOpsTaskDisplay?.(
+						task.projectId,
+						task.id,
+					);
+				const html = res?.data?.html;
+				if (!cancelled && res?.success && html) {
+					setDescription((current) =>
+						current === task.description ? html : current,
+					);
+				}
+			} catch {
+				// Non-blocking: keep the original description.
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [open, task.id, task.projectId, task.description]);
 
 	/**
 	 * Handle file reference drop from FileTreeItem drag
@@ -275,6 +310,7 @@ export function TaskEditDialog({
 			thinkingLevel !== (task.metadata?.thinkingLevel || "") ||
 			requireReviewBeforeCoding !==
 				(task.metadata?.requireReviewBeforeCoding ?? false) ||
+			tddMode !== (task.metadata?.tddMode ?? false) ||
 			JSON.stringify(images) !==
 				JSON.stringify(task.metadata?.attachedImages || []) ||
 			JSON.stringify(phaseModels) !==
@@ -306,6 +342,11 @@ export function TaskEditDialog({
 		// Always set attachedImages to persist removal when all images are deleted
 		metadataUpdates.attachedImages = images.length > 0 ? images : [];
 		metadataUpdates.requireReviewBeforeCoding = requireReviewBeforeCoding;
+		// Only persist tddMode when it diverges from the current value, so that
+		// "inherit project default" (undefined) is preserved unless explicitly changed.
+		if (tddMode !== (task.metadata?.tddMode ?? false)) {
+			metadataUpdates.tddMode = tddMode;
+		}
 
 		const success = await persistUpdateTask(task.id, {
 			title: trimmedTitle,
@@ -360,6 +401,7 @@ export function TaskEditDialog({
 				specId={task.specId}
 				description={description}
 				onDescriptionChange={setDescription}
+				richText
 				title={title}
 				onTitleChange={setTitle}
 				profileId={profileId}
@@ -390,6 +432,8 @@ export function TaskEditDialog({
 				onImagesChange={setImages}
 				requireReviewBeforeCoding={requireReviewBeforeCoding}
 				onRequireReviewChange={setRequireReviewBeforeCoding}
+				tddMode={tddMode}
+				onTddModeChange={setTddMode}
 				disabled={isSaving}
 				error={error}
 				onError={setError}

@@ -2,6 +2,11 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import {
+	DIALOG_MAXIMIZED_CLASS,
+	DialogMaximizeButton,
+	useDialogMaximize,
+} from "./dialog-maximize";
 
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
@@ -28,50 +33,75 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 interface DialogContentProps
 	extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
 	hideCloseButton?: boolean;
+	/**
+	 * Show a maximize/restore toggle that expands the popin to fullscreen.
+	 * Defaults to `true` whenever the standard close button is rendered.
+	 */
+	maximizable?: boolean;
 }
 
 const DialogContent = React.forwardRef<
 	React.ElementRef<typeof DialogPrimitive.Content>,
 	DialogContentProps
->(({ className, children, hideCloseButton, ...props }, ref) => (
-	<DialogPortal>
-		<DialogOverlay />
-		<div className="fixed inset-0 z-60 flex items-center justify-center pointer-events-none">
-			<DialogPrimitive.Content
-				ref={ref}
-				className={cn(
-					"z-60 p-4 w-full max-w-lg pointer-events-auto",
-					"bg-card border border-border rounded-2xl",
-					"shadow-xl overflow-hidden outline-none",
-					"data-[state=open]:animate-in data-[state=closed]:animate-out",
-					"data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-					"data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
-					"duration-200",
-					className,
-				)}
-				{...props}
-			>
-				<div className="p-6 flex flex-col h-full min-h-0 overflow-hidden">
-					{children}
-					{!hideCloseButton && (
-						<DialogPrimitive.Close
-							className={cn(
-								"absolute right-4 top-4 rounded-lg p-1 z-10",
-								"text-muted-foreground hover:text-foreground",
-								"hover:bg-accent transition-colors",
-								"focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background",
-								"disabled:pointer-events-none",
-							)}
-						>
-							<X className="h-4 w-4" />
-							<span className="sr-only">Close</span>
-						</DialogPrimitive.Close>
+>(({ className, children, hideCloseButton, maximizable, ...props }, ref) => {
+	const { maximized, toggle } = useDialogMaximize();
+	// Maximize lives alongside the standard close affordance; custom headers
+	// (hideCloseButton) opt in explicitly via the exported button.
+	const showMaximize = (maximizable ?? true) && !hideCloseButton;
+	return (
+		<DialogPortal>
+			<DialogOverlay />
+			<div className="fixed inset-0 z-60 flex items-center justify-center pointer-events-none">
+				<DialogPrimitive.Content
+					ref={ref}
+					className={cn(
+						"z-60 p-4 w-full max-w-lg pointer-events-auto",
+						"bg-card border border-border rounded-2xl",
+						"shadow-xl overflow-hidden outline-none",
+						"transition-[width,max-width,height,border-radius] ease-out",
+						"data-[state=open]:animate-in data-[state=closed]:animate-out",
+						"data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+						"data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+						"duration-200",
+						className,
+						// Appended last so tailwind-merge overrides the dialog's own sizing.
+						maximized && DIALOG_MAXIMIZED_CLASS,
 					)}
-				</div>
-			</DialogPrimitive.Content>
-		</div>
-	</DialogPortal>
-));
+					{...props}
+				>
+					<div className="p-6 flex flex-col h-full min-h-0 overflow-hidden">
+						{children}
+						{(showMaximize || !hideCloseButton) && (
+							<div className="absolute right-3 top-3 z-10 flex items-center gap-1">
+								{showMaximize && (
+									<DialogMaximizeButton
+										maximized={maximized}
+										onToggle={toggle}
+										className="h-7 w-7"
+									/>
+								)}
+								{!hideCloseButton && (
+									<DialogPrimitive.Close
+										className={cn(
+											"rounded-lg p-1.5",
+											"text-muted-foreground hover:text-foreground",
+											"hover:bg-accent transition-colors",
+											"focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background",
+											"disabled:pointer-events-none",
+										)}
+									>
+										<X className="h-4 w-4" />
+										<span className="sr-only">Close</span>
+									</DialogPrimitive.Close>
+								)}
+							</div>
+						)}
+					</div>
+				</DialogPrimitive.Content>
+			</div>
+		</DialogPortal>
+	);
+});
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 const DialogHeader = ({

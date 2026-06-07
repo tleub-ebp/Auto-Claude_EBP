@@ -6,9 +6,21 @@ from the existing agent execution flow.
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+
+def _utcnow_naive() -> datetime:
+    """Return a tz-naive UTC datetime (replacement for the deprecated
+    `datetime.utcnow()`).
+
+    The DB schema stores naive UTC datetimes; passing a tz-aware value
+    would break the comparison with stored columns. We compute the same
+    instant using the non-deprecated API and strip tzinfo at the end.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 from .collector import get_analytics_collector
 from .database import get_db
@@ -264,7 +276,7 @@ class AnalyticsService:
         """
         Clean up old analytics data to prevent database bloat.
         """
-        cutoff_date = datetime.utcnow() - timedelta(days=days_to_keep)
+        cutoff_date = _utcnow_naive() - timedelta(days=days_to_keep)
 
         db = next(get_db())
         try:

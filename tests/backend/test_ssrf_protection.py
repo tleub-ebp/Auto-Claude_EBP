@@ -83,43 +83,46 @@ class TestSSRFProtection:
         result = validate_url_ssrf("ollama", "http://127.0.0.1:11434")
         assert result == "http://127.0.0.1:11434"
 
-    @patch('socket.gethostbyname')
-    def test_validate_url_private_ip_blocked(self, mock_gethostbyname):
+    @patch('socket.getaddrinfo')
+    def test_validate_url_private_ip_blocked(self, mock_getaddrinfo):
         """Test that private IP addresses are blocked."""
         # Mock DNS resolution to return private IPs
-        mock_gethostbyname.side_effect = [
-            "192.168.1.100",  # Private IP
-            "10.0.0.50",      # Private IP
-            "172.16.0.10",    # Private IP
-            "127.0.0.1",      # Loopback
+        # getaddrinfo returns list of (family, type, proto, canonname, sockaddr)
+        mock_getaddrinfo.side_effect = [
+            [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('192.168.1.100', 0))],
+            [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('10.0.0.50', 0))],
+            [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('172.16.0.10', 0))],
+            [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('127.0.0.1', 0))],
         ]
         
-        with pytest.raises(ValueError, match="IP address .* is in private range"):
+        with pytest.raises(ValueError, match="Resolved IP .* is in a non-routable / private range"):
             validate_url_ssrf("unknown", "https://internal.example.com")
-        
-        with pytest.raises(ValueError, match="IP address .* is in private range"):
+
+        with pytest.raises(ValueError, match="Resolved IP .* is in a non-routable / private range"):
             validate_url_ssrf("unknown", "https://corporate.example.com")
-        
-        with pytest.raises(ValueError, match="IP address .* is in private range"):
+
+        with pytest.raises(ValueError, match="Resolved IP .* is in a non-routable / private range"):
             validate_url_ssrf("unknown", "https://local.example.com")
-        
-        with pytest.raises(ValueError, match="IP address .* is in private range"):
+
+        with pytest.raises(ValueError, match="Resolved IP .* is in a non-routable / private range"):
             validate_url_ssrf("unknown", "https://loopback.example.com")
 
-    @patch('socket.gethostbyname')
-    def test_validate_url_public_ip_allowed(self, mock_gethostbyname):
+    @patch('socket.getaddrinfo')
+    def test_validate_url_public_ip_allowed(self, mock_getaddrinfo):
         """Test that public IP addresses are allowed."""
         # Mock DNS resolution to return public IP
-        mock_gethostbyname.return_value = "8.8.8.8"  # Google's public DNS
-        
-        result = validate_url_ssrf("unknown", "https://public.example.com")
-        assert result == "https://public.example.com"
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, '', ('8.8.8.8', 0))
+        ]  # Google's public DNS
 
-    @patch('socket.gethostbyname')
-    def test_validate_url_dns_resolution_failure(self, mock_gethostbyname):
+        result = validate_url_ssrf("unknown", "https://public.example.com")
+        assert result == "https://8.8.8.8"
+
+    @patch('socket.getaddrinfo')
+    def test_validate_url_dns_resolution_failure(self, mock_getaddrinfo):
         """Test that DNS resolution failures are handled."""
-        mock_gethostbyname.side_effect = socket.gaierror("Name resolution failed")
-        
+        mock_getaddrinfo.side_effect = socket.gaierror("Name resolution failed")
+
         with pytest.raises(ValueError, match="Unable to resolve hostname"):
             validate_url_ssrf("unknown", "https://nonexistent.example.com")
 
@@ -162,12 +165,14 @@ class TestSSRFProtection:
 
     def test_provider_not_in_authorized_list(self):
         """Test behavior for providers not in authorized list."""
-        with patch('socket.gethostbyname') as mock_gethostbyname:
-            mock_gethostbyname.return_value = "8.8.8.8"
-            
+        with patch('socket.getaddrinfo') as mock_getaddrinfo:
+            mock_getaddrinfo.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, 0, '', ('8.8.8.8', 0))
+            ]
+
             # Should work for unknown providers with public IPs
             result = validate_url_ssrf("unknown_provider", "https://public.example.com")
-            assert result == "https://public.example.com"
+            assert result == "https://8.8.8.8"
 
     def test_ipv6_private_ranges(self):
         """Test that IPv6 private ranges are included."""
