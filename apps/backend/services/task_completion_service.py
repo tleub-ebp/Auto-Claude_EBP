@@ -252,6 +252,28 @@ class TaskCompletionService:
 
         target = target_branch or self.base_branch
 
+        # Étape 0: Commit any uncommitted changes in the worktree
+        has_changes, changed_files = self.worktree_manager._has_uncommitted_changes(
+            spec_id
+        )
+        if has_changes:
+            logger.info(
+                f"[TaskCompletionService] Found {len(changed_files)} uncommitted files, committing..."
+            )
+            commit_ok = self.worktree_manager.commit_in_worktree(
+                spec_id, f"auto-claude: {task_title}"
+            )
+            if not commit_ok:
+                error_msg = "Failed to commit uncommitted changes before push"
+                logger.error(f"[TaskCompletionService] {error_msg}")
+                return TaskCompletionResult(
+                    success=False,
+                    pr_url=None,
+                    pr_already_exists=False,
+                    error=error_msg,
+                )
+            logger.info(f"[TaskCompletionService] Committed {len(changed_files)} files")
+
         # Étape 1: Push de la branche vers origin
         logger.info("[TaskCompletionService] Push de la branche vers origin...")
         push_result = self.worktree_manager.push_branch(spec_id, force=False)
@@ -279,6 +301,7 @@ class TaskCompletionService:
             spec_name=spec_id,
             target_branch=target,
             title=pr_title,
+            body=pr_body,
             draft=False,  # PR normale qui nécessite review
         )
 

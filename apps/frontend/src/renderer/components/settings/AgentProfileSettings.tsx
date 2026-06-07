@@ -18,8 +18,6 @@ import {
 	DEFAULT_PHASE_MODELS,
 	DEFAULT_PHASE_THINKING,
 	getDefaultModelForProvider,
-	getModelsForProvider,
-	type ProviderModel,
 	providerSupportsThinking,
 	THINKING_LEVELS,
 } from "../../../shared/constants";
@@ -29,8 +27,13 @@ import type {
 	PhaseThinkingConfig,
 	ThinkingLevel,
 } from "../../../shared/types/settings";
+import {
+	type CatalogModel,
+	useProviderModelCatalog,
+} from "../../hooks/useProviderModelCatalog";
 import { cn } from "../../lib/utils";
 import { saveSettings, useSettingsStore } from "../../stores/settings-store";
+import { ModelCatalogStatus } from "../ModelCatalogStatus";
 import { useProviderContext } from "../ProviderContext";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -107,11 +110,10 @@ export function AgentProfileSettings() {
 		qa: "",
 	});
 
-	// Models available for the current provider
-	const providerModels: ProviderModel[] = useMemo(
-		() => getModelsForProvider(provider),
-		[provider],
-	);
+	// Models available for the current provider — live, with 24h backend cache
+	// and static fallback when the provider's API is unreachable.
+	const liveCatalog = useProviderModelCatalog(provider);
+	const providerModels: readonly CatalogModel[] = liveCatalog.models;
 	const supportsThinking = providerSupportsThinking(provider);
 
 	// Find the selected profile (only meaningful for Claude)
@@ -368,7 +370,7 @@ export function AgentProfileSettings() {
 		return (
 			<div className="rounded-lg border border-primary/20 bg-primary/5 p-3 flex items-center gap-3">
 				<Server className="h-5 w-5 text-primary shrink-0" />
-				<div>
+				<div className="flex-1">
 					<p className="text-sm font-medium text-foreground">
 						{t("agentProfile.activeProvider", { provider: providerLabel })}
 					</p>
@@ -378,6 +380,7 @@ export function AgentProfileSettings() {
 						</p>
 					)}
 				</div>
+				<ModelCatalogStatus catalog={liveCatalog} />
 			</div>
 		);
 	};

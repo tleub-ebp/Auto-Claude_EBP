@@ -4,7 +4,39 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { getOAuthModeClearVars } from "./env-utils";
+import { applyTddOverride, getOAuthModeClearVars } from "./env-utils";
+
+describe("applyTddOverride", () => {
+	it("forces TDD_MODE=true when tddMode is true", () => {
+		expect(applyTddOverride({}, true)).toEqual({ TDD_MODE: "true" });
+	});
+
+	it("overrides a project default of false when tddMode is true", () => {
+		expect(applyTddOverride({ OTHER: "x" }, true)).toEqual({
+			OTHER: "x",
+			TDD_MODE: "true",
+		});
+	});
+
+	it("removes inherited TDD_MODE when tddMode is false", () => {
+		expect(applyTddOverride({ TDD_MODE: "true", OTHER: "x" }, false)).toEqual({
+			OTHER: "x",
+		});
+	});
+
+	it("inherits the project default when tddMode is undefined", () => {
+		expect(applyTddOverride({ TDD_MODE: "true" })).toEqual({
+			TDD_MODE: "true",
+		});
+		expect(applyTddOverride({})).toEqual({});
+	});
+
+	it("does not mutate the input env map", () => {
+		const env = { TDD_MODE: "true" };
+		applyTddOverride(env, false);
+		expect(env).toEqual({ TDD_MODE: "true" });
+	});
+});
 
 describe("getOAuthModeClearVars", () => {
 	describe("OAuth mode (no active API profile)", () => {

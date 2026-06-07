@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 
-from apps.backend.core.file_utils import write_json_atomic
+from core.file_utils import write_json_atomic
 
 from .enums import PhaseType, SubtaskStatus, WorkflowType
 from .phase import Phase

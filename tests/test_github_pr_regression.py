@@ -158,6 +158,7 @@ class TestGitHubPRRouting:
             target_branch="main",
             title="Test PR",
             draft=False,
+            body=None,
         )
 
         # Verify result

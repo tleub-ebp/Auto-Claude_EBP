@@ -394,6 +394,10 @@ const browserMockAPI: ElectronAPI = {
 		success: true,
 		data: { command: "npm install -g @anthropic-ai/claude-code" },
 	}),
+	installClaudeCodeSilent: async () => ({
+		success: true,
+		data: { stdout: "[browser-mock] no-op", stderr: "" },
+	}),
 	getClaudeCodeVersions: async () => ({
 		success: true,
 		data: {
@@ -524,6 +528,10 @@ const browserMockAPI: ElectronAPI = {
 			project: null,
 			error: undefined,
 		},
+	}),
+	syncAzureDevOpsTaskAC: async () => ({
+		success: true,
+		data: { acceptanceCriteria: [] },
 	}),
 
 	// Jira Operations

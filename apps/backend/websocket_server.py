@@ -36,10 +36,11 @@ async def main():
         from streaming.streaming_manager import get_streaming_manager
         from streaming.websocket_server import get_websocket_server
 
-        # Initialize components
+        # Initialize components — instantiate for side effects (singleton init,
+        # registration). Return values are intentionally discarded.
         server = get_websocket_server()
-        session_recorder = SessionRecorder()
-        streaming_manager = get_streaming_manager()
+        SessionRecorder()
+        get_streaming_manager()
 
         logger.info("WebSocket server components initialized")
 

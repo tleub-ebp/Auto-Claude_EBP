@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	DEFAULT_FEATURE_MODELS,
@@ -117,45 +117,68 @@ export function GeneralSettings({
 	} | null>(null);
 	const [isLoadingTools, setIsLoadingTools] = useState(false);
 
+	// Refs to avoid re-running the detection effect when settings/onSettingsChange
+	// identities change. The effect should only run on mount or when `section` changes.
+	const settingsRef = useRef(settings);
+	settingsRef.current = settings;
+	const onSettingsChangeRef = useRef(onSettingsChange);
+	onSettingsChangeRef.current = onSettingsChange;
+
+	// Stable per-field updater. Reads the latest settings via ref so the callback
+	// identity stays stable across renders, avoiding re-renders of memoized inputs.
+	const updateField = useCallback(
+		<K extends keyof AppSettings>(field: K, value: AppSettings[K]) => {
+			onSettingsChangeRef.current({ ...settingsRef.current, [field]: value });
+		},
+		[],
+	);
+
 	// Fetch CLI tools detection info when component mounts (paths section only)
 	useEffect(() => {
-		if (section === "paths") {
-			setIsLoadingTools(true);
-			globalThis.electronAPI
-				.getCliToolsInfo()
-				.then(
-					(result: {
-						success: boolean;
-						data?: {
-							python: ToolDetectionResult;
-							git: ToolDetectionResult;
-							gh: ToolDetectionResult;
-							glab: ToolDetectionResult;
-							claude: ToolDetectionResult;
-						};
-					}) => {
-						if (result.success && result.data) {
-							setToolsInfo(result.data);
-							// Always update claudePath with detected WinGet path
-							if (result.data.claude?.found && result.data.claude.path) {
-								const detectedPath = result.data.claude.path;
-								// Force update regardless of current value
-								onSettingsChange({
-									...settings,
-									claudePath: detectedPath,
-								});
-							}
-						}
-					},
-				)
-				.catch((error: unknown) => {
-					console.error("Failed to fetch CLI tools info:", error);
-				})
-				.finally(() => {
-					setIsLoadingTools(false);
-				});
-		}
-	}, [section, onSettingsChange, settings]);
+		if (section !== "paths") return;
+		let cancelled = false;
+		setIsLoadingTools(true);
+		globalThis.electronAPI
+			.getCliToolsInfo()
+			.then(
+				(result: {
+					success: boolean;
+					data?: {
+						python: ToolDetectionResult;
+						git: ToolDetectionResult;
+						gh: ToolDetectionResult;
+						glab: ToolDetectionResult;
+						claude: ToolDetectionResult;
+					};
+				}) => {
+					if (cancelled || !result.success || !result.data) return;
+					setToolsInfo(result.data);
+					// Sync claudePath with detected path only when it differs, to avoid
+					// re-triggering the effect or causing unnecessary settings churn.
+					const detectedPath = result.data.claude?.found
+						? result.data.claude.path
+						: undefined;
+					if (
+						detectedPath &&
+						detectedPath !== settingsRef.current.claudePath
+					) {
+						onSettingsChangeRef.current({
+							...settingsRef.current,
+							claudePath: detectedPath,
+						});
+					}
+				},
+			)
+			.catch((error: unknown) => {
+				console.error("Failed to fetch CLI tools info:", error);
+			})
+			.finally(() => {
+				if (!cancelled) setIsLoadingTools(false);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [section]);
 
 	// Lit le provider actif depuis le contexte pour filtrer les modèles disponibles
 	const { selectedProvider } = useProviderContext();
@@ -356,9 +379,7 @@ export function GeneralSettings({
 						placeholder={t("general.pythonPathPlaceholder")}
 						className="w-full max-w-lg"
 						value={settings.pythonPath || ""}
-						onChange={(e) =>
-							onSettingsChange({ ...settings, pythonPath: e.target.value })
-						}
+						onChange={(e) => updateField("pythonPath", e.target.value)}
 					/>
 					{!settings.pythonPath && (
 						<ToolDetectionDisplay
@@ -383,9 +404,7 @@ export function GeneralSettings({
 						placeholder={t("general.gitPathPlaceholder")}
 						className="w-full max-w-lg"
 						value={settings.gitPath || ""}
-						onChange={(e) =>
-							onSettingsChange({ ...settings, gitPath: e.target.value })
-						}
+						onChange={(e) => updateField("gitPath", e.target.value)}
 					/>
 					{!settings.gitPath && (
 						<ToolDetectionDisplay
@@ -410,9 +429,7 @@ export function GeneralSettings({
 						placeholder={t("general.githubCLIPathPlaceholder")}
 						className="w-full max-w-lg"
 						value={settings.githubCLIPath || ""}
-						onChange={(e) =>
-							onSettingsChange({ ...settings, githubCLIPath: e.target.value })
-						}
+						onChange={(e) => updateField("githubCLIPath", e.target.value)}
 					/>
 					{!settings.githubCLIPath && (
 						<ToolDetectionDisplay
@@ -437,9 +454,7 @@ export function GeneralSettings({
 						placeholder={t("general.gitlabCLIPathPlaceholder")}
 						className="w-full max-w-lg"
 						value={settings.gitlabCLIPath || ""}
-						onChange={(e) =>
-							onSettingsChange({ ...settings, gitlabCLIPath: e.target.value })
-						}
+						onChange={(e) => updateField("gitlabCLIPath", e.target.value)}
 					/>
 					{!settings.gitlabCLIPath && (
 						<ToolDetectionDisplay
@@ -464,9 +479,7 @@ export function GeneralSettings({
 						placeholder={t("general.claudePathPlaceholder")}
 						className="w-full max-w-lg"
 						value={settings.claudePath || ""}
-						onChange={(e) =>
-							onSettingsChange({ ...settings, claudePath: e.target.value })
-						}
+						onChange={(e) => updateField("claudePath", e.target.value)}
 					/>
 					{!settings.claudePath && (
 						<ToolDetectionDisplay
@@ -491,9 +504,7 @@ export function GeneralSettings({
 						placeholder={t("general.autoClaudePathPlaceholder")}
 						className="w-full max-w-lg"
 						value={settings.autoBuildPath || ""}
-						onChange={(e) =>
-							onSettingsChange({ ...settings, autoBuildPath: e.target.value })
-						}
+						onChange={(e) => updateField("autoBuildPath", e.target.value)}
 					/>
 				</div>
 			</div>

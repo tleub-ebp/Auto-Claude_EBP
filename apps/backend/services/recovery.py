@@ -424,8 +424,9 @@ class RecoveryManager:
             True if successful, False otherwise
         """
         try:
-            # Use git reset --hard to rollback
-            result = subprocess.run(
+            # Use git reset --hard to rollback. check=True raises on non-zero
+            # exit, so the CompletedProcess result is intentionally discarded.
+            subprocess.run(
                 ["git", "reset", "--hard", commit_hash],
                 cwd=self.project_dir,
                 capture_output=True,

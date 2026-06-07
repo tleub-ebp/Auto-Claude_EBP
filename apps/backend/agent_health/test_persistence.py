@@ -154,9 +154,9 @@ class TestAnalyticsIngest:
         m = HealthMonitor()
 
         # Build fake BuildPhase objects.
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         def _phase(phase_type, *, success=True, duration=1.5, started_at=None):
             p = MagicMock()

@@ -71,6 +71,16 @@ class JiraConnector:
         ...     print(f"{p.key}: {p.name}")
     """
 
+    # Names that we accept as "Acceptance Criteria" custom field labels.
+    # Jira tenants name this field differently; matching by lowercased
+    # field name lets us autodetect it without configuration.
+    _ACCEPTANCE_CRITERIA_FIELD_NAMES = (
+        "acceptance criteria",
+        "critères d'acceptation",
+        "criteres d'acceptation",
+        "critères d'acceptance",
+    )
+
     def __init__(self, client: JiraClient) -> None:
         """Initialize the Jira connector.
 
@@ -79,6 +89,8 @@ class JiraConnector:
                 connected yet — call ``connect()`` to authenticate.
         """
         self._client = client
+        self._acceptance_criteria_field_id: str | None = None
+        self._acceptance_criteria_lookup_done: bool = False
 
     @classmethod
     def from_env(cls) -> "JiraConnector":
@@ -161,6 +173,68 @@ class JiraConnector:
         data = self._client.get(f"/rest/api/3/project/{project_key}")
         return JiraProject.from_api_response(data)
 
+    # ── Acceptance criteria autodetection ────────────────────────────
+
+    def _get_acceptance_criteria_field_id(self) -> str | None:
+        """Return the custom-field id matching "Acceptance Criteria".
+
+        Calls ``/rest/api/3/field`` once per connector instance and caches
+        the result. Returns ``None`` if no matching field exists on this
+        Jira tenant (e.g. teams that put acceptance criteria in the
+        description), in which case acceptance criteria stay empty.
+        """
+        if self._acceptance_criteria_lookup_done:
+            return self._acceptance_criteria_field_id
+
+        self._acceptance_criteria_lookup_done = True
+        try:
+            fields = self._client.get("/rest/api/3/field")
+        except Exception as exc:  # noqa: BLE001 — autodetection is best-effort
+            logger.warning("Failed to list Jira fields for AC autodetect: %s", exc)
+            return None
+
+        if not isinstance(fields, list):
+            return None
+
+        for fld in fields:
+            name = (fld.get("name") or "").strip().lower()
+            if name in self._ACCEPTANCE_CRITERIA_FIELD_NAMES:
+                field_id = fld.get("id") or fld.get("key")
+                if field_id:
+                    self._acceptance_criteria_field_id = field_id
+                    logger.info(
+                        "Detected Jira Acceptance Criteria field: '%s' (id=%s)",
+                        fld.get("name"),
+                        field_id,
+                    )
+                    return field_id
+
+        logger.info("No Jira custom field named 'Acceptance Criteria' found.")
+        return None
+
+    def _populate_acceptance_criteria(self, issue: JiraIssue) -> None:
+        """Fill ``issue.acceptance_criteria`` from the autodetected field.
+
+        Reads the raw value from ``issue.custom_fields`` using the cached
+        field id, then flattens it to plain text (handles ADF and string
+        values). No-op if no AC field exists on this tenant or the issue
+        does not set it.
+        """
+        from src.connectors.jira.models import _extract_adf_text
+
+        field_id = self._get_acceptance_criteria_field_id()
+        if not field_id:
+            return
+
+        raw = issue.custom_fields.get(field_id)
+        if raw is None:
+            return
+
+        if isinstance(raw, str):
+            issue.acceptance_criteria = raw.strip()
+        elif isinstance(raw, dict):
+            issue.acceptance_criteria = _extract_adf_text(raw)
+
     # ── Issue operations ─────────────────────────────────────────────
 
     def search_issues(
@@ -191,18 +265,29 @@ class JiraConnector:
         jql = f"project = {project_key}"
         if jql_filter:
             jql = f"{jql} AND {jql_filter}"
+        # No issuetype restriction is applied so every issue type — including
+        # sub-tasks and custom types — stays findable. Order by newest first
+        # so recently created issues (e.g. a bug just added to a story) fall
+        # within the result window. Skip if the caller already ordered.
+        if "order by" not in jql.lower():
+            jql = f"{jql} ORDER BY created DESC"
 
         logger.info("Searching Jira issues: %s (max=%d).", jql, max_results)
+
+        # Resolve the requested field list, then make sure the autodetected
+        # Acceptance Criteria custom field is included so Jira returns it.
+        requested_fields = list(fields or DEFAULT_FIELDS)
+        ac_field_id = self._get_acceptance_criteria_field_id()
+        if ac_field_id and ac_field_id not in requested_fields:
+            requested_fields.append(ac_field_id)
 
         params = {
             "jql": jql,
             "maxResults": max_results,
             "startAt": start_at,
+            "fields": ",".join(requested_fields),
         }
-        
-        if fields or DEFAULT_FIELDS:
-            params["fields"] = ",".join(fields or DEFAULT_FIELDS)
-        
+
         data = self._client.get(
             "/rest/api/3/search/jql",
             params=params,
@@ -210,6 +295,8 @@ class JiraConnector:
 
         issues_data = data.get("issues", [])
         issues = [JiraIssue.from_api_response(i) for i in issues_data]
+        for issue in issues:
+            self._populate_acceptance_criteria(issue)
 
         total = data.get("total", len(issues))
         logger.info(
@@ -236,7 +323,9 @@ class JiraConnector:
         logger.info("Getting issue '%s'.", issue_key)
 
         data = self._client.get(f"/rest/api/3/issue/{issue_key}")
-        return JiraIssue.from_api_response(data)
+        issue = JiraIssue.from_api_response(data)
+        self._populate_acceptance_criteria(issue)
+        return issue
 
     def create_issue(
         self,

@@ -207,9 +207,16 @@ class ArbiterEngine:
         votes: dict[str, int] = {}
         for op in conflict.opinions:
             votes[op.recommendation] = votes.get(op.recommendation, 0) + 1
-        winner = max(votes, key=lambda k: votes[k])
+        # Detect ties: `max(votes, ...)` returns the first-seen winner, which
+        # is non-deterministic and produces unreviewed decisions when two
+        # opposing recommendations have equal support. Escalate instead.
+        max_count = max(votes.values())
+        winners = [rec for rec, count in votes.items() if count == max_count]
+        if len(winners) > 1:
+            self._escalate(conflict)
+            return
         conflict.resolved = True
-        conflict.resolution = winner
+        conflict.resolution = winners[0]
         conflict.strategy_used = ResolutionStrategy.MAJORITY_VOTE
 
     @staticmethod

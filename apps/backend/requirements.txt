@@ -14,14 +14,14 @@ tomli>=2.0.0; python_version < "3.11"
 # Linux Secret Service support for credential storage
 # Provides access to the Freedesktop.org Secret Service API via DBus
 # Used on Linux to store OAuth tokens in gnome-keyring/kwallet
-secretstorage>=3.3.3; sys_platform == "linux"
+secretstorage>=3.5.0; sys_platform == "linux"
 
 # Memory Integration - LadybugDB (embedded graph database)
 #real_ladybug>=0.14.1; python_version >= "3.13"
 graphiti-core>=0.5.0; python_version >= "3.12"
 # pandas is required by real_ladybug for get_as_df() method
 # pandas 2.2.0+ required for pre-built wheels on Python 3.12
-pandas>=2.2.0; python_version >= "3.12"
+pandas>=3.0.2; python_version >= "3.12"
 
 # Windows-specific dependency for LadybugDB/Graphiti
 # pywin32 provides Windows system bindings required by real_ladybug
@@ -38,12 +38,12 @@ pydantic>=2.0.0
 rich>=13.0.0
 
 # Error tracking (optional - requires SENTRY_DSN environment variable)
-sentry-sdk>=2.0.0
+sentry-sdk>=2.58.0
 
 # Security-First Features
 # Basic secret scanning is built-in, these enhance capabilities
 # Bandit for Python SAST (strongly recommended, will warn if missing)
-bandit>=1.7.0
+bandit>=1.9.4
 # Semgrep for advanced SAST (optional but recommended)
 # Install separately: pip install semgrep
 # pip-audit for dependency vulnerability scanning (optional but recommended)
@@ -52,7 +52,7 @@ bandit>=1.7.0
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
 slowapi>=0.1.9
-requests>=2.33.0
+requests>=2.33.1
 httpx[http2]>=0.27.0
 h2>=4.1.0  # HTTP/2 support for Windsurf gRPC proxy
 sqlalchemy>=2.0.0

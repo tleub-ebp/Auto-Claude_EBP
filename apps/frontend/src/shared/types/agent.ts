@@ -91,6 +91,11 @@ export interface UsageSnapshot {
 	/** Provider name this snapshot belongs to (e.g., 'anthropic', 'openai', 'ollama', 'ollama_local') */
 	providerName?: string;
 
+	/** Provider-side error code when usage retrieval fails (e.g., 'INSUFFICIENT_PERMISSIONS', 'BACKEND_UNAVAILABLE') */
+	error?: string;
+	/** Human-readable error message accompanying `error` */
+	errorMessage?: string;
+
 	/**
 	 * Détails OpenAI Usage (completions, cost, embeddings, moderations)
 	 * Présent uniquement si providerName === 'openai'
@@ -102,6 +107,34 @@ export interface UsageSnapshot {
 	 * Présent uniquement si providerName === 'copilot'
 	 */
 	copilotUsageDetails?: {
+		/** "personal-quotas" (premium requests) ou "aggregated-metrics" (admin) */
+		scope?: "personal-quotas" | "aggregated-metrics";
+
+		// --- scope: personal-quotas (Premium Requests / quotas utilisateur) ---
+		/** Plan Copilot ("business", "enterprise", "individual", ...) */
+		plan?: string;
+		/** Nom d'organisation (si Copilot Business/Enterprise) */
+		organization?: string;
+		/** Premium requests consommées sur le cycle de facturation */
+		premiumRequestsUsed?: number;
+		/** Allocation totale de premium requests pour le cycle */
+		premiumRequestsEntitlement?: number;
+		/** Premium requests restantes */
+		premiumRequestsRemaining?: number;
+		/** Pourcentage consommé (0-100) */
+		premiumRequestsPercentUsed?: number;
+		/** Pourcentage restant (0-100) */
+		premiumRequestsPercentRemaining?: number;
+		/** Premium requests illimitées sur ce plan */
+		premiumRequestsUnlimited?: boolean;
+		/** Chat illimité sur ce plan */
+		chatUnlimited?: boolean;
+		/** Completions illimitées sur ce plan */
+		completionsUnlimited?: boolean;
+		/** Date du prochain reset des quotas */
+		quotaResetDate?: string;
+
+		// --- scope: aggregated-metrics (admin enterprise/org) ---
 		/** Total tokens utilisés dans la période courante */
 		totalTokens?: number;
 		/** Nombre de suggestions générées */

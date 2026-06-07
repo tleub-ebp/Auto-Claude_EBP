@@ -14,14 +14,38 @@ from .validation_models import ValidationResult
 # SQL PATTERNS AND UTILITIES
 # =============================================================================
 
-# Patterns that indicate destructive SQL operations
+# Patterns that indicate destructive SQL operations.
+# Order matters slightly: tautology-DELETE rules must run alongside the
+# bare-DELETE rule because the latter alone misses `DELETE FROM x WHERE 1=1`.
 DESTRUCTIVE_SQL_PATTERNS = [
     r"\bDROP\s+(DATABASE|SCHEMA|TABLE|INDEX|VIEW|FUNCTION|PROCEDURE|TRIGGER)\b",
     r"\bTRUNCATE\s+(TABLE\s+)?\w+",
     r"\bDELETE\s+FROM\s+\w+\s*(;|$)",  # DELETE without WHERE clause
+    # Tautological WHERE clauses commonly used to bypass the rule above.
+    r"\bDELETE\s+FROM\s+\w+\s+WHERE\s+1\s*=\s*1\b",
+    r"\bDELETE\s+FROM\s+\w+\s+WHERE\s+TRUE\b",
+    r"\bDELETE\s+FROM\s+\w+\s+WHERE\s+\w+\s+IS\s+NOT\s+NULL\s*(;|$)",
     r"\bDROP\s+ALL\b",
     r"\bDESTROY\b",
 ]
+
+
+# SQL block-comment pattern. PostgreSQL/MySQL ignore /* ... */ in many
+# contexts, so attackers can splice them into otherwise-blocked keywords
+# (e.g. `DR/**/OP TABLE users`). We strip them before regex-matching.
+_SQL_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _strip_sql_comments(sql: str) -> str:
+    """Remove SQL block comments to defeat comment-splicing bypasses.
+
+    Replaces the comment with the empty string (NOT a space) because
+    PostgreSQL/MySQL splice tokens across `/**/` — `DR/**/OP` becomes the
+    single keyword `DROP` at parse time, so we need the same after
+    stripping or the destructive-keyword regex still misses it.
+    """
+    return _SQL_COMMENT_RE.sub("", sql)
+
 
 # Safe database names that can be dropped (test/dev databases)
 SAFE_DATABASE_PATTERNS = [
@@ -46,6 +70,10 @@ def _is_safe_database_name(db_name: str) -> bool:
     """
     Check if a database name appears to be a safe test/dev database.
 
+    Patterns are anchored to FULL match, not substring search — otherwise a
+    DB literally named `production_test` or `mockingbird_prod` matches the
+    `_test$` / `^mock` rules and becomes droppable.
+
     Args:
         db_name: The database name to check
 
@@ -54,7 +82,16 @@ def _is_safe_database_name(db_name: str) -> bool:
     """
     db_lower = db_name.lower()
     for pattern in SAFE_DATABASE_PATTERNS:
-        if re.search(pattern, db_lower):
+        # Promote each substring pattern to a full-string regex by padding
+        # the unanchored side with `.*`. `^test` becomes `^test.*` (any DB
+        # starting with `test`); `_test$` becomes `.*_test$` (any DB
+        # ending with `_test`). re.fullmatch then refuses substring leaks
+        # like `mockingbird_prod` matching `^mock`.
+        if pattern.startswith("^"):
+            full_pattern = pattern + r".*"
+        else:
+            full_pattern = r".*" + pattern
+        if re.fullmatch(full_pattern, db_lower):
             return True
     return False
 
@@ -63,13 +100,17 @@ def _contains_destructive_sql(sql: str) -> tuple[bool, str]:
     """
     Check if SQL contains destructive operations.
 
+    Strips SQL block comments first to defeat splice-bypass attempts like
+    `DR/**/OP TABLE users` that PostgreSQL/MySQL ignore at parse time.
+
     Args:
         sql: The SQL statement to check
 
     Returns:
         Tuple of (is_destructive, matched_pattern)
     """
-    sql_upper = sql.upper()
+    cleaned = _strip_sql_comments(sql)
+    sql_upper = cleaned.upper()
     for pattern in DESTRUCTIVE_SQL_PATTERNS:
         match = re.search(pattern, sql_upper, re.IGNORECASE)
         if match:
@@ -229,16 +270,30 @@ def validate_psql_command(command_string: str) -> ValidationResult:
     if not tokens:
         return False, "Empty psql command"
 
-    # Look for -c flag (command to execute)
+    # Look for SQL passed via -c, --command=, or -c"…" formats.
+    # Note: SQL passed via -f file or stdin is NOT statically scanned here —
+    # those forms read external content, which we cannot validate without
+    # also reading the file. Reject -f to keep the surface tight.
     sql_command = None
     for i, token in enumerate(tokens):
         if token == "-c" and i + 1 < len(tokens):
             sql_command = tokens[i + 1]
             break
-        if token.startswith("-c"):
-            # Handle -c"SQL" format
+        if token == "--command" and i + 1 < len(tokens):
+            sql_command = tokens[i + 1]
+            break
+        if token.startswith("--command="):
+            sql_command = token[len("--command=") :]
+            break
+        if token.startswith("-c") and len(token) > 2:
+            # Handle -c"SQL" / -cSELECT… format
             sql_command = token[2:]
             break
+        if token in ("-f", "--file") or token.startswith("--file="):
+            return False, (
+                "psql -f / --file is not allowed: SQL files cannot be statically "
+                "scanned for destructive operations. Use -c '<safe SQL>' instead."
+            )
 
     if sql_command:
         is_destructive, matched = _contains_destructive_sql(sql_command)

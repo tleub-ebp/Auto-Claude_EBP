@@ -1,9 +1,10 @@
 """HTTP routes for the License Scanner.
 
-Mounted at `/api/license-governance`. Two endpoints:
+Mounted at `/api/license-governance`. Three endpoints:
 
 * `POST /scan`           — discover deps + classify + apply a policy
 * `POST /classify`       — classify a single licence string (debugging helper)
+* `POST /attribution`    — render an ATTRIBUTION.md from a scan
 """
 
 from __future__ import annotations
@@ -14,6 +15,12 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from .attribution import (
+    ATTRIBUTION_FILENAME,
+    AttributionOptions,
+    render_attribution,
+    write_attribution,
+)
 from .scanner import (
     DependencyRecord,
     LicenseCategory,
@@ -117,4 +124,54 @@ def classify(req: ClassifyRequest):
         }
     except Exception as e:  # noqa: BLE001
         logger.exception("classify failed")
+        return {"success": False, "error": str(e)}
+
+
+class AttributionRequest(BaseModel):
+    project_path: str = Field(..., description="Project root.")
+    project_name: str | None = Field(
+        None,
+        description="Display name in the generated header. Defaults to the project dir name.",
+    )
+    include_transitive: bool = True
+    include_unknown: bool = True
+    write_to_disk: bool = Field(
+        False,
+        description=f"If true, write {ATTRIBUTION_FILENAME} at the project root.",
+    )
+    license_overrides: list[LicenseOverride] | None = None
+
+
+@router.post("/attribution")
+def attribution(req: AttributionRequest):
+    try:
+        path = _validate_project_path(req.project_path)
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+    overrides = {o.name: o.license for o in (req.license_overrides or [])}
+
+    def resolver(dep: DependencyRecord) -> str | None:
+        return overrides.get(dep.name, dep.declared_license)
+
+    try:
+        scanner = LicenseScanner(project_dir=path, resolver=resolver)
+        report = scanner.scan()
+        opts = AttributionOptions(
+            project_name=req.project_name or path.name,
+            include_transitive=req.include_transitive,
+            include_unknown=req.include_unknown,
+        )
+        markdown = render_attribution(report, opts)
+        result: dict = {
+            "success": True,
+            "attribution_md": markdown,
+            "dependency_count": len(report.dependencies),
+        }
+        if req.write_to_disk:
+            written = write_attribution(report, path, opts)
+            result["written_to"] = str(written)
+        return result
+    except Exception as e:  # noqa: BLE001
+        logger.exception("attribution generation failed")
         return {"success": False, "error": str(e)}

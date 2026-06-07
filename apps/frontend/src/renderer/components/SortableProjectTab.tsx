@@ -1,10 +1,12 @@
 ﻿import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Settings2 } from "lucide-react";
+import { AlertTriangle, FolderSearch, Settings2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Project } from "../../shared/types";
 import { cn } from "../lib/utils";
+import { Button } from "./ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 interface SortableProjectTabProps {
@@ -15,15 +17,27 @@ interface SortableProjectTabProps {
 	readonly onSelect: () => void;
 	readonly onClose: (e: React.MouseEvent) => void;
 	readonly onRename?: (projectId: string, name: string) => void;
+	/** True when the on-disk project folder no longer exists. */
+	readonly isMissing?: boolean;
+	/** Called when the user picks a new folder to re-point the project at. */
+	readonly onRepath?: (projectId: string) => void;
 	// Optional control props for active tab
 	readonly onSettingsClick?: () => void;
 }
 
 // Detect if running on macOS for keyboard shortcut display
-const isMac =
-	typeof navigator !== "undefined" &&
-	navigator.platform.toUpperCase().includes("MAC");
-const modKey = isMac ? "âŒ˜" : "Ctrl+";
+// Detect if running on macOS for keyboard shortcut display
+const isMac = ((): boolean => {
+	if (typeof navigator === "undefined") return false;
+	// Modern: User-Agent Client Hints (preferred)
+	if ("userAgentData" in navigator && navigator.userAgentData) {
+		const { platform } = navigator.userAgentData;
+		if (platform) return platform.toUpperCase().includes("MAC");
+	}
+	// Fallback: userAgent string (platform is deprecated)
+	return navigator.userAgent.toUpperCase().includes("MAC");
+})();
+const modKey = isMac ? "⌘" : "Ctrl+";
 
 export function SortableProjectTab({
 	project,
@@ -33,10 +47,13 @@ export function SortableProjectTab({
 	onSelect,
 	onClose,
 	onRename,
+	isMissing = false,
+	onRepath,
 	onSettingsClick,
 }: SortableProjectTabProps) {
 	const { t } = useTranslation("common");
 	const [isEditing, setIsEditing] = useState(false);
+	const [isMissingPopoverOpen, setIsMissingPopoverOpen] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const committedRef = useRef(false);
 
@@ -164,19 +181,118 @@ export function SortableProjectTab({
 									"w-1 h-4 bg-muted-foreground rounded-full shrink-0",
 								)}
 							/>
-							<span className="truncate font-medium">{project.name}</span>
+							{isMissing && (
+								<AlertTriangle
+									className="h-3.5 w-3.5 shrink-0 text-destructive"
+									aria-hidden
+								/>
+							)}
+							<span
+								className={cn(
+									"truncate font-medium",
+									isMissing && "line-through text-destructive/80",
+								)}
+							>
+								{project.name}
+							</span>
 						</button>
 					)}
 				</TooltipTrigger>
-				<TooltipContent side="bottom" className="flex items-center gap-2">
-					<span>{project.name}</span>
-					{shortcutHint && (
-						<kbd className="px-1.5 py-0.5 text-xs bg-muted rounded border border-border font-mono">
-							{shortcutHint}
-						</kbd>
+				<TooltipContent side="bottom" className="flex flex-col items-start gap-1 max-w-xs">
+					<div className="flex items-center gap-2">
+						<span>{project.name}</span>
+						{shortcutHint && (
+							<kbd className="px-1.5 py-0.5 text-xs bg-muted rounded border border-border font-mono">
+								{shortcutHint}
+							</kbd>
+						)}
+					</div>
+					{isMissing && (
+						<div className="flex items-start gap-1 text-xs text-destructive">
+							<AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" aria-hidden />
+							<div className="space-y-0.5">
+								<div>{t("projectTab.missingPathTitle")}</div>
+								<div className="font-mono opacity-80 break-all">
+									{project.path}
+								</div>
+							</div>
+						</div>
 					)}
 				</TooltipContent>
 			</Tooltip>
+
+			{isMissing && onRepath && (
+				<Popover
+					open={isMissingPopoverOpen}
+					onOpenChange={setIsMissingPopoverOpen}
+				>
+					<Tooltip delayDuration={200}>
+						<TooltipTrigger asChild>
+							<PopoverTrigger asChild>
+								<button
+									type="button"
+									className={cn(
+										"h-5 w-5 sm:h-6 sm:w-6 p-0 mr-0.5 sm:mr-1",
+										"rounded shrink-0 flex items-center justify-center",
+										"text-destructive hover:bg-destructive/10",
+										"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+									)}
+									onClick={(e) => e.stopPropagation()}
+									aria-label={t("projectTab.missingPathFix")}
+								>
+									<FolderSearch className="h-3.5 w-3.5" />
+								</button>
+							</PopoverTrigger>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">
+							<span>{t("projectTab.missingPathFix")}</span>
+						</TooltipContent>
+					</Tooltip>
+					<PopoverContent side="bottom" align="end" className="w-72">
+						<div className="space-y-3">
+							<div className="flex items-start gap-2">
+								<AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" aria-hidden />
+								<div className="space-y-1">
+									<h4 className="text-sm font-medium">
+										{t("projectTab.missingPathTitle")}
+									</h4>
+									<p className="text-xs text-muted-foreground font-mono break-all">
+										{project.path}
+									</p>
+								</div>
+							</div>
+							<p className="text-xs text-muted-foreground">
+								{t("projectTab.missingPathDescription")}
+							</p>
+							<div className="flex gap-2">
+								<Button
+									size="sm"
+									className="flex-1 gap-1"
+									onClick={() => {
+										setIsMissingPopoverOpen(false);
+										onRepath(project.id);
+									}}
+								>
+									<FolderSearch className="h-3.5 w-3.5" />
+									{t("projectTab.missingPathFixAction")}
+								</Button>
+								{canClose && (
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={(e) => {
+											setIsMissingPopoverOpen(false);
+											onClose(e);
+										}}
+									>
+										{t("projectTab.missingPathRemove")}
+									</Button>
+								)}
+							</div>
+						</div>
+					</PopoverContent>
+				</Popover>
+			)}
 
 			{/* Active tab controls - settings and archive, always accessible */}
 			{isActive && (

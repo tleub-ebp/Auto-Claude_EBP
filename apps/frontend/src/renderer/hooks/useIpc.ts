@@ -99,13 +99,6 @@ function flushBatch(): void {
 		});
 	});
 
-	if (window.DEBUG) {
-		const flushDuration = performance.now() - flushStart;
-		console.warn(
-			`[IPC Batch] Flushed ${totalUpdates} updates (${totalLogs} logs) for ${updateCount} tasks in ${flushDuration.toFixed(2)}ms`,
-		);
-	}
-
 	batchQueue.clear();
 	batchTimeout = null;
 }

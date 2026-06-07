@@ -14,7 +14,21 @@ class ToolExecutor:
     """Executes tools for agent sessions."""
 
     def __init__(self, project_dir: str):
-        self.project_dir = Path(project_dir)
+        self.project_dir = Path(project_dir).resolve()
+
+    def _resolve_within_project(self, path: str) -> Path:
+        """Resolve a user-supplied path and reject anything outside project_dir.
+
+        Why: agent-supplied paths can be relative ('../etc/passwd') or absolute
+        ('/etc/passwd'). Without this guard, Path / userpath happily escapes
+        the sandbox, since Path('/safe') / Path('/etc/x') -> Path('/etc/x').
+        """
+        candidate = (self.project_dir / path).resolve()
+        try:
+            candidate.relative_to(self.project_dir)
+        except ValueError:
+            raise ValueError(f"Path '{path}' is outside the project directory")
+        return candidate
 
     async def execute(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         """
@@ -56,7 +70,7 @@ class ToolExecutor:
         if not path:
             raise ValueError("Path is required for read_file")
 
-        file_path = self.project_dir / path
+        file_path = self._resolve_within_project(path)
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
@@ -73,7 +87,7 @@ class ToolExecutor:
         if not path:
             raise ValueError("Path is required for write_file")
 
-        file_path = self.project_dir / path
+        file_path = self._resolve_within_project(path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -92,7 +106,7 @@ class ToolExecutor:
 
     async def _list_files(self, directory: str) -> list[str]:
         """List files in a directory."""
-        dir_path = self.project_dir / directory
+        dir_path = self._resolve_within_project(directory)
         if not dir_path.exists():
             raise FileNotFoundError(f"Directory not found: {directory}")
 
@@ -112,7 +126,7 @@ class ToolExecutor:
         if not path:
             raise ValueError("Path is required for create_directory")
 
-        dir_path = self.project_dir / path
+        dir_path = self._resolve_within_project(path)
         try:
             dir_path.mkdir(parents=True, exist_ok=True)
             return f"Successfully created directory {path}"
@@ -120,11 +134,18 @@ class ToolExecutor:
             raise RuntimeError(f"Error creating directory {path}: {e}")
 
     async def _run_command(self, command: str | None, cwd: str | None = None) -> str:
-        """Run a shell command."""
+        """Run a shell command.
+
+        Note: uses subprocess shell mode intentionally so the agent can issue
+        composite commands (pipes, redirections) needed by the prompt template.
+        The cwd is constrained to project_dir; the command itself is not
+        sanitized — callers must ensure the LLM is constrained by the system
+        prompt and untrusted output is not relayed back into tool args.
+        """
         if not command:
             raise ValueError("Command is required for run_command")
 
-        work_dir = self.project_dir / cwd if cwd else self.project_dir
+        work_dir = self._resolve_within_project(cwd) if cwd else self.project_dir
 
         try:
             process = await asyncio.create_subprocess_shell(
@@ -143,8 +164,22 @@ class ToolExecutor:
             )
 
             if process.returncode != 0:
+                # Include both stdout and stderr: many tools (dotnet, msbuild,
+                # npm, ...) write their diagnostics to stdout, not stderr.
+                combined = ""
+                if stdout:
+                    combined += stdout
+                if stderr:
+                    combined += ("\n" if combined else "") + stderr
+
+                # Exit code 1 with no output is the "no matches found" behavior
+                # for search tools (findstr, grep, etc.). Return a clear message
+                # so the agent knows the pattern was not found.
+                if process.returncode == 1 and not combined.strip():
+                    return "(no matches found)"
+
                 raise RuntimeError(
-                    f"Command failed with code {process.returncode}: {stderr}"
+                    f"Command failed with code {process.returncode}: {combined}"
                 )
 
             return stdout

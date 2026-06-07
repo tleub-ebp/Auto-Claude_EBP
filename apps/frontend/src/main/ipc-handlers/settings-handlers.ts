@@ -772,6 +772,35 @@ export function registerSettingsHandlers(
 	);
 
 	ipcMain.handle(
+		IPC_CHANNELS.DIALOG_SELECT_FILES,
+		async (
+			_,
+			options?: {
+				title?: string;
+				defaultPath?: string;
+				multi?: boolean;
+				filters?: { name: string; extensions: string[] }[];
+			},
+		): Promise<string[]> => {
+			const mainWindow = getMainWindow();
+			if (!mainWindow) return [];
+
+			const properties: ("openFile" | "multiSelections")[] = ["openFile"];
+			if (options?.multi) properties.push("multiSelections");
+
+			const result = await dialog.showOpenDialog(mainWindow, {
+				properties,
+				title: options?.title ?? "Select Files",
+				defaultPath: options?.defaultPath,
+				filters: options?.filters,
+			});
+
+			if (result.canceled) return [];
+			return result.filePaths;
+		},
+	);
+
+	ipcMain.handle(
 		IPC_CHANNELS.DIALOG_CREATE_PROJECT_FOLDER,
 		async (
 			_,

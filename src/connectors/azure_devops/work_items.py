@@ -30,7 +30,10 @@ from src.connectors.azure_devops.models import WorkItem
 
 logger = logging.getLogger(__name__)
 
-# Default backlog work item types for Azure DevOps
+# Common backlog work item types for Azure DevOps. Kept as a convenience for
+# callers that want to narrow ``list_backlog_items`` to these types; the
+# default behaviour now returns every work item type so that custom,
+# process-specific types (e.g. EBP's "RSD") stay findable in the import panel.
 DEFAULT_BACKLOG_TYPES = ["Bug", "User Story", "Task"]
 
 
@@ -162,6 +165,7 @@ class AzureWorkItemsClient:
                     wit_client.get_work_items(
                         ids=batch,
                         project=project,
+                        expand="fields",
                         error_policy="omit",
                     )
                 )
@@ -219,6 +223,7 @@ class AzureWorkItemsClient:
             wit_client = self._get_wit_client()
             api_work_item = wit_client.get_work_item(
                 id=work_item_id,
+                expand="fields",
             )
         except AzureDevOpsError:
             raise
@@ -253,15 +258,16 @@ class AzureWorkItemsClient:
     ) -> list[WorkItem]:
         """List work items from the project backlog.
 
-        Retrieves backlog items filtered by work item type. By default,
-        queries for Bugs, User Stories, and Tasks that are not in a
-        closed or done state.
+        Retrieves backlog items that are not in a closed, done, or removed
+        state. By default **all** work item types are returned so that
+        process-specific/custom types (such as EBP's "RSD") remain findable
+        in the import panel. Pass ``item_types`` to narrow the result set.
 
         Args:
             project: The project name or identifier.
             item_types: Filter by work item types (e.g., ``['Bug',
-                'User Story', 'Task']``). If None, uses the default
-                backlog types.
+                'User Story', 'Task']``). If None, no type restriction is
+                applied and items of every type are returned.
             max_items: Maximum number of items to return. Defaults to 100.
 
         Returns:
@@ -271,24 +277,33 @@ class AzureWorkItemsClient:
         Raises:
             APIError: If the API call fails unexpectedly.
         """
-        types = item_types or DEFAULT_BACKLOG_TYPES
-
         logger.info(
             "Listing backlog items in project '%s' (types=%s, max_items=%d).",
             project,
-            types,
+            item_types or "all",
             max_items,
         )
 
-        # Build WIQL query for backlog items
-        type_conditions = " OR ".join(f"[System.WorkItemType] = '{wt}'" for wt in types)
+        # Build the WIQL WHERE clause. When no explicit work item types are
+        # requested we intentionally do NOT restrict by [System.WorkItemType]
+        # so that process-specific/custom types (e.g. EBP's "RSD") are
+        # returned and stay findable. Callers can still pass ``item_types``
+        # to narrow the result set.
+        where_clauses = [f"[System.TeamProject] = '{project}'"]
+        if item_types:
+            type_conditions = " OR ".join(
+                f"[System.WorkItemType] = '{wt}'" for wt in item_types
+            )
+            where_clauses.append(f"({type_conditions})")
+        where_clauses += [
+            "[System.State] <> 'Closed'",
+            "[System.State] <> 'Done'",
+            "[System.State] <> 'Removed'",
+        ]
+
         wiql_query = (
             "SELECT [System.Id] FROM WorkItems "
-            f"WHERE [System.TeamProject] = '{project}' "
-            f"AND ({type_conditions}) "
-            "AND [System.State] <> 'Closed' "
-            "AND [System.State] <> 'Done' "
-            "AND [System.State] <> 'Removed' "
+            f"WHERE {' AND '.join(where_clauses)} "
             "ORDER BY [Microsoft.VSTS.Common.Priority] ASC, "
             "[System.CreatedDate] DESC"
         )

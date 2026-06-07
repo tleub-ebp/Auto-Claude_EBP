@@ -6,11 +6,21 @@ Playwright-based browser controller for the Built-in Browser Agent.
 Provides async API for browser automation: navigation, screenshots, interaction.
 """
 
+import logging
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ._naming import safe_artifact_path
 from .models import ScreenshotInfo
+
+logger = logging.getLogger(__name__)
+
+# Cap on captured console messages — pages with chatty consoles (ad
+# scripts, dev warnings) used to grow `_console_errors` unboundedly during
+# long sessions, eating RAM and making `get_console_errors()` slow.
+_MAX_CONSOLE_ERRORS = 1000
 
 
 class BrowserController:
@@ -27,10 +37,18 @@ class BrowserController:
         self._playwright = None
         self._browser = None
         self._page = None
-        self._console_errors: list[str] = []
+        # Bounded deque, not list — pages with chatty consoles previously
+        # leaked unbounded memory across long sessions.
+        self._console_errors: deque[str] = deque(maxlen=_MAX_CONSOLE_ERRORS)
 
     async def launch(self) -> None:
-        """Launch a headless Chromium browser."""
+        """Launch a headless Chromium browser.
+
+        Cleans up partial state on any failure: previously a launch that
+        succeeded `chromium.launch()` but failed `new_page()` left the
+        browser + playwright drivers running, so repeated failed launches
+        accumulated zombie chromium processes until fds were exhausted.
+        """
         try:
             from playwright.async_api import async_playwright
         except ImportError:
@@ -38,12 +56,19 @@ class BrowserController:
                 "playwright is not installed. Run: pip install playwright && playwright install chromium"
             )
 
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self.headless)
-        self._page = await self._browser.new_page()
+        try:
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=self.headless
+            )
+            self._page = await self._browser.new_page()
+        except Exception:
+            # Tear down whatever did succeed before re-raising.
+            await self.close()
+            raise
 
         # Capture console errors
-        self._console_errors = []
+        self._console_errors.clear()
         self._page.on(
             "console",
             lambda msg: (
@@ -78,9 +103,13 @@ class BrowserController:
             await self.navigate(url)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = name.replace(" ", "_").replace("/", "_")
-        filename = f"{safe_name}_{timestamp}.png"
-        filepath = self.screenshots_dir / filename
+        # Sanitize aggressively: `name` may originate from an LLM tool call.
+        filepath = safe_artifact_path(
+            self.screenshots_dir,
+            name,
+            f"_{timestamp}.png",
+            fallback="screenshot",
+        )
 
         await self._page.screenshot(path=str(filepath), full_page=full_page)
 
@@ -109,14 +138,34 @@ class BrowserController:
         await self._page.fill(selector, value, timeout=10000)
 
     async def evaluate(self, script: str) -> Any:
-        """Execute JavaScript in the browser context."""
+        """Execute JavaScript in the browser context.
+
+        SECURITY: this method runs arbitrary JS with full page privileges
+        (cookies, localStorage, fetch to internal services). When `script`
+        originates from an LLM tool call influenced by remote page content,
+        an attacker controlling page text could inject JS to exfiltrate
+        auth tokens. We audit-log every call so the abuse trail exists; a
+        future hardening should restrict to an allowlist of pre-defined
+        snippets.
+        """
         if not self._page:
             raise RuntimeError("Browser not launched. Call launch() first.")
+        # Truncate the script in logs to keep log size bounded but still
+        # preserve enough of the snippet to investigate suspicious calls.
+        logger.warning(
+            "browser_agent.evaluate called on %s (script[:200]=%r)",
+            self._page.url,
+            script[:200],
+        )
         return await self._page.evaluate(script)
 
     async def get_console_errors(self) -> list[str]:
-        """Return captured console errors and warnings."""
+        """Return captured console errors and warnings (capped at MAX)."""
         return list(self._console_errors)
+
+    async def clear_console_errors(self) -> None:
+        """Reset the captured console-error buffer."""
+        self._console_errors.clear()
 
     async def get_page_html(self) -> str:
         """Return the current page HTML content."""

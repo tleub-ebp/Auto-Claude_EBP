@@ -7,6 +7,9 @@
 	"merge": {
 		"buildReadyForReview": "Build Ready for Review",
 		"view": "View",
+		"viewPR": "View PR",
+		"prStatusMessage": "This task's changes are available in the pull request above.",
+		"notMergeable": "Cannot be merged",
 		"checkForConflicts": "Check for Conflicts",
 		"checkingForConflicts": "Checking for conflicts...",
 		"commits": "commits",
@@ -69,6 +72,10 @@
 	"pr": {
 		"title": "Create Pull Request",
 		"description": "Push branch and create a pull request for \"{{taskTitle}}\"",
+		"updateTitle": "Update Pull Request",
+		"updateDescription": "A PR already exists for \"{{taskTitle}}\". Push a new commit to the existing PR.",
+		"updateTooltip": "A PR already exists: a new commit will be pushed to it instead of creating another one.",
+		"existingNotice": "A pull request already exists for this task. Submitting will simply push a new commit to it.",
 		"logs": {
 			"waitingForLogs": "Waiting for logs...",
 			"reviewStarting": "Review is starting",
@@ -104,10 +111,25 @@
 			"created": "Pull request created successfully!",
 			"alreadyExists": "A pull request already exists for this branch"
 		},
+		"visualProof": {
+			"title": "Visual proof",
+			"openComment": "Open proof comment",
+			"retry": "Retry visual proof",
+			"screenshots": "{{count}} screenshot added to the PR",
+			"screenshots_other": "{{count}} screenshots added to the PR",
+			"status": {
+				"pending": "pending",
+				"passed": "passed",
+				"failed": "failed",
+				"skipped": "skipped"
+			}
+		},
 		"actions": {
 			"retry": "Retry",
 			"creating": "Creating PR...",
-			"create": "Create Pull Request"
+			"create": "Create Pull Request",
+			"update": "Update PR",
+			"updating": "Updating PR..."
 		},
 		"labels": {
 			"sourceBranch": "Source branch",
@@ -121,6 +143,20 @@
 		"hints": {
 			"targetBranch": "Leave empty to use the default branch",
 			"prTitle": "Leave empty to use the task title"
+		},
+		"impact": {
+			"title": "Impact analysis",
+			"analyzing": "Analyzing...",
+			"analysisFailed": "Impact analysis failed",
+			"analysisFailedHint": "Automatic analysis failed — the block will be filled with \"N/A\" in the PR.",
+			"aiFilledHint": "These fields are filled automatically by the AI and are read-only.",
+			"ratingLabel": "Impact rating (1 to 5)",
+			"ratingHint": "1 = low impact · 5 = huge impact",
+			"rating1": "low impact",
+			"rating5": "huge impact",
+			"featuresLabel": "Impacted feature(s)",
+			"featuresPlaceholder": "e.g. Vehicle form, sales document, ...",
+			"featuresHint": "Short list, comma-separated"
 		}
 	},
 	"mergeProgress": {
@@ -156,6 +192,25 @@
 		"flatList": "Flat list",
 		"treeView": "Tree view",
 		"backToList": "Back to list",
+		"edit": "Edit",
+		"editFile": "Edit File",
+		"addFile": "Add File",
+		"addingNewFile": "Adding new file",
+		"filePath": "File path",
+		"fileContent": "File content",
+		"filesSelected": "files selected",
+		"deleteSelected": "Discard selected",
+		"deleting": "Discarding...",
+		"save": "Save",
+		"saving": "Saving...",
+		"cancel": "Cancel",
+		"create": "Create",
+		"creating": "Creating...",
+		"loading": "Loading...",
+		"selectAll": "Select all",
+		"expandAll": "Expand all",
+		"collapseAll": "Collapse all",
+		"error": "Error",
 		"status": {
 			"added": "added",
 			"deleted": "deleted",

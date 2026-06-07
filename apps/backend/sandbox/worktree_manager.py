@@ -9,6 +9,7 @@ real working tree.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +18,53 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Git refs may contain alnum, `_ . / @ ^ ~ + -`. We additionally forbid a
+# leading `-` so the ref cannot be parsed by git as an option flag, and we
+# always pass `--` before the ref to terminate option parsing as defense in
+# depth (see CVE-2017-1000117 family for git argument-injection precedent).
+_REF_PATTERN = re.compile(r"^[A-Za-z0-9_./@^~+-]+$")
+
+
+def _validate_ref(ref: str) -> str:
+    """Validate a git ref against `git check-ref-format` rules.
+
+    Beyond rejecting argument-injection attempts (`-`-prefixed refs), we
+    pre-check the additional invariants from git-check-ref-format(1) so
+    callers get a clear error before git itself fails:
+    - no `..` (parent-traversal)
+    - no `.lock` suffix (git uses these as locking sentinels)
+    - no `@{` sequence (refs reserved for reflog)
+    - not just `@`
+    - no consecutive slashes
+    - no leading/trailing slash
+    - no leading/trailing dot
+    - no path component starting with `.`
+    """
+    if not ref or ref.startswith("-") or not _REF_PATTERN.match(ref):
+        raise ValueError(f"Invalid git ref: {ref!r}")
+
+    # Per git-check-ref-format(1): these patterns make a ref invalid even
+    # if every char is in our allowed charset.
+    if (
+        ref == "@"
+        or ".." in ref
+        or "//" in ref
+        or "@{" in ref
+        or ref.endswith(".lock")
+        or ref.endswith("/")
+        or ref.startswith("/")
+        or ref.endswith(".")
+        or ref.startswith(".")
+    ):
+        raise ValueError(f"Invalid git ref (violates check-ref-format): {ref!r}")
+
+    # No ref component (slash-separated) may start with a `.`.
+    for component in ref.split("/"):
+        if component.startswith(".") or component.endswith(".lock"):
+            raise ValueError(f"Invalid git ref component {component!r} in ref {ref!r}")
+
+    return ref
 
 
 @dataclass
@@ -115,8 +163,12 @@ class WorktreeManager:
 
     def _resolve_ref(self, ref: str) -> str:
         try:
+            ref = _validate_ref(ref)
+        except ValueError:
+            return "unknown"
+        try:
             result = subprocess.run(
-                ["git", "rev-parse", ref],
+                ["git", "rev-parse", "--", ref],
                 cwd=str(self._repo_root),
                 capture_output=True,
                 text=True,
@@ -127,6 +179,7 @@ class WorktreeManager:
             return "unknown"
 
     def _create_git_worktree(self, dest: Path, ref: str) -> None:
+        ref = _validate_ref(ref)
         # Remove the temp dir first — git worktree add needs a non-existing target
         if dest.exists():
             shutil.rmtree(dest)

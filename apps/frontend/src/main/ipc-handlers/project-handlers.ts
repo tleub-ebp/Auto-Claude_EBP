@@ -36,6 +36,45 @@ import { getEffectiveSourcePath } from "../updater/path-resolver";
 // ============================================
 
 /**
+ * Walk up from `start` looking for a directory containing `.git`.
+ * Returns the absolute path of the Git root, or null if none found.
+ */
+function findGitRootAbove(start: string): string | null {
+	let current = path.resolve(start);
+	while (true) {
+		if (existsSync(path.join(current, ".git"))) {
+			return current;
+		}
+		const parent = path.dirname(current);
+		if (parent === current) return null;
+		current = parent;
+	}
+}
+
+/**
+ * If the given path is a Git sub-folder (i.e. not itself the Git root,
+ * but a Git root exists above it), return a warning message suggesting
+ * the user reconfigure to the actual root. Returns null otherwise.
+ *
+ * This protects against a misconfiguration we've seen in practice: pointing
+ * the project at e.g. `MeCa/meca/` when the actual repo root (containing
+ * `Sources/`, `Build/`, etc.) is `MeCa/`. Plans then emit `../Sources/...`
+ * paths that escape project_dir and fail validation.
+ */
+function checkProjectDirIsGitRoot(projectPath: string): string | null {
+	const resolved = path.resolve(projectPath);
+	const gitRoot = findGitRootAbove(resolved);
+	if (!gitRoot) return null; // no Git anywhere — nothing to warn about
+	if (gitRoot === resolved) return null; // already at the Git root — fine
+	return (
+		`This folder is a sub-folder of a Git repository at "${gitRoot}". ` +
+		`If your source code lives outside "${resolved}" (e.g. in sibling folders), ` +
+		`the planner may emit paths with "../" that are rejected by the coder. ` +
+		`Consider reconfiguring the project to point at "${gitRoot}" instead.`
+	);
+}
+
+/**
  * Get list of git branches for a directory (both local and remote)
  */
 function getGitBranches(projectPath: string): string[] {
@@ -504,7 +543,10 @@ export function registerProjectHandlers(
 				}
 
 				const project = projectStore.addProject(projectPath);
-				return { success: true, data: project };
+				const warning = checkProjectDirIsGitRoot(projectPath);
+				return warning
+					? { success: true, data: project, warning }
+					: { success: true, data: project };
 			} catch (error) {
 				return {
 					success: false,
@@ -582,6 +624,58 @@ export function registerProjectHandlers(
 				return { success: false, error: "Name cannot be empty" };
 			}
 			const project = projectStore.renameProject(projectId, trimmed);
+			if (project) {
+				return { success: true, data: project };
+			}
+			return { success: false, error: "Project not found" };
+		},
+	);
+
+	// Batch existence check for every known project. Returned map keys are
+	// project IDs and values are `true` when the on-disk path still exists
+	// AND is a directory. Used by the tab bar to surface a "missing path"
+	// indicator without doing N renderer-side fs probes.
+	ipcMain.handle(
+		IPC_CHANNELS.PROJECT_CHECK_PATHS,
+		async (): Promise<IPCResult<Record<string, boolean>>> => {
+			try {
+				const projects = projectStore.getProjects();
+				const result: Record<string, boolean> = {};
+				for (const project of projects) {
+					try {
+						result[project.id] = existsSync(project.path);
+					} catch {
+						result[project.id] = false;
+					}
+				}
+				return { success: true, data: result };
+			} catch (error) {
+				return {
+					success: false,
+					error: error instanceof Error ? error.message : "Unknown error",
+				};
+			}
+		},
+	);
+
+	// Re-point a project at a new on-disk location. Used by the "missing
+	// path" recovery flow in the tab bar when the user moved/renamed the
+	// folder outside the app.
+	ipcMain.handle(
+		IPC_CHANNELS.PROJECT_REPATH,
+		async (
+			_,
+			projectId: string,
+			newPath: string,
+		): Promise<IPCResult<Project>> => {
+			const trimmed = (newPath ?? "").trim();
+			if (!trimmed) {
+				return { success: false, error: "Path cannot be empty" };
+			}
+			if (!existsSync(trimmed)) {
+				return { success: false, error: "Path does not exist" };
+			}
+			const project = projectStore.repathProject(projectId, trimmed);
 			if (project) {
 				return { success: true, data: project };
 			}

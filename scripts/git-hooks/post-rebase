@@ -1,0 +1,17 @@
+#!/bin/bash
+# Post-rebase hook: Intelligently restores and merges .workpilot after rebase
+# This hook runs after git rebase completes
+
+set -e
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+MANAGER="$REPO_ROOT/scripts/smart-merge-manager.py"
+
+if [ ! -f "$MANAGER" ]; then
+    exit 0
+fi
+
+echo "[Smart Merge] Running post-rebase restoration..."
+python3 "$MANAGER" complete || true
+
+exit 0

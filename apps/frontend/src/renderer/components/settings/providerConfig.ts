@@ -115,4 +115,9 @@ export const getProviderFields = (t: any): Record<string, ProviderConfig> => ({
 		placeholder: "http://localhost:11434",
 		icon: React.createElement(Server, { className: "w-4 h-4" }),
 	},
+	copilot: {
+		description: t("sections.accounts.providers.copilot"),
+		requiresApiKey: false,
+		icon: React.createElement(Key, { className: "w-4 h-4" }),
+	},
 });

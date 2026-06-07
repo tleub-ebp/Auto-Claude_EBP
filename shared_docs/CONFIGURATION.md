@@ -143,11 +143,6 @@ A few connectors currently fall back to deterministic stubs when their
 real integration is not configured. They **log a warning** when this path
 is taken so the user knows the output is not live data:
 
-- **Azure DevOps connector** — `AzureDevOpsConnector` in
-  [apps/backend/src/connectors/azure_devops/__init__.py](../apps/backend/src/connectors/azure_devops/__init__.py)
-  returns mock work items, repositories, and PR details. Set
-  `WORKPILOT_AZURE_DEVOPS_ALLOW_MOCK=1` to silence the warning in test
-  environments.
 - **Bounty board** — contestants fall back to a `[stub:...]` output string
   when the `llm_client` module is not importable. Logs a warning per
   contestant.

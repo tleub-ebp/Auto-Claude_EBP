@@ -97,6 +97,8 @@ except ImportError:
     _REPLAY_AVAILABLE = False
     _get_replay_recorder = None  # type: ignore[assignment]
 
+from agents.agent_audit import audit_event
+
 from .criteria import get_qa_signoff_status
 
 # Configuration
@@ -159,6 +161,14 @@ async def run_qa_fixer_session(
         "Starting QA fixer session",
         spec_dir=str(spec_dir),
         fix_session=fix_session,
+    )
+    audit_event(
+        project_dir,
+        kind="agent_invoked",
+        actor="qa_fixer",
+        correlation_id=spec_dir.name,
+        summary=f"QA fixer session {fix_session} invoked",
+        payload={"fix_session": fix_session},
     )
 
     print(f"\n{'=' * 70}")
@@ -291,14 +301,14 @@ async def run_qa_fixer_session(
 
                         if inp:
                             if "file_path" in inp:
-                                fp = inp["file_path"]
-                                if len(fp) > 50:
-                                    fp = "..." + fp[-47:]
+                                fp = str(inp["file_path"])
+                                if len(fp) > 2000:
+                                    fp = "..." + fp[-1997:]
                                 tool_input_display = fp
                             elif "command" in inp:
-                                cmd = inp["command"]
-                                if len(cmd) > 50:
-                                    cmd = cmd[:47] + "..."
+                                cmd = str(inp["command"])
+                                if len(cmd) > 2000:
+                                    cmd = cmd[:1997] + "..."
                                 tool_input_display = cmd
 
                         debug(
@@ -546,14 +556,14 @@ async def _run_qa_fixer_agent_client_session(
 
                     if inp:
                         if "file_path" in inp:
-                            fp = inp["file_path"]
-                            if len(fp) > 50:
-                                fp = "..." + fp[-47:]
+                            fp = str(inp["file_path"])
+                            if len(fp) > 2000:
+                                fp = "..." + fp[-1997:]
                             tool_input_display = fp
                         elif "command" in inp:
-                            cmd = inp["command"]
-                            if len(cmd) > 50:
-                                cmd = cmd[:47] + "..."
+                            cmd = str(inp["command"])
+                            if len(cmd) > 2000:
+                                cmd = cmd[:1997] + "..."
                             tool_input_display = cmd
                         elif "pattern" in inp:
                             tool_input_display = f"pattern: {inp['pattern']}"
@@ -735,16 +745,27 @@ async def _process_fixer_result(
     Used by both the Claude SDK path and the AgentClient path.
     """
     status = get_qa_signoff_status(spec_dir)
+    ready = bool(status and status.get("ready_for_qa_revalidation"))
     debug(
         "qa_fixer",
         "Fixer session completed",
         message_count=message_count,
         tool_count=tool_count,
         response_length=len(response_text),
-        ready_for_revalidation=status.get("ready_for_qa_revalidation")
-        if status
-        else False,
+        ready_for_revalidation=ready,
     )
+    if project_dir is not None:
+        audit_event(
+            project_dir,
+            kind="agent_completed",
+            actor="qa_fixer",
+            correlation_id=spec_dir.name,
+            summary=f"QA fixer session {fix_session} completed (ready_for_revalidation={ready})",
+            payload={
+                "fix_session": fix_session,
+                "ready_for_revalidation": ready,
+            },
+        )
 
     fixer_discoveries = {
         "files_understood": {},

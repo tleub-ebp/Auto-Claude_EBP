@@ -31,6 +31,7 @@ _run_parallel_merges = _workspace_module._run_parallel_merges
 AI_MERGE_SYSTEM_PROMPT = _workspace_module.AI_MERGE_SYSTEM_PROMPT
 _build_merge_prompt = _workspace_module._build_merge_prompt
 _check_git_conflicts = _workspace_module._check_git_conflicts
+_parse_merge_tree_conflicts = _workspace_module._parse_merge_tree_conflicts
 _rebase_spec_branch = _workspace_module._rebase_spec_branch
 
 # Models and Enums
@@ -114,6 +115,7 @@ __all__ = [
     "AI_MERGE_SYSTEM_PROMPT",  # System prompt for AI merge (ACS-194)
     "_build_merge_prompt",  # Internal prompt builder (ACS-194)
     "_check_git_conflicts",  # Internal git conflict detection (ACS-224)
+    "_parse_merge_tree_conflicts",  # Internal merge-tree conflict parser
     "_rebase_spec_branch",  # Internal rebase function (ACS-224)
     # Models
     "WorkspaceMode",

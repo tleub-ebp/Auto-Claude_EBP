@@ -5,7 +5,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, ProjectSettings } from "../../shared/types";
-import { useProjectStore } from "../stores/project-store";
+import {
+	updateProjectSettings,
+	useProjectStore,
+} from "../stores/project-store";
 
 // Helper to create test projects
 function createTestProject(overrides: Partial<Project> = {}): Project {
@@ -185,6 +188,55 @@ describe("Project Store — Core CRUD Operations", () => {
 				.updateProject("p1", { model: "new-model" } as never);
 
 			expect(useProjectStore.getState().projects[1].name).toBe("Project 2");
+		});
+	});
+
+	describe("updateProjectSettings (persisted)", () => {
+		it("merges saved values into project.settings (not the top-level project)", async () => {
+			useProjectStore.setState({
+				projects: [createTestProject({ id: "p1" })],
+			});
+
+			const ok = await updateProjectSettings("p1", { tddMode: true });
+
+			expect(ok).toBe(true);
+			const project = useProjectStore.getState().projects[0];
+			// The value must live inside project.settings so the settings dialog
+			// (which reads project.settings) reflects the persisted toggle.
+			expect(project.settings.tddMode).toBe(true);
+			// Regression guard: it must NOT leak onto the top-level project object.
+			expect(
+				(project as unknown as { tddMode?: boolean }).tddMode,
+			).toBeUndefined();
+		});
+
+		it("preserves other settings fields when updating one", async () => {
+			useProjectStore.setState({
+				projects: [createTestProject({ id: "p1" })],
+			});
+
+			await updateProjectSettings("p1", { tddMode: true });
+
+			const project = useProjectStore.getState().projects[0];
+			expect(project.settings.tddMode).toBe(true);
+			expect(project.settings.model).toBe("claude-3-opus");
+			expect(project.settings.notifications.onTaskComplete).toBe(true);
+		});
+
+		it("does not affect other projects", async () => {
+			useProjectStore.setState({
+				projects: [
+					createTestProject({ id: "p1" }),
+					createTestProject({ id: "p2" }),
+				],
+			});
+
+			await updateProjectSettings("p1", { tddMode: true });
+
+			const other = useProjectStore
+				.getState()
+				.projects.find((p) => p.id === "p2");
+			expect(other?.settings.tddMode).toBeUndefined();
 		});
 	});
 

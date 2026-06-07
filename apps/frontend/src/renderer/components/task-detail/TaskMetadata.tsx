@@ -1,7 +1,9 @@
 import DOMPurify from "dompurify";
 import {
 	Bug,
+	Check,
 	ChevronDown,
+	ChevronRight,
 	Clock,
 	ExternalLink,
 	FileCode,
@@ -11,18 +13,28 @@ import {
 	Lightbulb,
 	ListChecks,
 	Palette,
+	Pencil,
 	Shield,
+	StickyNote,
 	Target,
 	Users,
 	Wrench,
 } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import { useToast } from "../../hooks/use-toast";
+import { persistUpdateTask, useTaskStore } from "../../stores/task-store";
 import { Badge } from "../ui/badge";
+import {
+	Collapsible,
+	CollapsibleContent,
+	CollapsibleTrigger,
+} from "../ui/collapsible";
+import { Textarea } from "../ui/textarea";
 
 // Schéma de sanitization personnalisé permettant les styles inline
 const customSanitizeSchema = {
@@ -144,6 +156,72 @@ export function TaskMetadata({ task }: TaskMetadataProps) {
 
 	// Détecter si le contenu est du HTML pur (commence par une balise HTML)
 	const isHtmlContent = displayDescription?.trim().startsWith("<") || false;
+
+	// Hydratation des tâches importées d'Azure DevOps, à l'ouverture :
+	//  - le titre slugifié a perdu ses accents (« fen-tre-… ») → on récupère le
+	//    vrai System.Title (avec accents) via le PAT côté main ;
+	//  - les <img> pointant vers des pièces jointes protégées par PAT ne se
+	//    chargent pas dans le renderer (ERR_TIMED_OUT) → on les inline en data URI.
+	// Le résultat est persisté côté main et reflété immédiatement ici.
+	const [inlinedDescription, setInlinedDescription] = useState<string | null>(
+		null,
+	);
+	// Hydrate au plus une fois par tâche : mettre à jour le titre dans le store
+	// fait re-jouer cet effet, on ne veut ni re-fetch ni flicker de la description.
+	const hydratedTaskIdRef = useRef<string | null>(null);
+
+	useEffect(() => {
+		// Nouvelle tâche ouverte → on réinitialise l'état d'hydratation.
+		if (hydratedTaskIdRef.current !== task.id) {
+			setInlinedDescription(null);
+		}
+
+		const isImported = task.metadata?.sourceType === "imported";
+		const hasAttachmentImages =
+			isHtmlContent &&
+			!!displayDescription?.includes("/_apis/wit/attachments/");
+		// Un titre encore slugifié (ex. « 003-fen-tre-… ») = titre non hydraté.
+		const titleLooksSlugified = /^\d{3}-/.test(task.title || "");
+
+		if (!isImported || (!hasAttachmentImages && !titleLooksSlugified)) return;
+		if (hydratedTaskIdRef.current === task.id) return; // déjà hydraté
+		hydratedTaskIdRef.current = task.id;
+
+		let cancelled = false;
+		(async () => {
+			try {
+				const res =
+					await globalThis.electronAPI?.hydrateAzureDevOpsTaskDisplay?.(
+						task.projectId,
+						task.id,
+					);
+				if (cancelled || !res?.success) return;
+				if (res.data?.html) {
+					setInlinedDescription(res.data.html);
+				}
+				// Reflète immédiatement le titre accentué dans l'en-tête (la version
+				// persistée sera reprise par le scanner au prochain rafraîchissement).
+				if (res.data?.title && res.data.title !== task.title) {
+					useTaskStore.getState().updateTask(task.id, { title: res.data.title });
+				}
+			} catch {
+				// Non bloquant : on conserve l'affichage d'origine.
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		task.id,
+		task.projectId,
+		task.title,
+		task.metadata?.sourceType,
+		displayDescription,
+		isHtmlContent,
+	]);
+
+	// HTML effectivement rendu : version inlinée si disponible, sinon l'originale.
+	const htmlToRender = inlinedDescription ?? displayDescription;
 
 	// Transformer le HTML pour appliquer les styles du thème
 	const transformHtmlStyles = (html: string): string => {
@@ -522,7 +600,7 @@ export function TaskMetadata({ task }: TaskMetadataProps) {
 									// biome-ignore lint/security/noDangerouslySetInnerHtml: content is sanitized before use
 									dangerouslySetInnerHTML={{
 										__html: DOMPurify.sanitize(
-											transformHtmlStyles(displayDescription || ""),
+											transformHtmlStyles(htmlToRender || ""),
 											{
 												ADD_TAGS: [
 													"span",
@@ -681,21 +759,11 @@ export function TaskMetadata({ task }: TaskMetadataProps) {
 						</div>
 					)}
 
-					{/* Acceptance Criteria */}
-					{task.metadata.acceptanceCriteria &&
-						task.metadata.acceptanceCriteria.length > 0 && (
-							<div>
-								<h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
-									<ListChecks className="h-3 w-3 text-success" />
-									{t("tasks:metadata.acceptanceCriteria")}
-								</h3>
-								<ul className="text-sm text-foreground/80 list-disc list-inside space-y-0.5">
-									{task.metadata.acceptanceCriteria.map((criteria) => (
-										<li key={criteria.trim()}>{criteria}</li>
-									))}
-								</ul>
-							</div>
-						)}
+					{/* Acceptance Criteria — always visible, editable */}
+					<AcceptanceCriteriaSection task={task} />
+
+					{/* Extra note — editable, persisted as additional_context */}
+					<ExtraNoteSection task={task} />
 
 					{/* Affected Files */}
 					{task.metadata.affectedFiles &&
@@ -727,5 +795,345 @@ export function TaskMetadata({ task }: TaskMetadataProps) {
 				</div>
 			)}
 		</div>
+	);
+}
+
+interface AcceptanceCriteriaListProps {
+	readonly criteria: readonly string[];
+}
+
+// Renders a flat AC list as visually-grouped Gherkin scenarios.
+// A line starting with "Scénario"/"Scenario" (case-insensitive) opens a new
+// group rendered as a header; following lines are indented plain text. Lines
+// that are not part of a scenario fall into an unlabeled group so the list
+// still renders something readable when the AC isn't BDD-shaped.
+function AcceptanceCriteriaList({ criteria }: AcceptanceCriteriaListProps) {
+	const scenarioRe = /^\s*sc[ée]nario\b/i;
+	const groups: { title: string | null; lines: string[] }[] = [];
+	let current: { title: string | null; lines: string[] } | null = null;
+
+	for (const raw of criteria) {
+		const line = raw.trim();
+		if (!line) continue;
+		if (scenarioRe.test(line)) {
+			current = { title: line, lines: [] };
+			groups.push(current);
+			continue;
+		}
+		if (!current) {
+			current = { title: null, lines: [] };
+			groups.push(current);
+		}
+		current.lines.push(line);
+	}
+
+	return (
+		<div className="text-sm text-foreground/80 space-y-3 mb-2">
+			{groups.map((group) => {
+				const groupKey = `${group.title ?? "intro"}::${group.lines[0] ?? ""}`;
+				return (
+					<div key={groupKey} className="space-y-1">
+						{group.title && (
+							<div className="font-semibold text-foreground">
+								{group.title}
+							</div>
+						)}
+						{group.lines.length > 0 && (
+							<div
+								className={
+									group.title
+										? "pl-3 border-l-2 border-border space-y-0.5"
+										: "space-y-0.5"
+								}
+							>
+								{group.lines.map((line) => (
+									<div key={`${groupKey}::${line}`}>{line}</div>
+								))}
+							</div>
+						)}
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
+interface AcceptanceCriteriaSectionProps {
+	readonly task: Task;
+}
+
+function AcceptanceCriteriaSection({ task }: AcceptanceCriteriaSectionProps) {
+	const { t } = useTranslation(["tasks"]);
+	const { toast } = useToast();
+	const initialCriteria = task.metadata?.acceptanceCriteria ?? [];
+	const initialText = initialCriteria.join("\n");
+
+	// Extract ADO work item ID from "ADO-603226" format
+	const adoWorkItemId = task.metadata?.azureDevOpsIdentifier
+		? Number(task.metadata.azureDevOpsIdentifier.replace(/^ADO-/i, ""))
+		: null;
+	const isAdoTask = adoWorkItemId !== null && !Number.isNaN(adoWorkItemId);
+
+	const [open, setOpen] = useState(initialCriteria.length > 0);
+	const [isEditing, setIsEditing] = useState(false);
+	const [draft, setDraft] = useState(initialText);
+	const [isSaving, setIsSaving] = useState(false);
+	const [isSyncing, setIsSyncing] = useState(false);
+	const [savedAt, setSavedAt] = useState<number | null>(null);
+
+	// Sync the textarea draft from the source of truth — but ONLY when the
+	// user isn't actively editing. Otherwise every store-triggered re-render
+	// (incoming task refresh, kanban poll, etc.) would silently wipe what
+	// the user has been typing and lock `isDirty` to false, making the
+	// "Enregistrer" button uncliquable.
+	useEffect(() => {
+		if (isEditing) return;
+		const fresh = task.metadata?.acceptanceCriteria ?? [];
+		setDraft(fresh.join("\n"));
+	}, [task.metadata?.acceptanceCriteria, isEditing]);
+
+	const parsedDraft = draft
+		.split("\n")
+		.map((l) => l.trim().replace(/^[-*•]\s*/, ""))
+		.filter(Boolean);
+
+	const isDirty = parsedDraft.join("\n") !== initialCriteria.join("\n");
+
+	const handleSave = async () => {
+		setIsSaving(true);
+		const ok = await persistUpdateTask(task.id, {
+			metadata: { acceptanceCriteria: parsedDraft },
+		});
+		setIsSaving(false);
+		if (ok) {
+			setSavedAt(Date.now());
+			setIsEditing(false);
+			if (parsedDraft.length > 0) setOpen(true);
+		} else {
+			// Without this toast the button silently bounces back to "Enregistrer"
+			// and the user has no way to know whether the IPC failed, the file
+			// couldn't be written, or something else went wrong.
+			toast({
+				title: t(
+					"tasks:metadata.acSaveErrorTitle",
+					"Échec de l'enregistrement",
+				),
+				description: t(
+					"tasks:metadata.acSaveErrorDesc",
+					"Impossible de sauvegarder les critères d'acceptation. Voir la console pour les détails.",
+				),
+				variant: "destructive",
+			});
+		}
+	};
+
+	const handleCancel = () => {
+		setDraft(initialCriteria.join("\n"));
+		setIsEditing(false);
+	};
+
+	const handleSyncFromAdo = async () => {
+		if (!isAdoTask || !adoWorkItemId) return;
+		setIsSyncing(true);
+		try {
+			const result = await globalThis.electronAPI.syncAzureDevOpsTaskAC(
+				task.projectId,
+				task.id,
+				adoWorkItemId,
+			);
+			if (result.success && result.data) {
+				const synced = result.data.acceptanceCriteria;
+				await persistUpdateTask(task.id, { metadata: { acceptanceCriteria: synced } });
+				setOpen(synced.length > 0);
+				setSavedAt(Date.now());
+			}
+		} finally {
+			setIsSyncing(false);
+		}
+	};
+
+	return (
+		<Collapsible open={open} onOpenChange={setOpen}>
+			<CollapsibleTrigger asChild>
+				<button
+					type="button"
+					className="flex w-full items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5 hover:text-foreground transition-colors"
+					aria-expanded={open}
+				>
+					{open ? (
+						<ChevronDown className="h-3 w-3" aria-hidden="true" />
+					) : (
+						<ChevronRight className="h-3 w-3" aria-hidden="true" />
+					)}
+					<ListChecks className="h-3 w-3 text-success" />
+					<span>{t("tasks:metadata.acceptanceCriteria")}</span>
+					{initialCriteria.length > 0 && (
+						<Badge variant="secondary" className="ml-1 text-[10px] h-4 px-1.5">
+							{initialCriteria.length}
+						</Badge>
+					)}
+				</button>
+			</CollapsibleTrigger>
+			<CollapsibleContent>
+				{isEditing ? (
+					<>
+						<Textarea
+							value={draft}
+							onChange={(e) => setDraft(e.target.value)}
+							placeholder={t("tasks:metadata.acPlaceholder")}
+							rows={5}
+							className="text-sm"
+						/>
+						<div className="flex items-center justify-between mt-2 gap-2">
+							<span className="text-xs text-muted-foreground">
+								{savedAt && !isDirty
+									? t("tasks:metadata.acSaved")
+									: t("tasks:metadata.acHelp")}
+							</span>
+							<div className="flex gap-1.5">
+								<Button
+									size="sm"
+									variant="ghost"
+									onClick={handleCancel}
+									disabled={isSaving}
+								>
+									{t("tasks:metadata.acCancel")}
+								</Button>
+								<Button
+									size="sm"
+									onClick={handleSave}
+									// Only disable during the actual save round-trip.
+									// We deliberately allow clicking when isDirty is
+									// false: re-render races (a kanban poll firing
+									// while the user is editing) can momentarily reset
+									// the draft to match the original, which used to
+									// lock the button uncliquable. Letting the user
+									// click is harmless — handleSave is idempotent.
+									disabled={isSaving}
+								>
+									{isSaving
+										? t("tasks:metadata.acSaving")
+										: t("tasks:metadata.acSave")}
+								</Button>
+							</div>
+						</div>
+					</>
+				) : (
+					<>
+						{initialCriteria.length > 0 ? (
+							<AcceptanceCriteriaList criteria={initialCriteria} />
+						) : (
+							<p className="text-xs text-muted-foreground italic mb-2">
+								{t("tasks:metadata.acEmpty")}
+							</p>
+						)}
+						<div className="flex items-center gap-3 flex-wrap">
+							<button
+								type="button"
+								onClick={() => {
+									setIsEditing(true);
+									setOpen(true);
+								}}
+								className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+							>
+								<Pencil className="h-3 w-3" />
+								{t("tasks:metadata.acEdit")}
+							</button>
+							{isAdoTask && (
+								<button
+									type="button"
+									onClick={handleSyncFromAdo}
+									disabled={isSyncing}
+									className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+								>
+									<Check className="h-3 w-3" />
+									{isSyncing
+										? t("tasks:metadata.acSyncing")
+										: t("tasks:metadata.acSyncFromAdo")}
+								</button>
+							)}
+						</div>
+					</>
+				)}
+			</CollapsibleContent>
+		</Collapsible>
+	);
+}
+
+interface ExtraNoteSectionProps {
+	readonly task: Task;
+}
+
+function ExtraNoteSection({ task }: ExtraNoteSectionProps) {
+	const { t } = useTranslation(["tasks"]);
+	const initial = task.metadata?.extraNote ?? "";
+	const [open, setOpen] = useState(initial.length > 0);
+	const [draft, setDraft] = useState(initial);
+	const [isSaving, setIsSaving] = useState(false);
+	const [savedAt, setSavedAt] = useState<number | null>(null);
+
+	useEffect(() => {
+		setDraft(task.metadata?.extraNote ?? "");
+	}, [task.metadata?.extraNote]);
+
+	const isDirty = draft !== initial;
+
+	const handleSave = async () => {
+		setIsSaving(true);
+		const ok = await persistUpdateTask(task.id, {
+			metadata: { extraNote: draft },
+		});
+		setIsSaving(false);
+		if (ok) {
+			setSavedAt(Date.now());
+		}
+	};
+
+	return (
+		<Collapsible open={open} onOpenChange={setOpen}>
+			<CollapsibleTrigger asChild>
+				<button
+					type="button"
+					className="flex w-full items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5 hover:text-foreground transition-colors"
+					aria-expanded={open}
+				>
+					{open ? (
+						<ChevronDown className="h-3 w-3" aria-hidden="true" />
+					) : (
+						<ChevronRight className="h-3 w-3" aria-hidden="true" />
+					)}
+					<StickyNote className="h-3 w-3 text-warning" />
+					<span>{t("tasks:metadata.extraNote")}</span>
+					{initial.length > 0 && (
+						<Check className="h-3 w-3 text-success" aria-hidden="true" />
+					)}
+				</button>
+			</CollapsibleTrigger>
+			<CollapsibleContent>
+				<Textarea
+					value={draft}
+					onChange={(e) => setDraft(e.target.value)}
+					placeholder={t("tasks:metadata.extraNotePlaceholder")}
+					rows={4}
+					className="text-sm"
+				/>
+				<div className="flex items-center justify-between mt-2 gap-2">
+					<span className="text-xs text-muted-foreground">
+						{savedAt && !isDirty
+							? t("tasks:metadata.extraNoteSaved")
+							: t("tasks:metadata.extraNoteHelp")}
+					</span>
+					<Button
+						size="sm"
+						onClick={handleSave}
+						disabled={!isDirty || isSaving}
+					>
+						{isSaving
+							? t("tasks:metadata.extraNoteSaving")
+							: t("tasks:metadata.extraNoteSave")}
+					</Button>
+				</div>
+			</CollapsibleContent>
+		</Collapsible>
 	);
 }

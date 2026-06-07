@@ -167,6 +167,9 @@ export function TaskCreationWizard({
 	const [requireReviewBeforeCoding, setRequireReviewBeforeCoding] =
 		useState(false);
 
+	// TDD override (per-task) - default false (inherit project setting)
+	const [tddMode, setTddMode] = useState(false);
+
 	// Draft state
 	const [isDraftRestored, setIsDraftRestored] = useState(false);
 
@@ -217,6 +220,7 @@ export function TaskCreationWizard({
 				setImages(draft.images);
 				setReferencedFiles(draft.referencedFiles ?? []);
 				setRequireReviewBeforeCoding(draft.requireReviewBeforeCoding ?? false);
+				setTddMode(draft.tddMode ?? false);
 				setIsDraftRestored(true);
 
 				if (
@@ -341,6 +345,7 @@ export function TaskCreationWizard({
 			images,
 			referencedFiles,
 			requireReviewBeforeCoding,
+			tddMode,
 			savedAt: new Date(),
 		}),
 		[
@@ -359,6 +364,7 @@ export function TaskCreationWizard({
 			images,
 			referencedFiles,
 			requireReviewBeforeCoding,
+			tddMode,
 		],
 	);
 
@@ -559,6 +565,7 @@ export function TaskCreationWizard({
 			if (allReferencedFiles.length > 0)
 				metadata.referencedFiles = allReferencedFiles;
 			if (requireReviewBeforeCoding) metadata.requireReviewBeforeCoding = true;
+			if (tddMode) metadata.tddMode = true;
 			// Always include baseBranch - resolve PROJECT_DEFAULT_BRANCH to actual branch name
 			// This ensures the backend always knows which branch to use for worktree creation
 			if (baseBranch === PROJECT_DEFAULT_BRANCH) {
@@ -811,6 +818,8 @@ export function TaskCreationWizard({
 					onImagesChange={setImages}
 					requireReviewBeforeCoding={requireReviewBeforeCoding}
 					onRequireReviewChange={setRequireReviewBeforeCoding}
+					tddMode={tddMode}
+					onTddModeChange={setTddMode}
 					disabled={isCreating}
 					error={error}
 					onError={setError}

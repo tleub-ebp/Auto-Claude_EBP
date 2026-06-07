@@ -86,6 +86,11 @@ export class BrowserWindow extends EventEmitter {
 		send: createMockFn(),
 		on: createMockFn(),
 		once: createMockFn(),
+		capturePage: createMockFn(() =>
+			Promise.resolve({
+				toPNG: () => Buffer.from("mock-image"),
+			}),
+		),
 	};
 
 	id = 1;
@@ -162,6 +167,21 @@ export const screen = {
 	})),
 };
 
+export const desktopCapturer = {
+	getSources: createMockFn(() =>
+		Promise.resolve([
+			{
+				id: "screen:0",
+				name: "Primary screen",
+				thumbnail: {
+					getSize: () => ({ width: 1440, height: 1000 }),
+					toPNG: () => Buffer.from("mock-desktop-image"),
+				},
+			},
+		]),
+	),
+};
+
 export default {
 	app,
 	ipcMain,
@@ -172,4 +192,5 @@ export default {
 	shell,
 	nativeTheme,
 	screen,
+	desktopCapturer,
 };

@@ -304,6 +304,100 @@ class TestWorktreeCreation:
         assert not (info2.path / "stale-file.txt").exists()
 
 
+class TestWorktreeAddRetry:
+    """Tests for the transient-failure retry around `git worktree add`.
+
+    `git worktree add` is flaky on Windows CI: it intermittently exits non-zero
+    with an empty stderr while antivirus/indexing briefly locks a just-created
+    file during checkout. These tests pin the retry/cleanup behaviour.
+    """
+
+    def test_empty_stderr_is_retryable(self):
+        """An empty stderr (the Windows CI signature) is treated as transient."""
+        from core.worktree import _is_retryable_worktree_add_error
+
+        assert _is_retryable_worktree_add_error("")
+        assert _is_retryable_worktree_add_error("   \n")
+
+    def test_lock_messages_are_retryable(self):
+        """Known file-locking messages are treated as transient."""
+        from core.worktree import _is_retryable_worktree_add_error
+
+        assert _is_retryable_worktree_add_error(
+            "fatal: Unable to create '.../index.lock': File exists"
+        )
+        assert _is_retryable_worktree_add_error(
+            "error: The process cannot access the file because it is "
+            "being used by another process"
+        )
+
+    def test_genuine_errors_are_not_retryable(self):
+        """A real, non-transient git error is not retried."""
+        from core.worktree import _is_retryable_worktree_add_error
+
+        assert not _is_retryable_worktree_add_error(
+            "fatal: invalid reference: does-not-exist"
+        )
+
+    def test_create_worktree_retries_transient_failure(
+        self, temp_git_repo: Path, monkeypatch
+    ):
+        """A transient `worktree add` failure is retried and then succeeds."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+
+        real_run_git = manager._run_git
+        calls = {"add": 0}
+
+        def flaky_run_git(args, *a, **kw):
+            # Fail the first `worktree add` with an empty stderr (Windows CI
+            # signature), then let the real command run on the retry.
+            if len(args) >= 2 and args[0] == "worktree" and args[1] == "add":
+                calls["add"] += 1
+                if calls["add"] == 1:
+                    return subprocess.CompletedProcess(
+                        args=args, returncode=1, stdout="", stderr=""
+                    )
+            return real_run_git(args, *a, **kw)
+
+        monkeypatch.setattr(manager, "_run_git", flaky_run_git)
+
+        info = manager.create_worktree("test-spec")
+
+        assert calls["add"] >= 2, "worktree add should have been retried"
+        assert info.path.exists()
+        assert info.branch == "workpilot/test-spec"
+        assert (info.path / "README.md").exists()
+
+    def test_create_worktree_reports_output_on_persistent_failure(
+        self, temp_git_repo: Path, monkeypatch
+    ):
+        """A non-transient failure surfaces git's output instead of an empty msg."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+
+        real_run_git = manager._run_git
+
+        def failing_run_git(args, *a, **kw):
+            if len(args) >= 2 and args[0] == "worktree" and args[1] == "add":
+                return subprocess.CompletedProcess(
+                    args=args,
+                    returncode=128,
+                    stdout="",
+                    stderr="fatal: invalid reference: boom",
+                )
+            return real_run_git(args, *a, **kw)
+
+        monkeypatch.setattr(manager, "_run_git", failing_run_git)
+
+        with pytest.raises(Exception) as exc_info:
+            manager.create_worktree("test-spec")
+
+        message = str(exc_info.value)
+        assert "git exit 128" in message
+        assert "invalid reference: boom" in message
+
+
 class TestWorktreeRemoval:
     """Tests for removing worktrees."""
 
@@ -334,6 +428,47 @@ class TestWorktreeRemoval:
             text=True,
         )
         assert branch_name not in result.stdout
+
+    def test_remove_worktree_with_uncommitted_changes_raises_error(self, temp_git_repo: Path):
+        """Removing worktree with uncommitted changes raises RuntimeError."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+        info = manager.create_worktree("test-spec")
+
+        # Create an uncommitted change in the worktree
+        (info.path / "new-file.txt").write_text("uncommitted content")
+
+        # Should raise RuntimeError instead of silently deleting
+        with pytest.raises(RuntimeError) as exc_info:
+            manager.remove_worktree("test-spec")
+
+        assert "uncommitted" in str(exc_info.value).lower()
+        assert "new-file.txt" in str(exc_info.value)
+        # Worktree should still exist
+        assert info.path.exists()
+
+    def test_remove_worktree_after_committing_changes(self, temp_git_repo: Path):
+        """Can remove worktree after committing changes."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+        info = manager.create_worktree("test-spec")
+
+        # Create and commit a change in the worktree
+        (info.path / "new-file.txt").write_text("committed content")
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=info.path,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Test commit"],
+            cwd=info.path,
+            capture_output=True,
+        )
+
+        # Should remove successfully now
+        manager.remove_worktree("test-spec")
+        assert not info.path.exists()
 
 
 class TestWorktreeCommitAndMerge:
@@ -521,6 +656,47 @@ class TestWorktreeCommitAndMerge:
         assert branch_name not in branch_list_result.stdout, (
             f"Branch {branch_name} should be deleted"
         )
+
+    def test_merge_with_delete_after_but_uncommitted_changes(self, temp_git_repo: Path):
+        """merge_worktree with delete_after=True preserves worktree if it has uncommitted changes."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+
+        # Create a worktree with changes
+        worker_info = manager.create_worktree("worker-spec")
+        (worker_info.path / "worker-file.txt").write_text("worker content")
+        add_result = subprocess.run(
+            ["git", "add", "."], cwd=worker_info.path, capture_output=True
+        )
+        assert add_result.returncode == 0, f"git add failed: {add_result.stderr}"
+        commit_result = subprocess.run(
+            ["git", "commit", "-m", "Worker commit"],
+            cwd=worker_info.path,
+            capture_output=True,
+        )
+        assert commit_result.returncode == 0, (
+            f"git commit failed: {commit_result.stderr}"
+        )
+
+        # First merge succeeds
+        result = manager.merge_worktree("worker-spec", delete_after=False)
+        assert result is True
+
+        # Now create an uncommitted change in the worktree
+        (worker_info.path / "uncommitted.txt").write_text("uncommitted content")
+
+        # Second merge with delete_after=True should succeed but NOT delete worktree
+        # because it has uncommitted changes
+        result = manager.merge_worktree("worker-spec", delete_after=True)
+        assert result is True
+
+        # Worktree should STILL exist (not deleted)
+        assert worker_info.path.exists(), (
+            "Worktree should be preserved because it has uncommitted changes"
+        )
+
+        # But the uncommitted file should still be there
+        assert (worker_info.path / "uncommitted.txt").exists()
 
     def test_merge_worktree_conflict_detection(self, temp_git_repo: Path):
         """merge_worktree correctly detects and handles merge conflicts."""
@@ -987,3 +1163,165 @@ class TestWorktreeCleanup:
         warning = manager.get_worktree_count_warning(critical_threshold=20)
         assert warning is not None
         assert "CRITICAL" in warning
+
+
+class TestEmptyPRGuard:
+    """Garde-fou : pas de PR vide depuis push_and_create_pr."""
+
+    def test_count_commits_ahead_returns_zero_for_fresh_branch(
+        self, temp_git_repo: Path
+    ):
+        """Une branche fraîche (créée depuis main, sans nouveau commit) doit
+        rapporter 0 commit en avance."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+        manager.create_worktree("empty-spec")
+
+        ahead = manager._count_commits_ahead("empty-spec", manager.base_branch)
+
+        assert ahead == 0
+
+    def test_count_commits_ahead_after_commit(self, temp_git_repo: Path):
+        """Après un commit dans le worktree, le compteur doit refléter
+        l'avance par rapport à la base."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+        info = manager.create_worktree("work-spec")
+
+        (info.path / "feature.txt").write_text("nouveau contenu\n")
+        assert manager.commit_in_worktree("work-spec", "feat: ajout feature")
+
+        ahead = manager._count_commits_ahead("work-spec", manager.base_branch)
+
+        assert ahead == 1
+
+    def test_count_commits_ahead_unknown_target_returns_none(
+        self, temp_git_repo: Path
+    ):
+        """Une cible inconnue (ni locale ni distante) renvoie None pour
+        permettre au caller de décider quoi faire."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+        manager.create_worktree("spec")
+
+        assert manager._count_commits_ahead("spec", "branche-inexistante") is None
+
+    def test_push_and_create_pr_refuses_empty_branch(
+        self, temp_git_repo: Path, monkeypatch
+    ):
+        """push_and_create_pr doit refuser une branche sans commit en
+        avance pour éviter de créer une PR vide silencieusement."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+        manager.create_worktree("idle-spec")
+
+        # Si push_branch était appelé, on aurait un network error : on ne le
+        # mocke volontairement pas pour vérifier que le garde-fou court-circuite.
+        push_called = {"value": False}
+
+        def fake_push(*_args, **_kwargs):
+            push_called["value"] = True
+            return {"success": True, "branch": "x", "remote": "origin"}
+
+        monkeypatch.setattr(manager, "push_branch", fake_push)
+
+        result = manager.push_and_create_pr(
+            "idle-spec",
+            target_branch=manager.base_branch,
+            title="ne devrait pas être créée",
+        )
+
+        assert result["success"] is False
+        assert result["pushed"] is False
+        assert "Aucun commit" in (result.get("error") or "")
+        assert push_called["value"] is False
+
+
+class TestApplyDiscardList:
+    """Vérifie que la discard list est appliquée à la branche avant le push,
+    afin d'éviter toute décorrélation entre l'aperçu filtré et la PR."""
+
+    def _diff_files_against_base(
+        self, manager: WorktreeManager, spec: str
+    ) -> list[str]:
+        worktree_path = manager.get_worktree_path(spec)
+        result = manager._run_git(
+            ["diff", "--name-only", f"{manager.base_branch}...HEAD"],
+            cwd=worktree_path,
+        )
+        return [line for line in result.stdout.strip().split("\n") if line]
+
+    def test_no_discard_list_is_noop(self, temp_git_repo: Path):
+        """Sans fichier .workpilot-discard-list, aucun fichier n'est reverté."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+        info = manager.create_worktree("no-discard-spec")
+
+        (info.path / "feature.txt").write_text("contenu\n")
+        assert manager.commit_in_worktree("no-discard-spec", "feat: feature")
+
+        reverted = manager._apply_discard_list("no-discard-spec", manager.base_branch)
+
+        assert reverted == []
+        assert "feature.txt" in self._diff_files_against_base(
+            manager, "no-discard-spec"
+        )
+
+    def test_discards_added_and_modified_files(self, temp_git_repo: Path):
+        """Les fichiers ajoutés sont supprimés, les fichiers modifiés sont
+        restaurés à la version de la base ; ceux hors discard list restent."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+        info = manager.create_worktree("discard-spec")
+
+        # Fichier ajouté par la tâche (absent de la base)
+        (info.path / "added.txt").write_text("ajout tâche\n")
+        # Fichier existant modifié par la tâche
+        (info.path / "README.md").write_text("# Modifié par la tâche\n")
+        # Fichier conservé (hors discard list)
+        (info.path / "keep.txt").write_text("à garder\n")
+        assert manager.commit_in_worktree("discard-spec", "feat: trois fichiers")
+
+        # L'utilisateur abandonne added.txt et README.md
+        (info.path / ".workpilot-discard-list").write_text(
+            "added.txt\nREADME.md\n", encoding="utf-8"
+        )
+
+        reverted = manager._apply_discard_list("discard-spec", manager.base_branch)
+
+        assert set(reverted) == {"added.txt", "README.md"}
+
+        diff_files = self._diff_files_against_base(manager, "discard-spec")
+        # Les fichiers abandonnés ne doivent plus apparaître dans le diff
+        assert "added.txt" not in diff_files
+        assert "README.md" not in diff_files
+        # Le fichier conservé reste dans le diff
+        assert "keep.txt" in diff_files
+
+        # added.txt est physiquement supprimé du worktree
+        assert not (info.path / "added.txt").exists()
+        # README.md est restauré au contenu de la base
+        assert (info.path / "README.md").read_text() == "# Test repo\n"
+
+    def test_discard_list_excludes_files_from_pr_branch(self, temp_git_repo: Path):
+        """Le commit de revert généré exclut bien les fichiers de la branche
+        poussée (aucune décorrélation avec le diff filtré)."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+        info = manager.create_worktree("corr-spec")
+
+        (info.path / "secret.txt").write_text("ne pas pousser\n")
+        (info.path / "wanted.txt").write_text("à pousser\n")
+        assert manager.commit_in_worktree("corr-spec", "feat: deux fichiers")
+
+        (info.path / ".workpilot-discard-list").write_text(
+            "secret.txt\n", encoding="utf-8"
+        )
+
+        manager._apply_discard_list("corr-spec", manager.base_branch)
+
+        diff_files = self._diff_files_against_base(manager, "corr-spec")
+        assert "secret.txt" not in diff_files
+        assert "wanted.txt" in diff_files
+
+

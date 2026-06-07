@@ -86,6 +86,27 @@ def _validate_file_path(path: str) -> bool:
     return bool(SAFE_PATH_PATTERN.match(path))
 
 
+async def _communicate_with_timeout(
+    proc: asyncio.subprocess.Process, timeout: float
+) -> tuple[bytes, bytes]:
+    """
+    Run proc.communicate() under a timeout, killing and reaping the child on timeout.
+
+    Without explicit kill+wait, asyncio.wait_for cancels the future but the subprocess
+    keeps running and holds stdout/stderr file descriptors. Repeated timeouts then
+    exhaust fds and leave zombie processes.
+    """
+    try:
+        return await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        raise
+
+
 if TYPE_CHECKING:
     try:
         from .models import FollowupReviewContext, PRReviewResult
@@ -399,7 +420,7 @@ class PRContextGatherer:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            stdout, stderr = await _communicate_with_timeout(proc, 30.0)
 
             if proc.returncode == 0:
                 safe_print(
@@ -419,7 +440,7 @@ class PRContextGatherer:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                await asyncio.wait_for(proc2.communicate(), timeout=30.0)
+                await _communicate_with_timeout(proc2, 30.0)
                 if proc2.returncode == 0:
                     safe_print(
                         f"[Context] Fetched PR ref: refs/pr/{self.pr_number}",
@@ -528,7 +549,7 @@ class PRContextGatherer:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+            stdout, stderr = await _communicate_with_timeout(proc, 10.0)
 
             # File might not exist in base branch (new file)
             if proc.returncode != 0:
@@ -581,7 +602,7 @@ class PRContextGatherer:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+            stdout, stderr = await _communicate_with_timeout(proc, 10.0)
 
             if proc.returncode != 0:
                 safe_print(

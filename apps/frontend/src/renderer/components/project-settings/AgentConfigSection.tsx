@@ -1,5 +1,6 @@
-import { AVAILABLE_MODELS } from "../../../shared/constants";
 import type { ProjectSettings } from "../../../shared/types";
+import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
+import { useProviderContext } from "../ProviderContext";
 import { Label } from "../ui/label";
 import {
 	Select,
@@ -18,6 +19,9 @@ export function AgentConfigSection({
 	settings,
 	onUpdateSettings,
 }: AgentConfigSectionProps) {
+	const { selectedProvider } = useProviderContext();
+	const { models } = useProviderModelCatalog(selectedProvider || "anthropic");
+
 	return (
 		<section className="space-y-4">
 			<h3 className="text-sm font-semibold text-foreground">
@@ -35,7 +39,7 @@ export function AgentConfigSection({
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
-						{AVAILABLE_MODELS.map((model) => (
+						{models.map((model) => (
 							<SelectItem key={model.value} value={model.value}>
 								{model.label}
 							</SelectItem>

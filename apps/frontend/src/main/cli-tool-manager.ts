@@ -298,8 +298,20 @@ export function buildClaudeDetectionResult(
  *   const pythonPath = getToolPath('python');
  *   const gitPath = getToolPath('git');
  */
+// TTL for the diagnostics cache used by getToolInfo (Settings UI).
+// Each call spawns up to 5 child processes synchronously, which freezes the
+// main process event loop on Windows when antivirus is involved. A short TTL
+// avoids re-running detections when the user reopens the page repeatedly.
+const TOOL_INFO_CACHE_TTL_MS = 30_000;
+
+interface ToolInfoCacheEntry {
+	result: ToolDetectionResult;
+	timestamp: number;
+}
+
 class CLIToolManager {
 	private readonly cache: Map<CLITool, CacheEntry> = new Map();
+	private readonly toolInfoCache: Map<CLITool, ToolInfoCacheEntry> = new Map();
 	private userConfig: ToolConfig = {};
 
 	/**
@@ -313,6 +325,7 @@ class CLIToolManager {
 	configure(config: ToolConfig): void {
 		this.userConfig = config;
 		this.cache.clear();
+		this.toolInfoCache.clear();
 		console.warn("[CLI Tools] Configuration updated, cache cleared");
 	}
 
@@ -2604,20 +2617,28 @@ class CLIToolManager {
 	 */
 	clearCache(): void {
 		this.cache.clear();
+		this.toolInfoCache.clear();
 		console.warn("[CLI Tools] Cache cleared");
 	}
 
 	/**
 	 * Get tool detection info for diagnostics
 	 *
-	 * Performs fresh detection without using cache.
-	 * Useful for Settings UI to show current detection status.
+	 * Uses a short-lived TTL cache to avoid spawning child processes on every
+	 * call (each detection runs `--version` synchronously, which can stall the
+	 * main process when 5 tools are queried at once).
 	 *
 	 * @param tool - The tool to get detection info for
 	 * @returns Detection result with full metadata
 	 */
 	getToolInfo(tool: CLITool): ToolDetectionResult {
-		return this.detectToolPath(tool);
+		const cached = this.toolInfoCache.get(tool);
+		if (cached && Date.now() - cached.timestamp < TOOL_INFO_CACHE_TTL_MS) {
+			return cached.result;
+		}
+		const result = this.detectToolPath(tool);
+		this.toolInfoCache.set(tool, { result, timestamp: Date.now() });
+		return result;
 	}
 }
 

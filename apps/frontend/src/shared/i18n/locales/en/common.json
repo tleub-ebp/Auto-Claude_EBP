@@ -10,7 +10,12 @@
 		"addProjectAriaLabel": "Add project",
 		"addProjectTooltip": "Add new project",
 		"selectTab": "Switch to {{projectName}}",
-		"renameAriaLabel": "Rename project"
+		"renameAriaLabel": "Rename project",
+		"missingPathTitle": "Project folder no longer exists",
+		"missingPathDescription": "The project may have been moved or deleted. Pick the new folder to recover it, or remove it from the app.",
+		"missingPathFix": "Fix this project",
+		"missingPathFixAction": "Re-point…",
+		"missingPathRemove": "Remove"
 	},
 	"accessibility": {
 		"deleteFeatureAriaLabel": "Delete feature",
@@ -74,6 +79,7 @@
 		"retry": "Retry",
 		"create": "Create",
 		"createPR": "Create PR",
+		"updatePR": "Update PR",
 		"openPR": "Open PR",
 		"open": "Open",
 		"start": "Start",
@@ -100,7 +106,7 @@
 		"apply": "Apply",
 		"delete": "Delete",
 		"settings": "Settings",
-		"cliToolsAndSettings": "CLI Tools & Settings",
+		"cliTools": "CLI Tools",
 		"next": "Next",
 		"createProject": "Create Project",
 		"enabled": "enabled",
@@ -504,6 +510,13 @@
 		"providerCursor": "Cursor",
 		"providerAWS": "AWS Bedrock",
 		"providerUnknown": "Unknown",
+		"copilotTokensSuffix": " Tok",
+		"copilotTokensTitle": "Tokens consumed (Copilot)",
+		"copilotContextTitle": "Context used — {{model}}",
+		"copilotContextTitleShort": "Context window",
+		"copilotContextDesc": "Percentage of the model's context window used on the last turn.",
+		"copilotContextPercentLabel": "Context used",
+		"copilotContextUsedLabel": "Tokens (context / max)",
 		"profile": "Profile",
 		"id": "ID",
 		"created": "Created",
@@ -591,7 +604,19 @@
 		"copilotMetricsDesc": "GitHub Copilot usage data for the last 28 days.",
 		"copilotAcceptancesLabel": "Acceptances",
 		"copilotAcceptanceRateLabel": "Acceptance rate",
-		"copilotTokensUsedLabel": "Tokens used"
+		"copilotTokensUsedLabel": "Tokens used",
+		"copilotPremiumTitle": "Copilot Premium Requests",
+		"copilotPremiumDescPlan": "{{plan}} plan — current billing cycle usage.",
+		"copilotPremiumDescDefault": "Copilot usage for the current billing cycle.",
+		"copilotPremiumUsedLabel": "Used",
+		"copilotPremiumEntitlementLabel": "Allowance",
+		"copilotPremiumRemainingLabel": "Remaining",
+		"copilotPremiumPercentLabel": "Consumed",
+		"copilotPremiumUnlimited": "Unlimited",
+		"copilotPremiumResetOn": "Resets on {{date}}",
+		"copilotPremiumOverageHint": "Beyond the quota, requests will be billed as overage.",
+		"copilotPlanLabel": "Plan",
+		"copilotOrganizationLabel": "Organization"
 	},
 	"oauth": {
 		"enterCode": "Manual Code Entry (Fallback)",
@@ -1066,5 +1091,6 @@
 		"stopTaskDescription": "Stop the task and navigate",
 		"pauseTask": "Pause task",
 		"pauseTaskDescription": "Navigate away and resume later"
-	}
+	},
+	"testing": "Testing..."
 }

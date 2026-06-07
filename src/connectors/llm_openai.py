@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 from .llm_base import BaseLLMProvider
 
@@ -8,7 +8,7 @@ class OpenAIProvider(BaseLLMProvider):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
-        self._client = None
+        self._client: Optional[Any] = None
 
     def connect(self) -> None:
         try:
@@ -22,8 +22,10 @@ class OpenAIProvider(BaseLLMProvider):
     def validate(self) -> bool:
         try:
             self.connect()
-            models = self._client.Model.list()
-            return any(m.id == self.model for m in models.data)
+            client = self._client.OpenAI(api_key=self.api_key, base_url=self.base_url)
+            response = client.models.list()
+            models = list(response)
+            return any(m.id == self.model for m in models)
         except Exception:
             return False
 

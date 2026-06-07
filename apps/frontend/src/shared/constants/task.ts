@@ -139,6 +139,39 @@ export const EXECUTION_PHASE_WEIGHTS: Record<
 	failed: { start: 0, end: 0 },
 };
 
+// Statuts pour lesquels une exécution est réellement en cours.
+// En dehors de ceux-ci (done, human_review, pr_created, error, queue...),
+// aucune phase ne doit être considérée comme active.
+const ACTIVELY_RUNNING_STATUSES: ReadonlySet<TaskStatus> = new Set([
+	"in_progress",
+	"ai_review",
+]);
+
+// Phases qui ne correspondent pas à un travail en cours.
+const NON_ACTIVE_EXECUTION_PHASES: ReadonlySet<string> = new Set([
+	"idle",
+	"complete",
+	"failed",
+]);
+
+/**
+ * Indique si une tâche a une phase d'exécution réellement active (donc devant
+ * afficher l'indicateur animé). Une phase obsolète (ex. "qa_review") laissée sur
+ * une tâche terminée ne doit PAS être considérée comme active.
+ */
+export function isExecutionPhaseActive(
+	status: TaskStatus,
+	phase: string | undefined,
+): boolean {
+	if (!phase) {
+		return false;
+	}
+	if (!ACTIVELY_RUNNING_STATUSES.has(status)) {
+		return false;
+	}
+	return !NON_ACTIVE_EXECUTION_PHASES.has(phase);
+}
+
 // ============================================
 // Task Categories
 // ============================================

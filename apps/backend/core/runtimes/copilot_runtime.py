@@ -62,7 +62,19 @@ class CopilotRuntime(AgentRuntime):
             stderr=asyncio.subprocess.PIPE,
             cwd=self.project_dir,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            # Without this, asyncio.wait_for cancels the future but the gh
+            # subprocess keeps running, holding stdout/stderr file
+            # descriptors. Repeated timeouts exhaust fds and leave zombie
+            # `gh` processes. Kill explicitly and reap before re-raising.
+            proc.kill()
+            try:
+                await proc.wait()
+            except Exception:
+                pass
+            raise
         stdout_str = stdout.decode("utf-8", errors="replace").strip()
         stderr_str = stderr.decode("utf-8", errors="replace").strip()
 

@@ -4,6 +4,13 @@ Example: Using the Output Validator in PR Review Workflow
 
 This example demonstrates how to integrate the FindingValidator
 into a PR review system to improve finding quality.
+
+NOTE: The Python code in the ``changed_files`` dict below contains
+INTENTIONALLY VULNERABLE code (MD5 password hashing, SQL injection
+via f-string) to exercise the validator. It is a string payload, never
+imported or executed — do NOT copy it into real code. The corresponding
+PRReviewFinding entries below show the validator correctly flagging
+these issues.
 """
 
 from pathlib import Path

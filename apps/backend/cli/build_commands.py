@@ -95,7 +95,7 @@ def handle_build_command(
         get_base_branch_from_metadata,
         get_use_local_branch_from_metadata,
     )
-    from qa_loop import run_qa_validation_loop, should_run_qa
+    from qa_loop import is_qa_approved, run_qa_validation_loop, should_run_qa
 
     from .utils import print_banner, validate_environment
 
@@ -259,7 +259,8 @@ def handle_build_command(
         # Run QA validation BEFORE finalization (while worktree still exists)
         # QA must sign off before the build is considered complete
         qa_approved = True  # Default to approved if QA is skipped
-        if not skip_qa and should_run_qa(spec_dir):
+        qa_should_run = not skip_qa and should_run_qa(spec_dir)
+        if qa_should_run:
             print("\n" + "=" * 70)
             print("  SUBTASKS COMPLETE - STARTING QA VALIDATION")
             print("=" * 70)
@@ -273,6 +274,7 @@ def handle_build_command(
                         spec_dir=spec_dir,
                         model=model,
                         verbose=verbose,
+                        source_spec_dir=source_spec_dir,
                     )
                 )
 
@@ -303,6 +305,23 @@ def handle_build_command(
                 print("\n\nQA validation paused.")
                 print(f"Resume: python workpilot/run.py --spec {spec_dir.name} --qa")
                 qa_approved = False
+        else:
+            # QA skipped — if the build is complete but QA was already approved,
+            # emit QA_PASSED so that frontend XState transitions from qa_review →
+            # human_review instead of leaving the kanban card stuck.
+            from progress import is_build_complete
+
+            if is_build_complete(spec_dir) and is_qa_approved(spec_dir):
+                try:
+                    from core.task_event import TaskEventEmitter
+
+                    task_event_emitter = TaskEventEmitter.from_spec_dir(spec_dir)
+                    task_event_emitter.emit(
+                        "QA_PASSED",
+                        {"iteration": 0, "testsRun": {}},
+                    )
+                except Exception:
+                    pass  # Best-effort
 
         # Post-build finalization (only for isolated sequential mode)
         # This happens AFTER QA validation so the worktree still exists

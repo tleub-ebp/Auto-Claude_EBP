@@ -7,7 +7,7 @@ class GrepaiClient:
 
     def health(self):
         try:
-            response = requests.get(f"{self.base_url}/health")
+            response = requests.get(f"{self.base_url}/health", timeout=(5, 10))
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -22,7 +22,9 @@ class GrepaiClient:
         """
         try:
             payload = {"query": query, "top_k": top_k}
-            response = requests.post(f"{self.base_url}/search", json=payload)
+            response = requests.post(
+                f"{self.base_url}/search", json=payload, timeout=(5, 30)
+            )
             response.raise_for_status()
             return response.json()
         except Exception as e:

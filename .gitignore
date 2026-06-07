@@ -199,3 +199,4 @@ nul
 /data/analytics.db
 /data/test_analytics.db
 /apps/frontend/lint_output.txt
+tmp/ipc-handlers-test/userData/store/projects.json

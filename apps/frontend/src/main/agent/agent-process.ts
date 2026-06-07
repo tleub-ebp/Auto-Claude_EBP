@@ -655,6 +655,11 @@ export class AgentProcessManager {
 			if (project.settings.useClaudeMd !== false) {
 				env.USE_CLAUDE_MD = "true";
 			}
+
+			// Strict TDD (Red-Green-Refactor) mode (opt-in)
+			if (project.settings.tddMode) {
+				env.TDD_MODE = "true";
+			}
 		}
 
 		return env;

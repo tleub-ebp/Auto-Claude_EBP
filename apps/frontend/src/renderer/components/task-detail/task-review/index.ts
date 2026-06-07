@@ -10,6 +10,7 @@ export { CreatePRDialog } from "./CreatePRDialog";
 export { DiffViewDialog } from "./DiffViewDialog";
 export { DiscardDialog } from "./DiscardDialog";
 export { MergePreviewSummary } from "./MergePreviewSummary";
+export { PullRequestStats } from "./PullRequestStats";
 export { QAFeedbackSection } from "./QAFeedbackSection";
 export { StagedSuccessMessage } from "./StagedSuccessMessage";
 export { getSeverityIcon, getSeverityVariant } from "./utils";

@@ -20,27 +20,6 @@ async def test_gather_basic_pr_context(tmp_path):
     project_dir.mkdir()
 
     # Mock the subprocess calls
-    pr_metadata = {
-        "number": 123,
-        "title": "Add new feature",
-        "body": "This PR adds a new feature",
-        "author": {"login": "testuser"},
-        "baseRefName": "main",
-        "headRefName": "feature/new-feature",
-        "files": [
-            {
-                "path": "src/app.ts",
-                "status": "modified",
-                "additions": 10,
-                "deletions": 5,
-            }
-        ],
-        "additions": 10,
-        "deletions": 5,
-        "changedFiles": 1,
-        "labels": [{"name": "feature"}],
-    }
-
     with patch("subprocess.run") as mock_run:
         # Mock metadata fetch
         mock_run.return_value = MagicMock(

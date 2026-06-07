@@ -242,27 +242,36 @@ export function SessionHistory({ projectId }: SessionHistoryProps) {
 		"all" | "completed" | "failed" | "running"
 	>("all");
 
-	const fetchSessions = useCallback(async () => {
-		setLoading(true);
-		setError(null);
-		try {
-			const backendUrl = import.meta.env?.VITE_BACKEND_URL || "";
-			const res = await fetch(`${backendUrl}/api/sessions/${projectId}`);
-			const data = await res.json();
-			if (data.success) {
-				setSessions(data.sessions || []);
-			} else {
-				setError(data.error || "Failed to load sessions");
+	const fetchSessions = useCallback(
+		async (signal?: AbortSignal) => {
+			setLoading(true);
+			setError(null);
+			try {
+				const backendUrl = import.meta.env?.VITE_BACKEND_URL || "";
+				const res = await fetch(
+					`${backendUrl}/api/sessions/${projectId}`,
+					{ signal },
+				);
+				const data = await res.json();
+				if (data.success) {
+					setSessions(data.sessions || []);
+				} else {
+					setError(data.error || "Failed to load sessions");
+				}
+			} catch (e) {
+				if ((e as { name?: string })?.name === "AbortError") return;
+				setError(e instanceof Error ? e.message : "Network error");
+			} finally {
+				setLoading(false);
 			}
-		} catch (e) {
-			setError(e instanceof Error ? e.message : "Network error");
-		} finally {
-			setLoading(false);
-		}
-	}, [projectId]);
+		},
+		[projectId],
+	);
 
 	useEffect(() => {
-		fetchSessions();
+		const controller = new AbortController();
+		fetchSessions(controller.signal);
+		return () => controller.abort();
 	}, [fetchSessions]);
 
 	const filtered = sessions.filter((s) => {
@@ -313,7 +322,7 @@ export function SessionHistory({ projectId }: SessionHistoryProps) {
 							<p className="text-sm text-muted-foreground">{t("subtitle")}</p>
 						</div>
 					</div>
-					<Button variant="outline" size="sm" onClick={fetchSessions}>
+					<Button variant="outline" size="sm" onClick={() => fetchSessions()}>
 						<RefreshCw className="h-3.5 w-3.5 mr-2" />
 						{t("refresh")}
 					</Button>

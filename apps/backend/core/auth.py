@@ -14,20 +14,12 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
-from .platform import OS, get_current_os
-
-
-def is_linux():
-    return get_current_os() == OS.LINUX
-
-
-def is_macos():
-    return get_current_os() == OS.MACOS
-
-
-def is_windows():
-    return get_current_os() == OS.WINDOWS
-
+# Re-export the canonical platform predicates so existing local callers
+# in this module keep working unchanged. Previously these were duplicated
+# wrappers (is_linux/is_macos/is_windows redefined here) — the
+# duplication drifted from `core.platform` and forced us to keep two
+# implementations in sync.
+from .platform import is_linux, is_macos, is_windows  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -1107,7 +1099,6 @@ def trigger_login() -> bool:
 
 def _trigger_login_macos() -> bool:
     """Trigger login on macOS using expect."""
-    import shutil
     import tempfile
 
     # Check if expect is available

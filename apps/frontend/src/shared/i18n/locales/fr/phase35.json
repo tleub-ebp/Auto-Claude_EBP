@@ -7,7 +7,29 @@
 		"errorLabel": "Erreur",
 		"projectPathRequired": "Aucun projet sélectionné",
 		"backendUnreachable": "Backend inaccessible. Le backend tourne-t-il sur le port 8765 ?",
-		"noData": "Aucune donnée — lancez l'analyse pour voir les résultats."
+		"noData": "Aucune donnée — lancez l'analyse pour voir les résultats.",
+		"required": "Champ requis",
+		"invalidNumber": "Nombre invalide",
+		"invalidPath": "Chemin invalide",
+		"selectAtLeastOne": "Sélectionnez au moins une option",
+		"tooLong": "Texte trop long (limite : {{max}} caractères)",
+		"clearAll": "Tout effacer",
+		"selectAll": "Tout sélectionner",
+		"selected": "{{count}} sélectionné(s)",
+		"none": "Aucun",
+		"status": "Statut",
+		"violations": "violations",
+		"warnings": "avertissements",
+		"backendErrors": {
+			"projectPathInvalid": "Chemin de projet invalide : {{path}}",
+			"projectPathRequired": "Chemin de projet requis",
+			"directoryNotFound": "Dossier introuvable : {{path}}",
+			"fileNotFound": "Fichier introuvable : {{path}}",
+			"unauthorized": "Accès refusé. Vérifiez les permissions du dossier.",
+			"backendUnreachable": "Backend inaccessible. Le backend tourne-t-il sur le port 8765 ?",
+			"timeout": "Délai dépassé — le backend n'a pas répondu à temps.",
+			"unknown": "Erreur backend : {{message}}"
+		}
 	},
 	"longevity": {
 		"title": "Score de Longévité du Code",
@@ -51,35 +73,63 @@
 		"title": "Routage Adaptatif de Modèles",
 		"subtitle": "Choisit le modèle le moins cher qui devrait fonctionner pour cette tâche",
 		"prompt": "Prompt de la tâche",
+		"promptPlaceholder": "ex : renommer foo en bar",
 		"hint": "Indice de classe (optionnel)",
-		"hintPlaceholder": "ex: trivial, architecture, review",
+		"hintPlaceholder": "ex : trivial, architecture, review",
 		"availableProviders": "Providers disponibles",
+		"providersPlaceholder": "Sélectionnez les providers à comparer",
+		"providerAnthropic": "Anthropic",
+		"providerOpenai": "OpenAI",
+		"providerGoogle": "Google",
+		"providerMistral": "Mistral",
+		"providerOllama": "Ollama (local)",
 		"compare": "Comparer entre tiers",
 		"chosen": "Modèle choisi",
 		"estimatedCost": "Coût estimé (USD)",
-		"reason": "Raison"
+		"reason": "Raison",
+		"colTier": "Niveau",
+		"colModel": "Modèle",
+		"colCost": "$ / appel",
+		"validation": {
+			"promptRequired": "Saisissez un prompt à router",
+			"providersRequired": "Choisissez au moins un provider"
+		}
 	},
 	"domainAgents": {
 		"title": "Agents Spécialisés par Domaine",
 		"subtitle": "Sélectionnez le domaine du projet pour injecter les bons garde-fous dans les agents",
 		"domain": "Domaine",
 		"role": "Rôle de l'agent",
+		"roleCoder": "Codeur",
+		"rolePlanner": "Planificateur",
+		"roleReviewer": "Relecteur",
+		"roleDocumenter": "Documenteur",
 		"build": "Construire le bundle",
 		"guardrails": "Garde-fous",
 		"requiredSkills": "Compétences requises",
 		"forbidden": "Patterns interdits",
 		"validationRules": "Règles de validation",
-		"prompt": "Addendum au prompt généré"
+		"prompt": "Addendum au prompt généré",
+		"validation": {
+			"domainRequired": "Sélectionnez un domaine",
+			"noDomainsLoaded": "Aucun domaine disponible — vérifiez la connexion au backend."
+		}
 	},
 	"cicdAnomaly": {
 		"title": "Détecteur d'Anomalies CI/CD",
 		"subtitle": "Collez un log CI pour détecter les patterns d'échec connus",
 		"logLabel": "Contenu du log",
+		"logPlaceholder": "Collez votre log CI ici…",
 		"scan": "Scanner",
 		"signals": "Signaux détectés",
 		"recurring": "Récurrents entre builds",
 		"recommendations": "Correctifs suggérés",
-		"hasCritical": "Problèmes critiques présents"
+		"hasCritical": "Problèmes critiques présents",
+		"line": "ligne",
+		"validation": {
+			"logRequired": "Collez un log non vide",
+			"logTooLarge": "Log trop volumineux (limite : {{max}} caractères)"
+		}
 	},
 	"license": {
 		"title": "Gouvernance des Licences",
@@ -92,7 +142,10 @@
 		"passed": "Conforme",
 		"failed": "Conflits trouvés",
 		"conflicts": "Conflits",
-		"dependencies": "Dépendances"
+		"dependencies": "Dépendances",
+		"colPackage": "Paquet",
+		"colCategory": "Catégorie",
+		"colRemediation": "Remédiation"
 	},
 	"archDrift": {
 		"title": "Détection de Dérive Architecturale",
@@ -119,43 +172,106 @@
 		"slowdowns": "Ralentissements",
 		"newFailures": "Nouveaux échecs",
 		"vanished": "Tests disparus",
-		"added": "Nouveaux tests"
+		"added": "Nouveaux tests",
+		"validation": {
+			"labelRequired": "Saisissez un label de génération",
+			"junitRequired": "Collez un contenu JUnit XML",
+			"junitInvalid": "Le contenu ne ressemble pas à du XML JUnit valide",
+			"baselineRequired": "Saisissez un label de baseline existant"
+		}
 	},
 	"i18nScaler": {
 		"title": "i18n Auto-Scaling",
 		"subtitle": "Scaffold et audit des fichiers de traduction par locale",
 		"localesDir": "Répertoire des locales",
+		"localesDirPlaceholder": "apps/frontend/src/shared/i18n/locales",
+		"browseDir": "Parcourir…",
+		"clearDir": "Effacer",
 		"sourceLocale": "Locale source",
+		"sourceLocaleCustom": "Autre (saisie manuelle)…",
+		"sourceLocaleCustomPlaceholder": "ex : pt-BR",
+		"sourceLocaleCustomLabel": "Code locale personnalisé",
 		"strategy": "Stratégie de placeholder",
 		"runReport": "Lancer le rapport",
 		"coverage": "Couverture par locale",
 		"missingKeys": "Clés manquantes",
 		"obsoleteKeys": "Clés obsolètes",
-		"placeholderMismatches": "Variables divergentes"
+		"placeholderMismatches": "Variables divergentes",
+		"colLocale": "Locale",
+		"colTranslated": "Traduites",
+		"colPlaceholder": "Placeholder",
+		"colTotal": "Total",
+		"colCoverage": "Couverture",
+		"missing": "manquante(s)",
+		"obsolete": "obsolète(s)",
+		"mismatches": "divergente(s)",
+		"validation": {
+			"localesDirRequired": "Renseignez le répertoire des locales",
+			"sourceLocaleRequired": "Renseignez la locale source",
+			"sourceLocaleInvalid": "Code locale invalide (ex : en, fr, fr-FR)"
+		}
 	},
 	"cogContext": {
 		"title": "Optimiseur de Contexte Cognitif",
 		"subtitle": "Sélectionne les bons fichiers pour le budget tokens de la tâche",
 		"prompt": "Prompt de la tâche",
 		"candidateFiles": "Fichiers candidats (un par ligne)",
+		"candidateFilesPlaceholder": "/chemin/absolu/fichier1.py\n/chemin/absolu/fichier2.py",
 		"tokenBudget": "Budget tokens",
 		"optimize": "Optimiser",
 		"included": "Inclus",
 		"truncated": "Tronqué",
 		"skipped": "Ignoré",
-		"fillRatio": "Taux de remplissage"
+		"fillRatio": "Taux de remplissage",
+		"colFile": "Fichier",
+		"colScore": "Score",
+		"colTokens": "Tokens",
+		"colTruncated": "Tronqué",
+		"addFiles": "Ajouter des fichiers…",
+		"addManually": "Ajouter manuellement",
+		"manualPathPlaceholder": "/chemin/absolu/fichier.py",
+		"add": "Ajouter",
+		"removeFile": "Retirer ce fichier",
+		"clearFiles": "Tout vider",
+		"noFiles": "Aucun fichier — cliquez sur « Ajouter des fichiers… » pour en sélectionner.",
+		"fileCount": "{{count}} fichier(s) sélectionné(s)",
+		"validation": {
+			"promptRequired": "Saisissez un prompt",
+			"filesRequired": "Indiquez au moins un fichier",
+			"budgetTooSmall": "Le budget doit être ≥ 100 tokens",
+			"budgetTooLarge": "Le budget doit être ≤ 1 000 000 tokens",
+			"duplicatePath": "Ce fichier est déjà dans la liste",
+			"pathNotAbsolute": "Le chemin doit être absolu",
+			"pathTooLong": "Chemin trop long (limite : {{max}} caractères)"
+		},
+		"estimatedCost": "Coût estimé",
+		"costFor": "pour {{provider}} / {{model}}",
+		"costBreakdown": "{{input}} en entrée + {{output}} en sortie (ratio {{ratio}}%)",
+		"costFlatRate": "Modèle facturé à l'abonnement — pas de coût au token",
+		"costUnknown": "Tarif inconnu pour ce modèle",
+		"costNoModel": "Aucun modèle configuré dans les paramètres",
+		"outputRatio": "Ratio sortie/entrée"
 	},
 	"audit": {
 		"title": "Piste d'Audit",
 		"subtitle": "Replay infalsifiable de chaque décision d'agent",
 		"storageDir": "Répertoire de stockage",
+		"storageDirPlaceholder": ".workpilot/audit",
 		"trailName": "Nom du trail",
 		"correlationId": "ID de corrélation",
+		"correlationIdPlaceholder": "spec-001",
 		"replay": "Replay",
 		"verify": "Vérifier l'intégrité",
 		"events": "Événements",
 		"intact": "Chaîne intacte",
-		"tampered": "Chaîne falsifiée"
+		"tampered": "Chaîne falsifiée",
+		"eventsChecked": "événements vérifiés",
+		"replayLabel": "Replay",
+		"validation": {
+			"storageDirRequired": "Renseignez un répertoire de stockage",
+			"trailNameRequired": "Renseignez un nom de trail",
+			"correlationIdRequired": "Renseignez un ID de corrélation"
+		}
 	},
 	"pair": {
 		"title": "Pair Programming Temps Réel",
@@ -166,10 +282,21 @@
 		"leave": "Quitter",
 		"yourName": "Votre nom",
 		"role": "Rôle",
+		"roleDriver": "Pilote",
+		"roleNavigator": "Navigateur",
+		"roleAi": "IA",
 		"chatPlaceholder": "Tapez un message…",
 		"send": "Envoyer",
 		"participants": "Participants",
 		"recentOps": "Opérations récentes",
-		"streaming": "Live"
+		"streaming": "Live",
+		"roomLabel": "room",
+		"validation": {
+			"roomIdRequired": "Saisissez un ID de room",
+			"roomIdInvalid": "ID de room invalide (lettres, chiffres, _ et -, 1–64 caractères)",
+			"nameRequired": "Saisissez votre nom",
+			"messageEmpty": "Le message est vide",
+			"messageTooLong": "Message trop long (limite : {{max}} caractères)"
+		}
 	}
 }

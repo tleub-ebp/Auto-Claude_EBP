@@ -1,0 +1,17 @@
+#!/bin/bash
+# Post-merge hook: Intelligently restores and merges .workpilot after merge
+# This hook runs after git merge completes
+
+set -e
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+MANAGER="$REPO_ROOT/scripts/smart-merge-manager.py"
+
+if [ ! -f "$MANAGER" ]; then
+    exit 0
+fi
+
+echo "[Smart Merge] Running post-merge restoration..."
+python3 "$MANAGER" complete || true
+
+exit 0

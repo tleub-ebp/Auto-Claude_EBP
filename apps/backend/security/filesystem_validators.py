@@ -102,6 +102,12 @@ def validate_rm_command(command_string: str) -> ValidationResult:
     """
     Validate rm commands - prevent dangerous deletions.
 
+    Policy: only relative paths under the current working directory may be
+    deleted. Anything starting with `/`, `~`, `$`, `..`, a Windows drive
+    letter, or containing wildcards near the root is rejected. The previous
+    static-pattern allowlist let `rm -rf /home/user`, `rm -rf ~/.ssh`, and
+    `rm -rf ./*` through.
+
     Args:
         command_string: The full rm command string
 
@@ -116,16 +122,72 @@ def validate_rm_command(command_string: str) -> ValidationResult:
     if not tokens:
         return False, "Empty rm command"
 
-    # Check for dangerous patterns
+    saw_target = False
     for token in tokens[1:]:
-        if token.startswith("-"):
+        if token.startswith("-") and token != "--":
             # Allow -r, -f, -rf, -fr, -v, -i
             continue
+        if token == "--":
+            continue
+
+        saw_target = True
+
+        # Reject any path that escapes the current working directory or
+        # references a system / home location.
+        if not _is_safe_relative_target(token):
+            return (
+                False,
+                (
+                    f"rm target '{token}' is not allowed for safety: only "
+                    "relative paths under the current working directory may "
+                    "be removed (no '/', '~', '$', '..', wildcards near root, "
+                    "or drive letters)."
+                ),
+            )
+
+        # Legacy explicit blocklist as a second layer of defense.
         for pattern in DANGEROUS_RM_PATTERNS:
             if re.match(pattern, token):
                 return False, f"rm target '{token}' is not allowed for safety"
 
+    if not saw_target:
+        return False, "rm requires at least one target"
+
     return True, ""
+
+
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _is_safe_relative_target(token: str) -> bool:
+    """Return True only for relative paths that stay under cwd."""
+    if not token:
+        return False
+    # Absolute POSIX path or root-rooted glob
+    if token.startswith("/"):
+        return False
+    # Home-relative
+    if token.startswith("~"):
+        return False
+    # Env-var expansion (treated as opaque, may resolve to anywhere)
+    if token.startswith("$") or "${" in token:
+        return False
+    # Windows drive-letter root (`C:\…`, `c:/…`)
+    if _WINDOWS_DRIVE_RE.match(token):
+        return False
+    # Windows UNC path (`\\server\share`)
+    if token.startswith("\\\\"):
+        return False
+    # Parent-directory escape, including `./..` and trailing `/..`.
+    # We treat any path that contains a `..` segment as unsafe — even if it
+    # ultimately resolves under cwd, it's almost never what an agent intends.
+    parts = re.split(r"[\\/]+", token)
+    if any(part == ".." for part in parts):
+        return False
+    # Bare wildcards / brace expansions adjacent to root-ish paths
+    if token in {"*", ".", "./", ".\\"}:
+        return False
+    return True
 
 
 def validate_init_script(command_string: str) -> ValidationResult:
@@ -148,8 +210,10 @@ def validate_init_script(command_string: str) -> ValidationResult:
 
     script = tokens[0]
 
-    # Allow ./init.sh or paths ending in /init.sh
-    if script == "./init.sh" or script.endswith("/init.sh"):
+    # Allow only ./init.sh in the current working directory. Allowing any
+    # path ending in `/init.sh` lets an agent stage `evil/init.sh` and
+    # invoke it, defeating the validator.
+    if script == "./init.sh":
         return True, ""
 
     return False, f"Only ./init.sh is allowed, got: {script}"

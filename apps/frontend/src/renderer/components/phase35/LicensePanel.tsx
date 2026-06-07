@@ -13,7 +13,7 @@ import { Button } from "../ui/button";
 import { PanelShell } from "./_panel-shell";
 
 interface LicensePanelProps {
-	projectPath: string;
+	readonly projectPath: string;
 }
 
 const POLICIES = [
@@ -47,10 +47,11 @@ export function LicensePanel({ projectPath }: LicensePanelProps) {
 		>
 			<div className="space-y-3">
 				<div>
-					<label className="block text-sm font-medium mb-1">
+					<label htmlFor="policy-select" className="block text-sm font-medium mb-1">
 						{t("license.policy")}
 					</label>
 					<select
+						id="policy-select"
 						value={policy}
 						onChange={(e) => setPolicy(e.target.value as typeof policy)}
 						className="w-full rounded border bg-background p-2 text-sm"
@@ -88,14 +89,14 @@ export function LicensePanel({ projectPath }: LicensePanelProps) {
 							<table className="w-full text-sm border">
 								<thead>
 									<tr className="border-b bg-muted/40">
-										<th className="text-left p-2">package</th>
-										<th className="text-left p-2">category</th>
-										<th className="text-left p-2">remediation</th>
+										<th className="text-left p-2">{t("license.colPackage")}</th>
+										<th className="text-left p-2">{t("license.colCategory")}</th>
+										<th className="text-left p-2">{t("license.colRemediation")}</th>
 									</tr>
 								</thead>
 								<tbody>
-									{report.conflicts.map((c, i) => (
-										<tr key={i} className="border-b">
+									{report.conflicts.map((c) => (
+										<tr key={c.dependency.name} className="border-b">
 											<td className="p-2 font-mono">{c.dependency.name}</td>
 											<td className="p-2">{c.category}</td>
 											<td className="p-2 text-xs text-muted-foreground">

@@ -79,8 +79,13 @@ class ClaudeSDKRuntime(AgentRuntime):
         try:
             return await self._execute_sdk_session(prompt)
         except Exception as e:
-            logger.error(f"Claude SDK session failed: {e}")
-            return self._create_error_session(str(e))
+            # Anthropic SDK errors can include request IDs and partial auth
+            # info; tracebacks include local file paths. Log full details
+            # locally; surface only the exception class name to the caller
+            # / streaming subscribers (websocket has no auth — see
+            # streaming/websocket_server.py).
+            logger.exception("Claude SDK session failed")
+            return self._create_error_session(type(e).__name__)
 
     def _create_error_session(self, error_message: str) -> SessionResult:
         """Create an error session result."""
@@ -185,8 +190,10 @@ class ClaudeSDKRuntime(AgentRuntime):
                 yield StreamEvent("done", {"status": "completed"})
 
         except Exception as e:
-            logger.error(f"Claude SDK streaming failed: {e}")
-            yield StreamEvent("error", {"error": str(e)})
+            # Avoid surfacing str(e) to streaming subscribers — it can leak
+            # request IDs and local paths to anyone watching the WS.
+            logger.exception("Claude SDK streaming failed")
+            yield StreamEvent("error", {"error": type(e).__name__})
             yield StreamEvent("done", {"status": "error"})
 
     async def _stream_message_events(self, msg) -> AsyncGenerator[StreamEvent, None]:

@@ -336,14 +336,11 @@ async def add_linear_comment(
         print("No Linear task found for this spec")
         return False
 
-    # Escape any quotes in the comment
-    safe_comment = comment.replace('"', '\\"').replace("\n", "\\n")
-
     prompt = f"""Add a comment to Linear issue:
 
 Use mcp__linear-server__create_comment with:
 - issueId: "{state.task_id}"
-- body: "{safe_comment}"
+- body: {json.dumps(comment)}
 
 Confirm when done.
 """

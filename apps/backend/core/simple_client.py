@@ -72,6 +72,7 @@ def create_simple_client(
     cwd: Path | None = None,
     max_turns: int = 1,
     max_thinking_tokens: int | None = None,
+    output_format: dict | None = None,
 ) -> ClaudeSDKClient:
     """
     Create a minimal Claude SDK client for single-turn utility operations.
@@ -135,6 +136,11 @@ def create_simple_client(
     # Only add max_thinking_tokens if not None (Haiku doesn't support extended thinking)
     if max_thinking_tokens is not None:
         options_kwargs["max_thinking_tokens"] = max_thinking_tokens
+
+    # Structured output schema (validated + auto-retried by the SDK).
+    # See: code.claude.com/docs/en/agent-sdk/structured-outputs
+    if output_format:
+        options_kwargs["output_format"] = output_format
 
     # Optional: Allow CLI path override via environment variable
     env_cli_path = os.environ.get("CLAUDE_CLI_PATH")

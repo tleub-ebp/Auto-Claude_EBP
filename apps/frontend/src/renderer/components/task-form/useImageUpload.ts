@@ -62,14 +62,14 @@ interface UseImageUploadReturn {
 	isDragOver: boolean;
 	/** Whether an image was just successfully added */
 	pasteSuccess: boolean;
-	/** Handle paste event on textarea */
-	handlePaste: (e: ClipboardEvent<HTMLTextAreaElement>) => Promise<void>;
-	/** Handle drag over event on textarea */
-	handleDragOver: (e: DragEvent<HTMLTextAreaElement>) => void;
-	/** Handle drag leave event on textarea */
-	handleDragLeave: (e: DragEvent<HTMLTextAreaElement>) => void;
-	/** Handle drop event on textarea */
-	handleDrop: (e: DragEvent<HTMLTextAreaElement>) => Promise<void>;
+	/** Handle paste event (textarea or contentEditable) */
+	handlePaste: (e: ClipboardEvent<HTMLElement>) => Promise<void>;
+	/** Handle drag over event (textarea or contentEditable) */
+	handleDragOver: (e: DragEvent<HTMLElement>) => void;
+	/** Handle drag leave event (textarea or contentEditable) */
+	handleDragLeave: (e: DragEvent<HTMLElement>) => void;
+	/** Handle drop event (textarea or contentEditable) */
+	handleDrop: (e: DragEvent<HTMLElement>) => Promise<void>;
 	/** Remove an image by ID */
 	removeImage: (imageId: string) => void;
 	/** Whether more images can be added */
@@ -215,7 +215,7 @@ export function useImageUpload({
 	 * Handle paste event for screenshot support
 	 */
 	const handlePaste = useCallback(
-		async (e: ClipboardEvent<HTMLTextAreaElement>) => {
+		async (e: ClipboardEvent<HTMLElement>) => {
 			const clipboardItems = e.clipboardData?.items;
 			if (!clipboardItems) return;
 
@@ -242,7 +242,7 @@ export function useImageUpload({
 	/**
 	 * Handle drag over textarea
 	 */
-	const handleDragOver = useCallback((e: DragEvent<HTMLTextAreaElement>) => {
+	const handleDragOver = useCallback((e: DragEvent<HTMLElement>) => {
 		e.preventDefault();
 		e.stopPropagation();
 		setIsDragOver(true);
@@ -251,7 +251,7 @@ export function useImageUpload({
 	/**
 	 * Handle drag leave from textarea
 	 */
-	const handleDragLeave = useCallback((e: DragEvent<HTMLTextAreaElement>) => {
+	const handleDragLeave = useCallback((e: DragEvent<HTMLElement>) => {
 		e.preventDefault();
 		e.stopPropagation();
 		setIsDragOver(false);
@@ -301,7 +301,7 @@ export function useImageUpload({
 	 * via the onFileReferenceDrop callback. Image files are processed as attachments.
 	 */
 	const handleDrop = useCallback(
-		async (e: DragEvent<HTMLTextAreaElement>) => {
+		async (e: DragEvent<HTMLElement>) => {
 			// Check disabled state first, before any state changes or preventDefault calls
 			// This ensures drops are properly rejected when the component is disabled
 			if (disabled) {
