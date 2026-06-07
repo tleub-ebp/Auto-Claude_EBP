@@ -130,16 +130,35 @@ class OptimizedCopilotRuntime(TokenAwareAgentBase):
             )
 
     def _execute_with_original_runtime(self, task: Task):
-        """Execute task using original CopilotRuntime"""
-        # Create a simple prompt-like interface
+        """Execute task using original CopilotRuntime.
+
+        `asyncio.run()` accepts no `timeout=` kwarg (TypeError) AND cannot be
+        called from inside a running event loop (RuntimeError). Both
+        conditions hit in production, leaving this runtime dead-on-arrival.
+        Use a fresh event loop on a worker thread when called from a sync
+        context, and `asyncio.wait_for` for the timeout.
+        """
         prompt = task.description
 
-        # Execute session
-        session_result = asyncio.run(
-            self.original_runtime.run_session(prompt, tools=None), timeout=60
-        )
+        async def _runner():
+            return await asyncio.wait_for(
+                self.original_runtime.run_session(prompt, tools=None),
+                timeout=60,
+            )
 
-        return session_result
+        try:
+            # If we're inside a running loop, we cannot call asyncio.run.
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — safe to run directly.
+            return asyncio.run(_runner())
+
+        # Inside an event loop: dispatch to a worker thread that owns its own
+        # loop so we don't reentrantly recurse into the active one.
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, _runner()).result()
 
     def _convert_to_task_result(self, task: Task, session_result) -> TaskResult:
         """Convert CopilotRuntime session result to TaskResult"""

@@ -70,20 +70,33 @@ export function useGitHubCopilot(): UseGitHubCopilotReturn {
 		}
 	}, []);
 
+	const reloadState = useCallback(async (): Promise<void> => {
+		const [statusData, configData] = await Promise.all([
+			gitHubCopilotService.getStatus(),
+			gitHubCopilotService.getConfig(),
+		]);
+		setStatus(statusData);
+		setConfig(configData);
+	}, []);
+
 	/**
 	 * Configurer le token
 	 */
-	const setToken = useCallback(async (token: string): Promise<void> => {
-		try {
-			setError(null);
-			await gitHubCopilotService.setToken(token);
-		} catch (err) {
-			const errorMessage =
-				err instanceof Error ? err.message : "Failed to set token";
-			setError(errorMessage);
-			throw err;
-		}
-	}, []);
+	const setToken = useCallback(
+		async (token: string): Promise<void> => {
+			try {
+				setError(null);
+				await gitHubCopilotService.setToken(token);
+				await reloadState();
+			} catch (err) {
+				const errorMessage =
+					err instanceof Error ? err.message : "Failed to set token";
+				setError(errorMessage);
+				throw err;
+			}
+		},
+		[reloadState],
+	);
 
 	/**
 	 * Supprimer le token
@@ -92,13 +105,14 @@ export function useGitHubCopilot(): UseGitHubCopilotReturn {
 		try {
 			setError(null);
 			await gitHubCopilotService.removeToken();
+			await reloadState();
 		} catch (err) {
 			const errorMessage =
 				err instanceof Error ? err.message : "Failed to remove token";
 			setError(errorMessage);
 			throw err;
 		}
-	}, []);
+	}, [reloadState]);
 
 	/**
 	 * Authentifier avec GitHub CLI
@@ -107,13 +121,15 @@ export function useGitHubCopilot(): UseGitHubCopilotReturn {
 		try {
 			setError(null);
 			await gitHubCopilotService.authenticate();
+			await gitHubCopilotService.refreshStatus();
+			await reloadState();
 		} catch (err) {
 			const errorMessage =
 				err instanceof Error ? err.message : "Failed to authenticate";
 			setError(errorMessage);
 			throw err;
 		}
-	}, []);
+	}, [reloadState]);
 
 	/**
 	 * Se déconnecter
@@ -122,13 +138,14 @@ export function useGitHubCopilot(): UseGitHubCopilotReturn {
 		try {
 			setError(null);
 			await gitHubCopilotService.logout();
+			await reloadState();
 		} catch (err) {
 			const errorMessage =
 				err instanceof Error ? err.message : "Failed to logout";
 			setError(errorMessage);
 			throw err;
 		}
-	}, []);
+	}, [reloadState]);
 
 	/**
 	 * Tester la connexion
@@ -155,11 +172,20 @@ export function useGitHubCopilot(): UseGitHubCopilotReturn {
 	const refreshStatus = useCallback(async (): Promise<void> => {
 		try {
 			setError(null);
+			setIsLoading(true);
 			await gitHubCopilotService.refreshStatus();
+			const [statusData, configData] = await Promise.all([
+				gitHubCopilotService.getStatus(),
+				gitHubCopilotService.getConfig(),
+			]);
+			setStatus(statusData);
+			setConfig(configData);
 		} catch (err) {
 			const errorMessage =
 				err instanceof Error ? err.message : "Failed to refresh status";
 			setError(errorMessage);
+		} finally {
+			setIsLoading(false);
 		}
 	}, []);
 

@@ -26,9 +26,12 @@ runs:
 
     - name: Install pnpm
       shell: bash
+      # Pin pnpm to match the version that generated pnpm-lock.yaml.
+      # pnpm 11 serializes the overrides section differently and triggers
+      # ERR_PNPM_LOCKFILE_CONFIG_MISMATCH against a lockfile written by pnpm 10.
       run: |
         npm cache clean --force
-        npm install -g pnpm
+        npm install -g pnpm@10.27.0
 
     - name: Get pnpm cache directory
       id: pnpm-cache-dir

@@ -8,11 +8,14 @@ import {
 import {
 	existsSync,
 	promises as fsPromises,
+	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	rmSync,
 	statSync,
+	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { app, type BrowserWindow, ipcMain, shell } from "electron";
@@ -42,8 +45,10 @@ import type {
 	WorktreeListResult,
 	WorktreeMergeResult,
 	WorktreeStatus,
+	VisualProofRun,
 } from "../../../shared/types";
 import { stripAnsiCodes } from "../../../shared/utils/ansi-sanitizer";
+import { parseEnvFile } from "../utils";
 import { getAppLanguage } from "../../app-language";
 import { getToolPath } from "../../cli-tool-manager";
 import { killProcessGracefully } from "../../platform";
@@ -59,8 +64,13 @@ import { taskStateManager } from "../../task-state-manager";
 import { getEffectiveSourcePath } from "../../updater/path-resolver";
 import { getIsolatedGitEnv, refreshGitIndex } from "../../utils/git-isolation";
 import { cleanupWorktree } from "../../utils/worktree-cleanup";
+import { visualProofService } from "../../visual-proof-service";
 import { findTaskWorktree, getTaskWorktreeDir } from "../../worktree-paths";
-import { persistPlanStatus, updateTaskMetadataPrUrl } from "./plan-file-utils";
+import {
+	persistPlanStatus,
+	updateTaskMetadataPrUrl,
+	updateTaskMetadataVisualProof,
+} from "./plan-file-utils";
 import { findTaskAndProject } from "./shared";
 
 // Regex pattern for validating git branch names
@@ -123,6 +133,60 @@ export function validateWorktreeBranch(
 		usedFallback: true,
 		reason: "invalid_pattern",
 	};
+}
+
+/**
+ * Load the project's `.workpilot/.env` and return it as a flat key→value
+ * map suitable for injecting into a Python subprocess via `env: { ... }`.
+ *
+ * Why this exists: PR creation (and similar AzDO/Jira/GitHub operations)
+ * needs to forward `AZURE_DEVOPS_PAT`, `AZURE_DEVOPS_ORG_URL`,
+ * `AZURE_DEVOPS_PROJECT`, `AZURE_DEVOPS_REPO`, `GITHUB_TOKEN`, etc. to
+ * the Python subprocess. The PAT is stored in the per-project .env file,
+ * not in the Electron main process env, so the subprocess would see an
+ * empty `os.environ.get("AZURE_DEVOPS_PAT")` without this helper.
+ *
+ * Returns an empty object when the file is missing or unreadable — the
+ * caller can still spawn the subprocess; auth-required operations will
+ * fail downstream with their own error.
+ */
+function loadProjectEnvForSubprocess(
+	project: { path: string; autoBuildPath?: string | null },
+): Record<string, string> {
+	if (!project.autoBuildPath) return {};
+	const envPath = path.join(project.path, project.autoBuildPath, ".env");
+	if (!existsSync(envPath)) return {};
+	try {
+		return parseEnvFile(readFileSync(envPath, "utf-8"));
+	} catch {
+		return {};
+	}
+}
+
+/**
+ * Extract the last well-formed JSON object found in a multi-line stdout
+ * blob. The Python backend interleaves DEBUG log lines with its final
+ * `print(json.dumps(result))`, so JSON.parse on the whole stream fails.
+ *
+ * Walks the lines bottom-up, returns the first one that parses as an
+ * object (not a primitive). Returns null when no parseable object is
+ * found — callers should treat that as an error.
+ */
+function extractLastJsonObject(stdout: string): Record<string, unknown> | null {
+	const lines = stdout.split(/\r?\n/);
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const trimmed = lines[i].trim();
+		if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) continue;
+		try {
+			const parsed = JSON.parse(trimmed);
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				return parsed as Record<string, unknown>;
+			}
+		} catch {
+			// Not valid JSON on this line — keep walking up.
+		}
+	}
+	return null;
 }
 
 // Maximum PR title length (GitHub's limit is 256 characters)
@@ -1748,8 +1812,36 @@ function getEffectiveBaseBranch(
 		return projectMainBranch;
 	}
 
-	// 3. Try to detect main/master branch
-	for (const branch of ["main", "master"]) {
+	// 3. Ask the remote what its default branch is. This is the source of
+	// truth for repos that don't use 'main' or 'master' (e.g. 'develop',
+	// 'trunk', 'production'). Without this the count of files / commits in
+	// the "Build ready for review" panel comes back as 0 against a branch
+	// that doesn't exist locally.
+	try {
+		const symref = execFileSync(
+			getToolPath("git"),
+			["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+			{
+				cwd: projectPath,
+				encoding: "utf-8",
+				stdio: ["pipe", "pipe", "pipe"],
+			},
+		).trim();
+		// Output is "origin/<branch>" — strip the remote prefix.
+		const detected = symref.startsWith("origin/")
+			? symref.slice("origin/".length)
+			: symref;
+		if (detected && GIT_BRANCH_REGEX.test(detected)) {
+			return detected;
+		}
+	} catch {
+		// symbolic-ref fails when origin/HEAD isn't set locally — fall through
+		// to the per-branch heuristic below.
+	}
+
+	// 4. Try to detect the usual default branches. 'develop' is included so
+	// GitFlow repos without an explicit project mainBranch still resolve.
+	for (const branch of ["main", "master", "develop"]) {
 		try {
 			execFileSync(getToolPath("git"), ["rev-parse", "--verify", branch], {
 				cwd: projectPath,
@@ -1762,8 +1854,64 @@ function getEffectiveBaseBranch(
 		}
 	}
 
-	// 4. Fallback to 'main'
+	// 5. Last-resort fallback.
 	return "main";
+}
+
+/**
+ * Vérifie qu'une ref git existe dans le worktree donné.
+ * Utilisé pour basculer sur `origin/<branch>` quand la branche distante
+ * existe (cas d'une PR pushée), afin que le compteur de fichiers/diff
+ * reflète l'état réellement publié plutôt que l'état local divergent.
+ */
+function gitRefExists(cwd: string, ref: string): boolean {
+	try {
+		execFileSync(getToolPath("git"), ["rev-parse", "--verify", ref], {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Résultat de la résolution des refs à utiliser pour calculer le diff
+ * d'un worktree.
+ */
+interface ResolvedDiffRefs {
+	/** Ref de la base (ex: `origin/develop` ou `develop`). */
+	baseRef: string;
+	/** Ref de la HEAD effective (ex: `origin/feature/x` ou `HEAD`). */
+	headRef: string;
+	/** True si on est tombé sur une ref distante pour la HEAD. */
+	usingRemoteHead: boolean;
+}
+
+/**
+ * Détermine les refs à utiliser pour `git diff` dans un worktree :
+ * - HEAD distante (`origin/<branch>`) prioritaire si elle existe ; sinon HEAD.
+ * - Base distante (`origin/<baseBranch>`) prioritaire si elle existe ; sinon base locale.
+ *
+ * Cela permet à l'UI WorkPilot de refléter l'état tel qu'il apparaît dans la PR
+ * (origin), même si le worktree local a divergé après un push depuis ailleurs,
+ * un reset ou un rebase.
+ */
+function resolveDiffRefs(
+	worktreePath: string,
+	branch: string,
+	baseBranch: string,
+): ResolvedDiffRefs {
+	const remoteHead = `origin/${branch}`;
+	const remoteBase = `origin/${baseBranch}`;
+	const usingRemoteHead = gitRefExists(worktreePath, remoteHead);
+	const headRef = usingRemoteHead ? remoteHead : "HEAD";
+	const baseRef = gitRefExists(worktreePath, remoteBase)
+		? remoteBase
+		: baseBranch;
+	return { baseRef, headRef, usingRemoteHead };
 }
 
 // ============================================
@@ -1863,6 +2011,11 @@ interface TaskStatusUpdateResult {
 	worktreeMetadata: boolean;
 }
 
+interface VisualProofMetadataUpdateResult {
+	mainProjectMetadata: boolean;
+	worktreeMetadata: boolean;
+}
+
 /**
  * Update task status and metadata after PR creation
  * Updates both main project and worktree locations
@@ -1937,6 +2090,46 @@ async function updateTaskStatusAfterPRCreation(
 	return result;
 }
 
+function updateVisualProofMetadata(
+	specDir: string,
+	worktreePath: string | null,
+	autoBuildPath: string | undefined,
+	specId: string,
+	visualProof: VisualProofRun,
+	debug: (...args: unknown[]) => void,
+): VisualProofMetadataUpdateResult {
+	const result: VisualProofMetadataUpdateResult = {
+		mainProjectMetadata: false,
+		worktreeMetadata: false,
+	};
+	const metadataPath = path.join(specDir, "task_metadata.json");
+	result.mainProjectMetadata = updateTaskMetadataVisualProof(
+		metadataPath,
+		visualProof,
+	);
+	debug(
+		"Main project metadata updated with visual proof:",
+		result.mainProjectMetadata,
+	);
+
+	if (worktreePath) {
+		const specsBaseDir = getSpecsDir(autoBuildPath);
+		const worktreeMetadataPath = path.join(
+			worktreePath,
+			specsBaseDir,
+			specId,
+			"task_metadata.json",
+		);
+		result.worktreeMetadata = updateTaskMetadataVisualProof(
+			worktreeMetadataPath,
+			visualProof,
+		);
+		debug("Worktree metadata updated with visual proof:", result.worktreeMetadata);
+	}
+
+	return result;
+}
+
 /**
  * Build arguments for the create-pr Python script
  */
@@ -1946,6 +2139,7 @@ function buildCreatePRArgs(
 	projectPath: string,
 	options: WorktreeCreatePROptions | undefined,
 	taskBaseBranch: string | undefined,
+	bodyFilePath?: string,
 ): { args: string[]; validationError?: string } {
 	const args = [
 		runScript,
@@ -1982,6 +2176,9 @@ function buildCreatePRArgs(
 	}
 	if (options?.draft) {
 		args.push("--pr-draft");
+	}
+	if (bodyFilePath) {
+		args.push("--pr-body-file", bodyFilePath);
 	}
 
 	// Add --base-branch if task was created with a specific base branch
@@ -2118,6 +2315,15 @@ export function registerWorktreeHandlers(
 						project.settings?.mainBranch,
 					);
 
+					// Préférer les refs distantes (origin/...) quand elles existent
+					// pour que le compteur reflète l'état publié dans la PR plutôt
+					// qu'un HEAD local potentiellement divergent.
+					const diffRefs = resolveDiffRefs(
+						worktreePath,
+						branch,
+						baseBranch,
+					);
+
 					// Get user's current branch in main project (this is where changes will merge INTO)
 					let currentProjectBranch: string | undefined;
 					try {
@@ -2138,7 +2344,11 @@ export function registerWorktreeHandlers(
 					try {
 						const countOutput = execFileSync(
 							getToolPath("git"),
-							["rev-list", "--count", `${baseBranch}..HEAD`],
+							[
+								"rev-list",
+								"--count",
+								`${diffRefs.baseRef}..${diffRefs.headRef}`,
+							],
 							{
 								cwd: worktreePath,
 								encoding: "utf-8",
@@ -2150,16 +2360,21 @@ export function registerWorktreeHandlers(
 						commitCount = 0;
 					}
 
-					// Get diff stats
+					// Get diff stats — utilise --numstat pour pouvoir exclure
+					// les fichiers que l'utilisateur a annulés via
+					// .workpilot-discard-list (cohérent avec TASK_WORKTREE_DIFF).
 					let filesChanged = 0;
 					let additions = 0;
 					let deletions = 0;
 
-					let diffStat = "";
 					try {
-						diffStat = execFileSync(
+						const numstat = execFileSync(
 							getToolPath("git"),
-							["diff", "--stat", `${baseBranch}...HEAD`],
+							[
+								"diff",
+								"--numstat",
+								`${diffRefs.baseRef}...${diffRefs.headRef}`,
+							],
 							{
 								cwd: worktreePath,
 								encoding: "utf-8",
@@ -2167,15 +2382,44 @@ export function registerWorktreeHandlers(
 							},
 						).trim();
 
-						// Parse the summary line (e.g., "3 files changed, 50 insertions(+), 10 deletions(-)")
-						const summaryMatch = diffStat.match(
-							/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/,
+						// Charge la discard list (optionnelle) pour exclure
+						// les fichiers que l'utilisateur ne veut pas voir.
+						const discardListPath = path.join(
+							worktreePath,
+							".workpilot-discard-list",
 						);
-						if (summaryMatch) {
-							filesChanged = parseInt(summaryMatch[1], 10) || 0;
-							additions = parseInt(summaryMatch[2], 10) || 0;
-							deletions = parseInt(summaryMatch[3], 10) || 0;
+						let discardedFiles: string[] = [];
+						try {
+							const content = readFileSync(discardListPath, "utf-8");
+							discardedFiles = content
+								.split("\n")
+								.map((line) => line.trim())
+								.filter((line) => line && !line.startsWith("#"));
+						} catch (err) {
+							const isMissing =
+								err instanceof Error &&
+								(err as NodeJS.ErrnoException).code === "ENOENT";
+							if (!isMissing) {
+								console.error(
+									"[TASK_WORKTREE_STATUS] Error reading discard list:",
+									err,
+								);
+							}
 						}
+
+						const discardSet = new Set(discardedFiles);
+						numstat
+							.split("\n")
+							.filter(Boolean)
+							.forEach((line: string) => {
+								const [adds, dels, filePath] = line.split("\t");
+								if (!filePath || discardSet.has(filePath)) {
+									return;
+								}
+								filesChanged += 1;
+								additions += parseInt(adds, 10) || 0;
+								deletions += parseInt(dels, 10) || 0;
+							});
 					} catch {
 						// Ignore diff errors
 					}
@@ -2243,6 +2487,29 @@ export function registerWorktreeHandlers(
 					project.settings?.mainBranch,
 				);
 
+				// Récupère la branche du worktree pour pouvoir préférer
+				// `origin/<branch>` quand elle existe (alignement avec la PR).
+				let worktreeBranch = "HEAD";
+				try {
+					worktreeBranch = execFileSync(
+						getToolPath("git"),
+						["rev-parse", "--abbrev-ref", "HEAD"],
+						{
+							cwd: worktreePath,
+							encoding: "utf-8",
+							stdio: ["pipe", "pipe", "pipe"],
+						},
+					).trim();
+				} catch {
+					// fallback à HEAD - resolveDiffRefs gérera l'absence de origin/
+				}
+				const diffRefs = resolveDiffRefs(
+					worktreePath,
+					worktreeBranch,
+					baseBranch,
+				);
+				const diffRange = `${diffRefs.baseRef}...${diffRefs.headRef}`;
+
 				// Get the diff with file stats
 				const files: WorktreeDiffFile[] = [];
 
@@ -2253,7 +2520,7 @@ export function registerWorktreeHandlers(
 					// Get numstat for additions/deletions per file (cross-platform)
 					numstat = execFileSync(
 						getToolPath("git"),
-						["diff", "--numstat", `${baseBranch}...HEAD`],
+						["diff", "--numstat", diffRange],
 						{
 							cwd: worktreePath,
 							encoding: "utf-8",
@@ -2264,7 +2531,7 @@ export function registerWorktreeHandlers(
 					// Get name-status for file status (cross-platform)
 					nameStatus = execFileSync(
 						getToolPath("git"),
-						["diff", "--name-status", `${baseBranch}...HEAD`],
+						["diff", "--name-status", diffRange],
 						{
 							cwd: worktreePath,
 							encoding: "utf-8",
@@ -2275,7 +2542,7 @@ export function registerWorktreeHandlers(
 					// Get full diff for patch content
 					fullDiff = execFileSync(
 						getToolPath("git"),
-						["diff", `${baseBranch}...HEAD`],
+						["diff", diffRange],
 						{
 							cwd: worktreePath,
 							encoding: "utf-8",
@@ -2376,14 +2643,76 @@ export function registerWorktreeHandlers(
 					console.error("Error getting diff:", diffError);
 				}
 
+				// Load and apply discard list filter
+				const discardListPath = path.join(
+					worktreePath,
+					".workpilot-discard-list",
+				);
+				let discardedFiles: string[] = [];
+				try {
+					const content = await fsPromises.readFile(
+						discardListPath,
+						"utf-8",
+					);
+					discardedFiles = content
+						.split("\n")
+						.map((line) => line.trim())
+						.filter((line) => line && !line.startsWith("#"));
+					if (discardedFiles.length > 0) {
+						console.error(
+							`[TASK_WORKTREE_DIFF] Loaded ${discardedFiles.length} discarded files:`,
+							discardedFiles,
+						);
+					}
+				} catch (err) {
+					// .workpilot-discard-list est optionnel : ENOENT est normal
+					// quand l'utilisateur n'a discardé aucun fichier. Seuls les
+					// autres types d'erreur (permissions, EIO…) sont remontés.
+					const isMissing =
+						err instanceof Error &&
+						(err as NodeJS.ErrnoException).code === "ENOENT";
+					if (!isMissing) {
+						console.error(
+							"[TASK_WORKTREE_DIFF] Error reading discard list:",
+							err,
+						);
+					}
+				}
+
+				// Filter out discarded files from the diff
+				const isWorkpilotArtifact = (p: string): boolean => {
+					const normalized = p.replaceAll("\\", "/");
+					return (
+						normalized === ".workpilot" ||
+						normalized.startsWith(".workpilot/") ||
+						normalized.startsWith(".workpilot-")
+					);
+				};
+				const filteredFiles = files.filter(
+					(file) =>
+						!discardedFiles.includes(file.path) &&
+						!isWorkpilotArtifact(file.path),
+				);
+				if (discardedFiles.length > 0) {
+					console.error(
+						`[TASK_WORKTREE_DIFF] Filtered from ${files.length} to ${filteredFiles.length} files`,
+					);
+				}
+
 				// Generate summary
-				const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
-				const totalDeletions = files.reduce((sum, f) => sum + f.deletions, 0);
-				const summary = `${files.length} files changed, ${totalAdditions} insertions(+), ${totalDeletions} deletions(-)`;
+				const totalAdditions = filteredFiles.reduce(
+					(sum, f) => sum + f.additions,
+					0,
+				);
+				const totalDeletions = filteredFiles.reduce(
+					(sum, f) => sum + f.deletions,
+					0,
+				);
+				const summary = `${filteredFiles.length} files changed, ${totalAdditions} insertions(+), ${totalDeletions} deletions(-)`;
 
 				return {
 					success: true,
-					data: { files, summary },
+					data: { files: filteredFiles, summary },
 				};
 			} catch (error) {
 				console.error("Failed to get worktree diff:", error);
@@ -2902,45 +3231,16 @@ export function registerWorktreeHandlers(
 								staged = true;
 							} else {
 								// Full merge (not stage-only)
-								newStatus = "done";
-								planStatus = "completed";
-								message = "Changes merged successfully";
+								// Keep in human_review to allow user validation before completion
+								newStatus = "human_review";
+								planStatus = "review";
+								message = "Changes merged successfully. Review and mark complete when ready.";
 								staged = false;
 
-								// Clean up worktree after successful full merge (fixes #243)
-								// This allows drag-to-Done workflow since TASK_UPDATE_STATUS blocks 'done' when worktree exists
-								// Uses shared cleanup utility for robust Windows support (fixes #1539)
-								if (worktreePath && existsSync(worktreePath)) {
-									const cleanupResult = await cleanupWorktree({
-										worktreePath,
-										projectPath: project.path,
-										specId: task.specId,
-										commitMessage: "Auto-save before merge cleanup",
-										logPrefix: "[TASK_WORKTREE_MERGE]",
-										deleteBranch: true,
-									});
-
-									if (cleanupResult.success) {
-										debug(
-											"Worktree cleaned up after full merge:",
-											worktreePath,
-										);
-										if (cleanupResult.branch) {
-											debug("Task branch deleted:", cleanupResult.branch);
-										}
-									} else {
-										debug(
-											"Worktree cleanup failed (non-fatal):",
-											cleanupResult.warnings,
-										);
-										// Non-fatal - merge succeeded, cleanup can be done manually
-									}
-
-									// Log any warnings for debugging
-									if (cleanupResult.warnings.length > 0) {
-										debug("Cleanup warnings:", cleanupResult.warnings);
-									}
-								}
+								// NOTE: Do NOT auto-cleanup worktree after merge
+								// User must explicitly drag task to "Done" column to confirm cleanup
+								// This prevents accidental data loss and ensures user validates merge first.
+								// The worktree will be cleaned up when user moves task to "Done" status.
 							}
 
 							debug(
@@ -3395,8 +3695,23 @@ export function registerWorktreeHandlers(
 						console.warn("[IPC] merge-preview process exited with code:", code);
 						if (code === 0) {
 							try {
-								// Parse JSON output from Python
-								const result = JSON.parse(stdout.trim());
+								// The Python backend interleaves DEBUG log lines with the
+								// final `print(json.dumps(result))` on the same stdout
+								// stream. JSON.parse on the whole blob fails. Walk the
+								// lines bottom-up and pick the last one that parses as
+								// a JSON object — that's the result line.
+								const parsed = extractLastJsonObject(stdout);
+								if (!parsed) {
+									throw new Error(
+										"No JSON object found in backend stdout",
+									);
+								}
+								// The shape comes straight from the Python CLI; we
+								// re-cast it to the consumer shape below. Treating it
+								// as `any` here keeps the existing typing of the IPC
+								// response unchanged.
+								// biome-ignore lint/suspicious/noExplicitAny: dynamic JSON from Python CLI
+								const result = parsed as any;
 								console.warn(
 									"[IPC] merge-preview result:",
 									JSON.stringify(result, null, 2),
@@ -3875,6 +4190,179 @@ export function registerWorktreeHandlers(
 	);
 
 	/**
+	 * Read a file from a worktree
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_WORKTREE_READ_FILE,
+		async (
+			_,
+			worktreePath: string,
+			relativePath: string,
+		): Promise<IPCResult<string>> => {
+			try {
+				const fullPath = path.join(worktreePath, relativePath);
+				const resolved = path.resolve(fullPath);
+				const resolvedWorktree = path.resolve(worktreePath);
+
+				// Security: ensure the resolved path is still inside the worktree
+				if (!resolved.startsWith(resolvedWorktree)) {
+					return { success: false, error: "Path traversal not allowed" };
+				}
+
+				const content = await fsPromises.readFile(resolved, "utf-8");
+				return { success: true, data: content };
+			} catch (error) {
+				return {
+					success: false,
+					error:
+						error instanceof Error ? error.message : "Failed to read file",
+				};
+			}
+		},
+	);
+
+	/**
+	 * Write a file to a worktree
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_WORKTREE_WRITE_FILE,
+		async (
+			_,
+			worktreePath: string,
+			relativePath: string,
+			content: string,
+		): Promise<IPCResult<{ written: boolean }>> => {
+			try {
+				const fullPath = path.join(worktreePath, relativePath);
+				const resolved = path.resolve(fullPath);
+				const resolvedWorktree = path.resolve(worktreePath);
+
+				// Security: ensure the resolved path is still inside the worktree
+				if (!resolved.startsWith(resolvedWorktree)) {
+					return { success: false, error: "Path traversal not allowed" };
+				}
+
+				// Ensure parent directory exists
+				await fsPromises.mkdir(path.dirname(resolved), { recursive: true });
+				await fsPromises.writeFile(resolved, content, "utf-8");
+
+				return { success: true, data: { written: true } };
+			} catch (error) {
+				return {
+					success: false,
+					error:
+						error instanceof Error ? error.message : "Failed to write file",
+				};
+			}
+		},
+	);
+
+	/**
+	 * Discard changes to files in a worktree (git checkout)
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_WORKTREE_DELETE_FILES,
+		async (
+			_,
+			worktreePath: string,
+			relativePaths: string[],
+		): Promise<IPCResult<{ deleted: string[]; failed: string[] }>> => {
+			const deleted: string[] = [];
+			const failed: string[] = [];
+			const resolvedWorktree = path.resolve(worktreePath);
+
+			// Load existing discard list
+			const discardListPath = path.join(
+				resolvedWorktree,
+				".workpilot-discard-list",
+			);
+			let discardedFiles: string[] = [];
+			try {
+				const content = await fsPromises.readFile(discardListPath, "utf-8");
+				discardedFiles = content
+					.split("\n")
+					.map((line) => line.trim())
+					.filter((line) => line && !line.startsWith("#"));
+			} catch {
+				// File doesn't exist yet
+			}
+
+			for (const relativePath of relativePaths) {
+				try {
+					// Security: validate path stays within worktree
+					const fullPath = path.join(resolvedWorktree, relativePath);
+					const resolved = path.resolve(fullPath);
+					const relative = path.relative(resolvedWorktree, resolved);
+					if (relative.startsWith("..")) {
+						failed.push(relativePath);
+						continue;
+					}
+
+					// Discard changes: sync file state with develop branch
+					const statusResult = await execAsync(
+						`git status --porcelain -- "${relativePath}"`,
+						{ cwd: resolvedWorktree },
+					);
+					const statusOutput = statusResult.stdout.trim();
+
+					if (statusOutput.startsWith("??")) {
+						// Untracked file, just remove it
+						try {
+							await fsPromises.unlink(resolved);
+						} catch (err) {
+							// Ignore if file doesn't exist
+							if (
+								!(err instanceof Error) ||
+								!err.message.includes("ENOENT")
+							) {
+								throw err;
+							}
+						}
+					} else if (statusOutput) {
+						// File is tracked: reset to develop's version using git reset
+						await execAsync(
+							`git reset develop -- "${relativePath}"`,
+							{ cwd: resolvedWorktree },
+						);
+						// Then checkout the file from develop to match exactly
+						await execAsync(
+							`git checkout develop -- "${relativePath}"`,
+							{ cwd: resolvedWorktree },
+						);
+					}
+
+					// Add to discard list so backend excludes it from merge preview
+					if (!discardedFiles.includes(relativePath)) {
+						discardedFiles.push(relativePath);
+					}
+
+					deleted.push(relativePath);
+				} catch (error) {
+					console.error(
+						`[WORKTREE_DISCARD] Failed to discard changes to ${relativePath}:`,
+						error,
+					);
+					failed.push(relativePath);
+				}
+			}
+
+			// Write discard list for backend to read
+			if (discardedFiles.length > 0) {
+				await fsPromises.writeFile(
+					discardListPath,
+					discardedFiles
+						.map((f) => f.trim())
+						.join("\n")
+						.concat("\n"),
+					"utf-8",
+				);
+			}
+
+			return { success: true, data: { deleted, failed } };
+		},
+	);
+
+	/**
 	 * Open a worktree directory in the specified IDE
 	 */
 	ipcMain.handle(
@@ -4122,6 +4610,39 @@ export function registerWorktreeHandlers(
 				}
 				debug("Worktree path:", worktreePath);
 
+				// If a customBody was provided (review modal), write it to a
+				// temporary file so we can pass --pr-body-file to the Python
+				// CLI without dealing with command-line escaping / size limits.
+				let customBodyTempDir: string | null = null;
+				let customBodyFilePath: string | undefined;
+				if (options?.customBody !== undefined) {
+					try {
+						customBodyTempDir = mkdtempSync(
+							path.join(tmpdir(), "workpilot-pr-body-"),
+						);
+						customBodyFilePath = path.join(customBodyTempDir, "body.md");
+						writeFileSync(customBodyFilePath, options.customBody, "utf-8");
+					} catch (writeErr) {
+						debug("Failed to write custom body temp file:", writeErr);
+						return {
+							success: false,
+							error: "Failed to write custom PR body to temporary file",
+						};
+					}
+				}
+
+				// Cleanup helper - safe to call multiple times
+				const cleanupCustomBodyFile = () => {
+					if (customBodyTempDir) {
+						try {
+							rmSync(customBodyTempDir, { recursive: true, force: true });
+						} catch (cleanupErr) {
+							debug("Failed to clean up custom body temp dir:", cleanupErr);
+						}
+						customBodyTempDir = null;
+					}
+				};
+
 				// Build arguments using helper function
 				const taskBaseBranch = getTaskBaseBranch(specDir);
 				const { args, validationError } = buildCreatePRArgs(
@@ -4130,8 +4651,10 @@ export function registerWorktreeHandlers(
 					project.path,
 					options,
 					taskBaseBranch,
+					customBodyFilePath,
 				);
 				if (validationError) {
+					cleanupCustomBodyFile();
 					return { success: false, error: validationError };
 				}
 				if (taskBaseBranch) {
@@ -4147,7 +4670,14 @@ export function registerWorktreeHandlers(
 				const profileResult = getBestAvailableProfileEnv();
 				const profileEnv = profileResult.env;
 
-				return new Promise((resolve) => {
+				// Forward project-level credentials (.workpilot/.env) into the
+				// Python subprocess so PR creation can authenticate against
+				// Azure DevOps / GitHub / GitLab. Without this the Python
+				// _get_azure_devops_credentials() sees an empty PAT and the
+				// API call returns HTTP 401 ("authentication failed").
+				const projectEnv = loadProjectEnvForSubprocess(project);
+
+				return new Promise<IPCResult<WorktreeCreatePRResult>>((resolve) => {
 					let timeoutId: NodeJS.Timeout | null = null;
 					let resolved = false;
 
@@ -4169,6 +4699,7 @@ export function registerWorktreeHandlers(
 								...getIsolatedGitEnv(),
 								...pythonEnv,
 								...profileEnv,
+								...projectEnv,
 								GITHUB_CLI_PATH: ghCliPath,
 								APP_LANGUAGE: getAppLanguage(),
 								PYTHONUNBUFFERED: "1",
@@ -4242,12 +4773,12 @@ export function registerWorktreeHandlers(
 							if (result) {
 								debug("Parsed result:", result);
 
-								// Only update task status if a NEW PR was created (not if it already exists)
-								if (
-									result.success !== false &&
-									result.prUrl &&
-									!result.alreadyExists
-								) {
+								// Persist the PR URL onto the task in ALL cases where we
+								// have one — including when the PR already existed (the
+								// user is pushing a new commit onto an existing PR). This
+								// guarantees the Kanban item always carries the PR link.
+								let visualProof: VisualProofRun | undefined;
+								if (result.success !== false && result.prUrl) {
 									await updateTaskStatusAfterPRCreation(
 										specDir,
 										worktreePath,
@@ -4256,8 +4787,39 @@ export function registerWorktreeHandlers(
 										task.specId,
 										debug,
 									);
-								} else if (result.alreadyExists) {
-									debug("PR already exists, not updating task status");
+									if (result.alreadyExists) {
+										debug(
+											"PR already exists, refreshed task status with existing PR URL",
+										);
+									}
+									if (options?.runVisualProof !== false) {
+										visualProof = await visualProofService.run({
+											taskId: task.id,
+											projectPath: project.path,
+											specId: task.specId,
+											prUrl: result.prUrl,
+											worktreePath,
+											autoBuildPath: project.autoBuildPath,
+										});
+										updateVisualProofMetadata(
+											specDir,
+											worktreePath,
+											project.autoBuildPath,
+											task.specId,
+											visualProof,
+											debug,
+										);
+
+										const mainWindow = getMainWindow();
+										if (mainWindow) {
+											mainWindow.webContents.send(
+												IPC_CHANNELS.TASK_UPDATE,
+												task.id,
+												{ metadata: { visualProof } },
+												project.id,
+											);
+										}
+									}
 								}
 
 								resolve({
@@ -4267,6 +4829,7 @@ export function registerWorktreeHandlers(
 										prUrl: result.prUrl,
 										error: result.error,
 										alreadyExists: result.alreadyExists,
+										visualProof,
 									},
 								});
 							} else {
@@ -4324,12 +4887,283 @@ export function registerWorktreeHandlers(
 							error: `Failed to run create-pr: ${err.message}`,
 						});
 					});
-				});
+				}).finally(cleanupCustomBodyFile);
 			} catch (error) {
 				console.error("[CREATE_PR] Exception in handler:", error);
 				return {
 					success: false,
 					error: error instanceof Error ? error.message : "Failed to create PR",
+				};
+			}
+		},
+	);
+
+	/**
+	 * Run or retry automated visual proof for an existing PR.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_VISUAL_PROOF_RUN,
+		async (_, taskId: string): Promise<IPCResult<VisualProofRun>> => {
+			try {
+				const { task, project } = findTaskAndProject(taskId);
+				if (!task || !project) {
+					return { success: false, error: "Task not found" };
+				}
+
+				const prUrl = task.prUrl ?? task.metadata?.prUrl;
+				if (!prUrl) {
+					return { success: false, error: "Task has no PR URL" };
+				}
+
+				const specDir = path.join(
+					project.path,
+					project.autoBuildPath || ".workpilot",
+					"specs",
+					task.specId,
+				);
+				const worktreePath = findTaskWorktree(project.path, task.specId);
+				const visualProof = await visualProofService.run({
+					taskId: task.id,
+					projectPath: project.path,
+					specId: task.specId,
+					prUrl,
+					worktreePath: worktreePath ?? undefined,
+					autoBuildPath: project.autoBuildPath,
+				});
+
+				updateVisualProofMetadata(
+					specDir,
+					worktreePath,
+					project.autoBuildPath,
+					task.specId,
+					visualProof,
+					(...args: unknown[]) => console.warn("[VISUAL_PROOF]", ...args),
+				);
+
+				const mainWindow = getMainWindow();
+				if (mainWindow) {
+					mainWindow.webContents.send(
+						IPC_CHANNELS.TASK_UPDATE,
+						task.id,
+						{ metadata: { visualProof } },
+						project.id,
+					);
+				}
+
+				return { success: true, data: visualProof };
+			} catch (error) {
+				return {
+					success: false,
+					error:
+						error instanceof Error ? error.message : "Failed to run visual proof",
+				};
+			}
+		},
+	);
+
+	/**
+	 * Report whether a visual proof run is currently in progress for a task. The
+	 * renderer queries this on mount so the spinner is restored after the tab was
+	 * closed/reopened, and so a second run cannot be triggered while one is live.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_VISUAL_PROOF_STATUS,
+		async (_, taskId: string): Promise<IPCResult<{ running: boolean }>> => {
+			return {
+				success: true,
+				data: { running: visualProofService.isRunning(taskId) },
+			};
+		},
+	);
+
+	// Forward visual proof start/finish to the renderer so every open tab can keep
+	// its spinner in sync, even one that did not initiate the run. Registered once
+	// (registerWorktreeHandlers runs at startup) to avoid stacking listeners.
+	if (visualProofService.listenerCount("running-changed") === 0) {
+		visualProofService.on(
+			"running-changed",
+			(taskId: string, running: boolean) => {
+				getMainWindow()?.webContents.send(
+					IPC_CHANNELS.TASK_VISUAL_PROOF_RUNNING,
+					taskId,
+					running,
+				);
+			},
+		);
+	}
+
+	/**
+	 * Preview the PR body + impact analysis WITHOUT pushing or creating a PR.
+	 * Used by the PR review modal to pre-fill editable fields (rating 1-5 +
+	 * impacted features) before the user confirms creation.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_WORKTREE_ANALYZE_IMPACT,
+		async (
+			_,
+			taskId: string,
+			targetBranch?: string,
+		): Promise<
+			IPCResult<import("../../../shared/types").WorktreeAnalyzeImpactResult>
+		> => {
+			try {
+				const pythonEnvError = await initializePythonEnvForPR(pythonEnvManager);
+				if (pythonEnvError) {
+					return { success: false, error: pythonEnvError };
+				}
+
+				const { task, project } = findTaskAndProject(taskId);
+				if (!task || !project) {
+					return { success: false, error: "Task not found" };
+				}
+
+				const sourcePath = getEffectiveSourcePath();
+				if (!sourcePath) {
+					return { success: false, error: "WorkPilot AI source not found" };
+				}
+
+				const runScript = path.join(sourcePath, "run.py");
+
+				const args: string[] = [
+					runScript,
+					"--spec",
+					task.specId,
+					"--project-dir",
+					project.path,
+					"--analyze-impact",
+				];
+				if (targetBranch) {
+					if (!GIT_BRANCH_REGEX.test(targetBranch)) {
+						return { success: false, error: "Invalid target branch name" };
+					}
+					args.push("--pr-target", targetBranch);
+				}
+
+				const pythonPath = getConfiguredPythonPath();
+				const profileEnv = getBestAvailableProfileEnv().env;
+				const projectEnv = loadProjectEnvForSubprocess(project);
+				const pythonEnv = pythonEnvManagerSingleton.getPythonEnv();
+				const ghCliPath = getToolPath("gh");
+				const [pythonCommand, pythonBaseArgs] = parsePythonCommand(pythonPath);
+
+				return new Promise<
+					IPCResult<
+						import("../../../shared/types").WorktreeAnalyzeImpactResult
+					>
+				>((resolve) => {
+					const proc = spawn(
+						pythonCommand,
+						[...pythonBaseArgs, ...args],
+						{
+							cwd: sourcePath,
+							env: {
+								...getIsolatedGitEnv(),
+								...pythonEnv,
+								...profileEnv,
+								...projectEnv,
+								GITHUB_CLI_PATH: ghCliPath,
+								APP_LANGUAGE: getAppLanguage(),
+								PYTHONUNBUFFERED: "1",
+								PYTHONUTF8: "1",
+							},
+							stdio: ["ignore", "pipe", "pipe"],
+						},
+					);
+
+					let stdout = "";
+					let stderr = "";
+					let resolved = false;
+
+					// LLM analysis can take a while; give it 60s.
+					const timeoutId = setTimeout(() => {
+						if (resolved) return;
+						resolved = true;
+						killProcessGracefully(proc, {
+							debugPrefix: "[ANALYZE_IMPACT]",
+							debug: false,
+						});
+						resolve({
+							success: false,
+							error: "Impact analysis timed out after 60s",
+						});
+					}, 60_000);
+
+					proc.stdout.on("data", (d: Buffer) => {
+						stdout += d.toString("utf-8");
+					});
+					proc.stderr.on("data", (d: Buffer) => {
+						stderr += d.toString("utf-8");
+					});
+
+					const onExit = (code: number | null) => {
+						if (resolved) return;
+						resolved = true;
+						clearTimeout(timeoutId);
+
+						// Parse the last JSON line from stdout (CLI prints banner +
+						// progress lines before the final JSON).
+						const trimmed = stdout.trim();
+						const lines = trimmed
+							.split(/\r?\n/)
+							.map((l) => l.trim())
+							.filter(Boolean);
+						let parsed: Record<string, unknown> | null = null;
+						for (let i = lines.length - 1; i >= 0; i--) {
+							const line = lines[i];
+							if (line.startsWith("{") && line.endsWith("}")) {
+								try {
+									parsed = JSON.parse(line) as Record<string, unknown>;
+									break;
+								} catch {
+									// keep looking
+								}
+							}
+						}
+
+						if (parsed && parsed.success === true) {
+							resolve({
+								success: true,
+								data: {
+									success: true,
+									body: typeof parsed.body === "string" ? parsed.body : "",
+									rating:
+										typeof parsed.rating === "string"
+											? parsed.rating
+											: "N/A",
+									features:
+										typeof parsed.features === "string"
+											? parsed.features
+											: "Non evalue",
+								},
+							});
+							return;
+						}
+
+						const err =
+							(parsed && typeof parsed.error === "string"
+								? parsed.error
+								: undefined) ||
+							stderr.trim() ||
+							`Impact analysis failed (exit code ${code})`;
+						resolve({ success: false, error: err });
+					};
+
+					proc.on("close", (code) => onExit(code));
+					proc.on("error", (err) => {
+						if (resolved) return;
+						resolved = true;
+						clearTimeout(timeoutId);
+						resolve({
+							success: false,
+							error: `Failed to run analyze-impact: ${err.message}`,
+						});
+					});
+				});
+			} catch (error) {
+				return {
+					success: false,
+					error:
+						error instanceof Error ? error.message : "Failed to analyze impact",
 				};
 			}
 		},

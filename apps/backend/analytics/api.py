@@ -5,7 +5,18 @@ Provides REST API endpoints for accessing build metrics, performance data,
 and analytics insights.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+
+def _utcnow_naive() -> datetime:
+    """Return a tz-naive UTC datetime (replacement for deprecated
+    `datetime.utcnow()`).
+
+    The DB schema stores naive UTC datetimes; passing a tz-aware value
+    would break comparisons with stored columns.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -121,7 +132,7 @@ async def get_dashboard_overview(
     days: int = Query(default=30, ge=1, le=365), db: Session = Depends(get_db)
 ):
     """Get dashboard overview with key metrics."""
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = _utcnow_naive() - timedelta(days=days)
 
     # Total builds and success rate
     total_builds_query = db.query(Build).filter(Build.started_at >= cutoff_date)
@@ -378,7 +389,7 @@ async def get_token_metrics(
     days: int = Query(default=30, ge=1, le=365), db: Session = Depends(get_db)
 ):
     """Get token usage metrics over time."""
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = _utcnow_naive() - timedelta(days=days)
 
     # Group by date
     token_data = (
@@ -413,7 +424,7 @@ async def get_qa_metrics(
     days: int = Query(default=30, ge=1, le=365), db: Session = Depends(get_db)
 ):
     """Get QA performance metrics over time."""
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = _utcnow_naive() - timedelta(days=days)
 
     # Group by date
     qa_data = (
@@ -449,7 +460,7 @@ async def get_agent_performance(
     days: int = Query(default=30, ge=1, le=365), db: Session = Depends(get_db)
 ):
     """Get agent performance metrics."""
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = _utcnow_naive() - timedelta(days=days)
 
     # Get performance data from phases
     performance_data = (
@@ -491,7 +502,7 @@ async def get_error_metrics(
     days: int = Query(default=30, ge=1, le=365), db: Session = Depends(get_db)
 ):
     """Get error metrics and patterns."""
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = _utcnow_naive() - timedelta(days=days)
 
     error_data = (
         db.query(

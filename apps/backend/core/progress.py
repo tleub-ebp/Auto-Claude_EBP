@@ -55,7 +55,12 @@ def count_subtasks(spec_dir: Path) -> tuple[int, int]:
         for phase in plan.get("phases", []):
             for subtask in phase.get("subtasks", []):
                 total += 1
-                if subtask.get("status") == "completed":
+                status = subtask.get("status")
+                # Count both "completed" and "blocked" as done.
+                # Blocked subtasks (e.g., e2e tests requiring manual execution)
+                # cannot be processed by the agent, so they should not prevent
+                # the build from progressing to QA / human_review.
+                if status in ("completed", "blocked"):
                     completed += 1
 
         return completed, total
@@ -436,7 +441,7 @@ def get_next_subtask(spec_dir: Path) -> dict | None:
             )
             subtasks = phase.get("subtasks", phase.get("chunks", []))
             phase_complete[phase_id_key] = all(
-                s.get("status") == "completed" for s in subtasks
+                s.get("status") in ("completed", "blocked") for s in subtasks
             )
 
         # Find next available subtask

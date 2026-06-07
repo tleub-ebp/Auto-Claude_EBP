@@ -234,6 +234,54 @@ def test_coder_validate_subtask_files_with_missing_project_returns_dict(
     assert isinstance(result, dict)
 
 
+def test_coder_validate_subtask_files_suggests_git_root_when_paths_escape(
+    tmp_path,
+) -> None:
+    from agents.coder import validate_subtask_files
+
+    # Simulate the MeCa-style misconfig: project_dir is a sub-folder of a Git repo,
+    # and files_to_modify uses `../` to reach a sibling folder that lives inside
+    # the same Git root.
+    (tmp_path / ".git").mkdir()
+    sub_project = tmp_path / "sub"
+    sub_project.mkdir()
+    sibling = tmp_path / "Sources"
+    sibling.mkdir()
+    target_file = sibling / "Foo.cs"
+    target_file.write_text("// stub")
+
+    subtask = {
+        "id": "s1",
+        "files_to_modify": ["../Sources/Foo.cs"],
+    }
+    result = validate_subtask_files(subtask, sub_project)
+
+    assert result["success"] is False
+    assert result["invalid_paths"] == ["../Sources/Foo.cs"]
+    # The suggestion must point the user at the actual Git root.
+    assert "Git root" in result["suggestion"]
+    assert str(tmp_path.resolve()) in result["suggestion"]
+
+
+def test_coder_validate_subtask_files_generic_suggestion_when_no_git_parent(
+    tmp_path,
+) -> None:
+    from agents.coder import validate_subtask_files
+
+    # No .git anywhere above → fall back to the generic suggestion.
+    sub_project = tmp_path / "sub"
+    sub_project.mkdir()
+    subtask = {
+        "id": "s1",
+        "files_to_modify": ["../something/outside.txt"],
+    }
+    result = validate_subtask_files(subtask, sub_project)
+
+    assert result["success"] is False
+    assert "Update implementation plan" in result["suggestion"]
+    assert "Git root" not in result["suggestion"]
+
+
 # ---------------------------------------------------------------------------
 # Module-level constants
 

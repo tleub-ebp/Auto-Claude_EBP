@@ -357,6 +357,21 @@ export function AppSettingsDialog(props: AppSettingsDialogProps) {
 		setAppSection("accounts");
 	};
 
+	// Listen for cross-component navigation requests (fired by descendants like
+	// project-settings/GeneralSettings to jump to the global "Agent" section).
+	useEffect(() => {
+		if (!open) return;
+		const handler = (event: Event) => {
+			const target = (event as CustomEvent<{ section?: AppSection }>).detail
+				?.section;
+			if (!target) return;
+			setActiveTopLevel("app");
+			setAppSection(target);
+		};
+		window.addEventListener("app-settings:navigate", handler);
+		return () => window.removeEventListener("app-settings:navigate", handler);
+	}, [open]);
+
 	// Function to toggle theme collapse
 	const toggleThemeCollapse = (themeKey: SettingsTheme) => {
 		setCollapsedThemes((prev) => {

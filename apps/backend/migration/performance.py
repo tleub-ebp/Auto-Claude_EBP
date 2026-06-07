@@ -6,7 +6,8 @@ Implements caching, parallel processing, and incremental migrations
 import asyncio
 import hashlib
 import json
-import pickle
+import logging
+import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from .models import TransformationResult
+
+logger = logging.getLogger(__name__)
 
 
 class MigrationCache:
@@ -46,18 +49,27 @@ class MigrationCache:
         # Check disk cache
         if self.cache_dir is None:
             return None
-        cache_file = self.cache_dir / f"{key}.pkl"
+        cache_file = self.cache_dir / f"{key}.json"
         if cache_file.exists():
             # Check if cache is still valid
             file_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
             if datetime.now() - file_time < timedelta(hours=self.ttl_hours):
                 try:
-                    with open(cache_file, "rb") as f:
-                        result = pickle.load(f)
-                        self.memory_cache[key] = result
-                        return result
+                    with open(cache_file, encoding="utf-8") as f:
+                        payload = json.load(f)
+                    result = TransformationResult.from_dict(payload)
+                    self.memory_cache[key] = result
+                    return result
                 except Exception:
-                    pass
+                    # Cache corruption (truncated/invalid) — log and self-heal
+                    # by removing the bad entry so the next set() rebuilds it.
+                    logger.exception(
+                        "Failed to load cache entry %s; removing", cache_file.name
+                    )
+                    try:
+                        cache_file.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
         return None
 
@@ -73,35 +85,52 @@ class MigrationCache:
         # Update disk cache
         if self.cache_dir is None:
             return
-        cache_file = self.cache_dir / f"{key}.pkl"
+        cache_file = self.cache_dir / f"{key}.json"
+        # Atomic write: tmp file + os.replace, so a crash mid-write never
+        # leaves a half-written cache entry visible to readers.
+        tmp_file = cache_file.with_suffix(cache_file.suffix + ".tmp")
         try:
-            with open(cache_file, "wb") as f:
-                pickle.dump(result, f)
-        except Exception as e:
-            print(f"Warning: Failed to cache result: {e}")
-
-    def clear(self, older_than_hours: int | None = None) -> int:
-        """Clear cache entries."""
-        cleared = 0
-        cutoff_time = datetime.now() - timedelta(hours=older_than_hours or 0)
-
-        if self.cache_dir is None:
-            return cleared
-        for cache_file in self.cache_dir.glob("*.pkl"):
+            with open(tmp_file, "w", encoding="utf-8") as f:
+                json.dump(result.to_dict(), f)
+            os.replace(tmp_file, cache_file)
+        except Exception:
+            logger.exception("Failed to cache transformation result")
             try:
-                if older_than_hours is None:
-                    cache_file.unlink()
-                    cleared += 1
-                else:
-                    file_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
-                    if file_time < cutoff_time:
-                        cache_file.unlink()
-                        cleared += 1
-            except Exception:
+                tmp_file.unlink(missing_ok=True)
+            except OSError:
                 pass
 
+    def clear(self, older_than_hours: int | None = None) -> int:
+        """Clear cache entries.
+
+        Args:
+            older_than_hours: If None, clear everything (including memory).
+                If an int, clear entries whose mtime is older than that many
+                hours.
+        """
+        cleared = 0
+        if self.cache_dir is None:
+            return cleared
+
         if older_than_hours is None:
+            for cache_file in self.cache_dir.glob("*.json"):
+                try:
+                    cache_file.unlink()
+                    cleared += 1
+                except OSError:
+                    logger.exception("Failed to remove cache entry %s", cache_file)
             self.memory_cache.clear()
+            return cleared
+
+        cutoff_time = datetime.now() - timedelta(hours=older_than_hours)
+        for cache_file in self.cache_dir.glob("*.json"):
+            try:
+                file_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
+                if file_time < cutoff_time:
+                    cache_file.unlink()
+                    cleared += 1
+            except OSError:
+                logger.exception("Failed to remove cache entry %s", cache_file)
 
         return cleared
 
@@ -114,7 +143,7 @@ class MigrationCache:
                 "total_size_mb": 0,
                 "cache_dir": None,
             }
-        disk_files = list(self.cache_dir.glob("*.pkl"))
+        disk_files = list(self.cache_dir.glob("*.json"))
         total_size = sum(f.stat().st_size for f in disk_files)
 
         return {
@@ -192,7 +221,11 @@ class IncrementalMigration:
                 with open(self.state_file) as f:
                     return json.load(f)
             except Exception:
-                pass
+                logger.exception(
+                    "Failed to load incremental migration state from %s; "
+                    "falling back to empty state",
+                    self.state_file,
+                )
 
         return {
             "migrated_files": [],
@@ -207,11 +240,18 @@ class IncrementalMigration:
             return
         self.state["last_updated"] = datetime.now().isoformat()
 
+        # Atomic write to avoid leaving a truncated state file on crash.
+        tmp_file = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
         try:
-            with open(self.state_file, "w") as f:
+            with open(tmp_file, "w") as f:
                 json.dump(self.state, f, indent=2)
-        except Exception as e:
-            print(f"Warning: Failed to save state: {e}")
+            os.replace(tmp_file, self.state_file)
+        except Exception:
+            logger.exception("Failed to save incremental migration state")
+            try:
+                tmp_file.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def mark_migrated(self, file_path: str) -> None:
         """Mark a file as successfully migrated."""

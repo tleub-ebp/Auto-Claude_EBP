@@ -90,21 +90,21 @@ class StreamingLogCapture:
                     if hasattr(block, "input") and block.input:
                         inp = block.input
                         if isinstance(inp, dict):
-                            # Extract meaningful input description
-                            # Increased limits to avoid hiding critical information
+                            # Extract meaningful input description.
+                            # Show commands and paths in full so the activity
+                            # feed reveals exactly what the agent is doing; only
+                            # pathologically long inputs are trimmed.
                             if "pattern" in inp:
                                 tool_input = f"pattern: {inp['pattern']}"
                             elif "file_path" in inp:
-                                fp = inp["file_path"]
-                                # Show last 200 chars for paths (enough for most file paths)
-                                if len(fp) > 200:
-                                    fp = "..." + fp[-197:]
+                                fp = str(inp["file_path"])
+                                if len(fp) > 2000:
+                                    fp = "..." + fp[-1997:]
                                 tool_input = fp
                             elif "command" in inp:
-                                cmd = inp["command"]
-                                # Show first 300 chars for commands (enough for most commands)
-                                if len(cmd) > 300:
-                                    cmd = cmd[:297] + "..."
+                                cmd = str(inp["command"])
+                                if len(cmd) > 2000:
+                                    cmd = cmd[:1997] + "..."
                                 tool_input = cmd
                             elif "path" in inp:
                                 tool_input = inp["path"]

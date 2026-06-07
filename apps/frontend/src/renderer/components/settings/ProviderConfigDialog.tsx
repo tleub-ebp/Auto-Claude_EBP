@@ -603,15 +603,8 @@ export function ProviderConfigDialog({
 					</TabsContent>
 
 					{supportsGitHubCopilot && (
-						<TabsContent value="github-copilot" className="space-y-6 py-4">
-							<div className="space-y-4">
-								<div className="rounded-lg bg-muted/30 border border-border p-4">
-									<p className="text-sm text-muted-foreground mb-4">
-										{t("settings.githubCopilot.description")}
-									</p>
-									<GitHubCopilotConfig />
-								</div>
-							</div>
+						<TabsContent value="github-copilot" className="py-4">
+							<GitHubCopilotConfig />
 						</TabsContent>
 					)}
 				</Tabs>

@@ -21,6 +21,7 @@ However, specific scanners can be configured based on project needs.
 from __future__ import annotations
 
 import os
+import threading
 import warnings
 from pathlib import Path
 from typing import Any
@@ -34,11 +35,39 @@ SECURITY_TOOLS_AVAILABLE = {
 }
 
 
-def _check_tool_availability():
-    """Check which optional security tools are available."""
+_TOOL_AVAILABILITY_CHECKED = False
+_tool_check_lock = threading.Lock()
+
+
+def _check_tool_availability(force: bool = False):
+    """Check which optional security tools are available.
+
+    Lazy: only runs the first time it's actually needed (e.g., from
+    `check_security_setup()`), so importing this module does not spawn 4
+    subprocesses synchronously. Spawning at import time both blocked startup
+    by up to ~1s on Windows and could execute attacker-controlled binaries
+    named bandit/snyk/etc. that happened to be on PATH.
+    """
+    global _TOOL_AVAILABILITY_CHECKED
+    # Fast path: already done and no force-recheck requested
+    if _TOOL_AVAILABILITY_CHECKED and not force:
+        return
+
+    with _tool_check_lock:
+        # Re-check under the lock to avoid double-work
+        if _TOOL_AVAILABILITY_CHECKED and not force:
+            return
+        _TOOL_AVAILABILITY_CHECKED = True
+
+    # Subprocess I/O happens OUTSIDE the lock to avoid blocking other threads
+    import shutil
     import subprocess
 
     for tool in SECURITY_TOOLS_AVAILABLE.keys():
+        # shutil.which() avoids spawning the binary at all when it is not on
+        # PATH. We only invoke `--version` once we know the binary exists.
+        if shutil.which(tool) is None:
+            continue
         try:
             subprocess.run(
                 [tool, "--version"],
@@ -51,9 +80,6 @@ def _check_tool_availability():
             pass
 
 
-_check_tool_availability()
-
-
 def get_default_security_config() -> dict[str, Any]:
     """
     Get default security configuration.
@@ -64,6 +90,11 @@ def get_default_security_config() -> dict[str, Any]:
     Returns:
         Default security configuration
     """
+    # Trigger lazy detection so SECURITY_TOOLS_AVAILABLE reflects the
+    # actual install state. Without this, the dict stays at all-False
+    # forever (the eager detection at import time was removed for safety
+    # — see `_check_tool_availability` docstring).
+    _check_tool_availability()
     return {
         "enabled": True,  # ALWAYS True - cannot be disabled
         "scan_on_commit": True,  # Automatic pre-commit secret scanning
@@ -98,6 +129,8 @@ def check_security_setup() -> dict[str, Any]:
     Returns:
         Dictionary with setup status and recommendations
     """
+    # Trigger lazy detection — see `get_default_security_config` for why.
+    _check_tool_availability()
     setup = {
         "core_features": "✅ Active (built-in)",
         "credential_leak_scanner_status": "✅ Active (built-in)",
@@ -263,8 +296,19 @@ def run_quick_security_check() -> bool:
 # It ensures security features are always available
 
 
-def _initialize_security():
-    """Initialize security features automatically."""
+def initialize_security() -> None:
+    """Initialize security features.
+
+    Must be called explicitly by application entry points — NOT at import
+    time. Importing this module from anywhere previously created a
+    `.security-reports/` directory in whatever cwd happened to be set,
+    polluting random user directories whenever the package was loaded as a
+    subprocess or from a CLI plugin context.
+
+    Renamed from `_initialize_security` so external callers (e.g., the
+    backend startup hook) can wire it up — the leading underscore caused
+    every caller to skip it and the security init never ran in practice.
+    """
     # Ensure reports directory exists
     ensure_security_reports_dir()
 
@@ -277,12 +321,8 @@ def _initialize_security():
         auto_install_git_hooks()
 
 
-# Initialize on import
-try:
-    _initialize_security()
-except Exception:
-    # Silent fail - don't break the application
-    pass
+# Backwards-compat alias for any caller that still references the old name.
+_initialize_security = initialize_security
 
 
 # =============================================================================
@@ -293,6 +333,7 @@ __all__ = [
     "is_security_enabled",
     "get_default_security_config",
     "check_security_setup",
+    "initialize_security",
     "print_security_status",
     "auto_install_git_hooks",
     "run_quick_security_check",

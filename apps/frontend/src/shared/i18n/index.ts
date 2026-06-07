@@ -26,6 +26,7 @@ import enSandbox from "./locales/en/sandbox.json";
 import enRegressionGuardian from "./locales/en/regressionGuardian.json";
 import enInjectionGuard from "./locales/en/injectionGuard.json";
 import enApiWatcher from "./locales/en/api-watcher.json";
+import enAgentTools from "./locales/en/agentTools.json";
 
 // Import English translation resources
 import enAppEmulator from "./locales/en/appEmulator.json";
@@ -106,6 +107,7 @@ import frSandbox from "./locales/fr/sandbox.json";
 import frRegressionGuardian from "./locales/fr/regressionGuardian.json";
 import frInjectionGuard from "./locales/fr/injectionGuard.json";
 import frApiWatcher from "./locales/fr/api-watcher.json";
+import frAgentTools from "./locales/fr/agentTools.json";
 
 // Import French translation resources
 import frAppEmulator from "./locales/fr/appEmulator.json";
@@ -193,6 +195,7 @@ export const resources = {
 		regressionGuardian: enRegressionGuardian,
 		injectionGuard: enInjectionGuard,
 		apiWatcher: enApiWatcher,
+		agentTools: enAgentTools,
 		changelog: enChangelog,
 		codePlayground: enCodePlayground,
 		codeReview: enCodeReview,
@@ -273,6 +276,7 @@ export const resources = {
 		regressionGuardian: frRegressionGuardian,
 		injectionGuard: frInjectionGuard,
 		apiWatcher: frApiWatcher,
+		agentTools: frAgentTools,
 		changelog: frChangelog,
 		codePlayground: frCodePlayground,
 		codeReview: frCodeReview,
@@ -360,6 +364,7 @@ i18n.use(initReactI18next).init({
 		"regressionGuardian",
 		"injectionGuard",
 		"apiWatcher",
+		"agentTools",
 		"changelog",
 		"codePlayground",
 		"codeReview",

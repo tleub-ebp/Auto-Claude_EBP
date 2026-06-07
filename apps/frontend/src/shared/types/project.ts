@@ -26,6 +26,8 @@ export interface ProjectSettings {
 	mainBranch?: string;
 	/** Include CLAUDE.md instructions in agent system prompt (default: true) */
 	useClaudeMd?: boolean;
+	/** Enforce strict TDD (Red-Green-Refactor) when the agent implements tasks (default: false) */
+	tddMode?: boolean;
 	/** Maximum parallel tasks allowed (default: 3) */
 	maxParallelTasks?: number;
 	/** Description utilisateur du projet (optionnel) */

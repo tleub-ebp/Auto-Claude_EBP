@@ -624,7 +624,7 @@ ${(feature.acceptance_criteria || []).map((c: string) => `- [ ] ${c}`).join("\n"
 				// Create spec ID with zero-padded number and slugified title
 				const slugifiedTitle = feature.title
 					.toLowerCase()
-					.replaceAll(/[^a-z0-9]+/g, "-")
+					.replaceAll(/[^\p{L}\p{N}]+/gu, "-")
 					.replaceAll(/^-|-$/g, "")
 					.substring(0, 50);
 				const specId = `${String(specNumber).padStart(3, "0")}-${slugifiedTitle}`;

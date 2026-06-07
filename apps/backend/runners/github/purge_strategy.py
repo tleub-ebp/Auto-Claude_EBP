@@ -241,7 +241,7 @@ class PurgeStrategy:
             result.deleted_count += 1
             result.freed_bytes += file_size
 
-        except (OSError, json.JSONDecodeError, KeyError) as e:
+        except (OSError, json.JSONDecodeError, KeyError):
             # Skip files that can't be read or parsed
             # Don't add to errors as this is expected for non-matching files
             pass

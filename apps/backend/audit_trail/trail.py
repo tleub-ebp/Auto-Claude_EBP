@@ -44,6 +44,7 @@ class AuditEventKind(str, Enum):
     AGENT_INVOKED = "agent_invoked"
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
+    AGENT_PAUSED = "agent_paused"
     DECISION_MADE = "decision_made"
     APPROVAL_GIVEN = "approval_given"
     APPROVAL_REVOKED = "approval_revoked"
@@ -200,15 +201,20 @@ class AuditTrail:
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
+        from .encryption import maybe_decrypt_line
+
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             try:
                 with self.path.open("r", encoding="utf-8") as fh:
-                    for line in fh:
-                        line = line.strip()
-                        if not line:
+                    for raw_line in fh:
+                        stripped = raw_line.strip()
+                        if not stripped:
                             continue
-                        raw = json.loads(line)
+                        # Decrypt if the line was Fernet-wrapped at write
+                        # time. Cleartext lines pass through unchanged.
+                        decoded = maybe_decrypt_line(stripped)
+                        raw = json.loads(decoded)
                         self._events.append(AuditEvent.from_dict(raw))
             except (OSError, json.JSONDecodeError) as e:
                 logger.warning("Could not fully load trail %s: %s", self.path, e)
@@ -217,7 +223,13 @@ class AuditTrail:
         self._loaded = True
 
     def _append_to_disk(self, event: AuditEvent) -> None:
-        line = json.dumps(event.to_dict(), separators=(",", ":")) + "\n"
+        from .encryption import maybe_encrypt_line
+
+        # Hash chain is computed on the cleartext event (see _hash_for_event)
+        # so encryption is purely a storage concern — key rotation does not
+        # invalidate the chain.
+        cleartext = json.dumps(event.to_dict(), separators=(",", ":"))
+        line = maybe_encrypt_line(cleartext) + "\n"
         # Open in append mode — atomic at the line level on POSIX, good
         # enough for an audit log.
         with self.path.open("a", encoding="utf-8") as fh:

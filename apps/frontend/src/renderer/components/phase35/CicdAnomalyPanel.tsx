@@ -5,7 +5,7 @@
  * + recurring patterns when multiple logs were analysed.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCicdAnomalyStore } from "../../stores/phase35-stores";
 import { Badge } from "../ui/badge";
@@ -19,12 +19,21 @@ const SEV_COLOR: Record<string, string> = {
 	low: "bg-muted text-muted-foreground",
 };
 
+const LOG_MAX_LEN = 200_000;
+
 export function CicdAnomalyPanel() {
 	const { t } = useTranslation("phase35");
 	const { phase, error, signals, scan } = useCicdAnomalyStore();
 	const [log, setLog] = useState("");
 
 	const isRunning = phase === "running";
+
+	const logError = useMemo(() => {
+		if (log.trim().length === 0) return t("cicdAnomaly.validation.logRequired");
+		if (log.length > LOG_MAX_LEN)
+			return t("cicdAnomaly.validation.logTooLarge", { max: LOG_MAX_LEN });
+		return null;
+	}, [log, t]);
 
 	return (
 		<PanelShell
@@ -35,7 +44,7 @@ export function CicdAnomalyPanel() {
 				<Button
 					size="sm"
 					onClick={() => scan(log)}
-					disabled={isRunning || !log.trim()}
+					disabled={isRunning || Boolean(logError)}
 				>
 					{isRunning ? t("common.running") : t("cicdAnomaly.scan")}
 				</Button>
@@ -49,11 +58,19 @@ export function CicdAnomalyPanel() {
 					<textarea
 						id="log-textarea"
 						value={log}
-						onChange={(e) => setLog(e.target.value)}
+						onChange={(e) => setLog(e.target.value.slice(0, LOG_MAX_LEN))}
 						rows={10}
+						maxLength={LOG_MAX_LEN}
+						aria-invalid={Boolean(logError) || undefined}
+						aria-describedby={logError ? "log-error" : undefined}
 						className="w-full rounded border bg-background p-2 text-xs font-mono"
-						placeholder="Paste your CI log here…"
+						placeholder={t("cicdAnomaly.logPlaceholder")}
 					/>
+					{logError && (
+						<p id="log-error" className="mt-1 text-xs text-destructive">
+							{logError}
+						</p>
+					)}
 				</div>
 
 				{signals.length > 0 && (
@@ -70,7 +87,7 @@ export function CicdAnomalyPanel() {
 										</Badge>
 										<span className="font-mono text-xs">{s.kind}</span>
 										<span className="text-xs text-muted-foreground">
-											line {s.line_number}
+											{t("cicdAnomaly.line")} {s.line_number}
 										</span>
 									</div>
 									<div className="mt-1 font-mono text-xs text-muted-foreground truncate">

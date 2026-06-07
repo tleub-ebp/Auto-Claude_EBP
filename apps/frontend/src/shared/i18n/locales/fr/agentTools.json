@@ -1,0 +1,47 @@
+{
+	"buttonLabel": "⚙ Agent",
+	"menuLabel": "Outils d'agent",
+	"estimateCost": "Estimer le coût…",
+	"restartAgent": "Redémarrer l'agent…",
+	"showActivePrompt": "Afficher le prompt actif…",
+	"promptPreview": {
+		"title": "Prompt système actif",
+		"description": "Le prompt exact qui serait envoyé au SDK pour {{agentType}}. Aucun token dépensé — ceci est reconstruit localement depuis le même chemin de code que create_client.",
+		"loading": "Chargement…",
+		"copyPrompt": "Copier le prompt",
+		"close": "Fermer",
+		"badges": {
+			"model": "modèle :",
+			"provider": "fournisseur :",
+			"chars": "{{count}} caractères",
+			"claudeMd": "CLAUDE.md",
+			"domainAddendum": "addendum de domaine (+{{count}}car)",
+			"tools": "{{count}} outils"
+		},
+		"allowedTools": "Outils autorisés ({{count}})"
+	},
+	"restartDialog": {
+		"title": "Redémarrer l'agent",
+		"description": "Choisissez le redémarrage le plus petit qui couvre votre problème.",
+		"progress": "Progression : {{completed}}/{{total}} sous-tâches terminées",
+		"nextSubtask": ", suivant : {{next}}",
+		"loading": "Inspection de la spec…",
+		"close": "Fermer",
+		"restart": "Redémarrer",
+		"willDelete": "Supprimera {{count}} fichier(s) :",
+		"modes": {
+			"qa": {
+				"title": "Redémarrer QA uniquement",
+				"description": "Relancer le réviseur + correcteur sur l'implémentation actuelle. Peu coûteux et sûr."
+			},
+			"coder": {
+				"title": "Redémarrer le coder",
+				"description": "Relancer le coder à partir de la première sous-tâche non terminée. Le travail précédent est préservé."
+			},
+			"full": {
+				"title": "Redémarrage complet",
+				"description": "Abandonner le plan actuel et recommencer. Le plus coûteux — équivalent à une nouvelle construction."
+			}
+		}
+	}
+}

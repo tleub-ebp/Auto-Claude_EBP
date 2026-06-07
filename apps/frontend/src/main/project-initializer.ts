@@ -246,7 +246,13 @@ export function initializeGit(
 /**
  * Entries to add to .gitignore when initializing a project
  */
-const GITIGNORE_ENTRIES = [".workpilot/"];
+const GITIGNORE_ENTRIES = [
+	".workpilot/",
+	".claude_settings.json",
+	".workpilot-security.json",
+	".workpilot-status",
+	"build_output.txt",
+];
 
 /**
  * Ensure entries exist in the project's .gitignore file.
@@ -298,7 +304,7 @@ function ensureGitignoreEntries(projectPath: string, entries: string[]): void {
 			appendContent += "\n";
 		}
 
-		appendContent += "\n# WorkPilot AI data directory\n";
+		appendContent += "\n# WorkPilot AI local files\n";
 		for (const entry of entriesToAdd) {
 			appendContent += `${entry}\n`;
 		}
@@ -307,7 +313,7 @@ function ensureGitignoreEntries(projectPath: string, entries: string[]): void {
 	} else {
 		writeFileSync(
 			gitignorePath,
-			`# WorkPilot AI data directory\n${entriesToAdd.join("\n")}\n`,
+			`# WorkPilot AI local files\n${entriesToAdd.join("\n")}\n`,
 			"utf-8",
 		);
 	}

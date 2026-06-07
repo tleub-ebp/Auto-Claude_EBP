@@ -177,7 +177,7 @@ def fetch_ollama_api(base_url: str, endpoint: str, timeout: int = 5) -> dict | N
 
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return json.loads(response.read().decode())
-    except urllib.error.URLError as e:
+    except urllib.error.URLError:
         return None
     except json.JSONDecodeError:
         return None

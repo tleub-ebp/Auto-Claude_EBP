@@ -30,7 +30,28 @@ BLOCKED_GIT_CONFIG_KEYS = {
     "author.email",
     "committer.name",
     "committer.email",
+    # Code-execution vectors via -c: setting these causes git to spawn
+    # arbitrary commands on subsequent operations. CVE-2017-1000117 family.
+    "core.sshcommand",
+    "core.editor",
+    "core.pager",
+    "core.hookspath",
+    "core.fsmonitor",
+    "core.gitproxy",
+    # `include.path` and `includeif.*.path` cause git to read another
+    # gitconfig file, re-introducing all the keys above by indirection.
+    "include.path",
 }
+
+
+def _is_blocked_config_key(key: str) -> bool:
+    """Return True if `key` (lowercase) is in the blocklist or matches a wildcard rule."""
+    if key in BLOCKED_GIT_CONFIG_KEYS:
+        return True
+    # `includeif.<condition>.path` — wildcard match on prefix and suffix.
+    if key.startswith("includeif.") and key.endswith(".path"):
+        return True
+    return False
 
 
 def validate_git_config(command_string: str) -> ValidationResult:
@@ -77,18 +98,18 @@ def validate_git_config(command_string: str) -> ValidationResult:
     if not config_key:
         return True, ""  # No config key specified (e.g., git config --list)
 
-    # Check if the exact config key is blocked
-    for blocked_key in BLOCKED_GIT_CONFIG_KEYS:
-        if config_key == blocked_key:
-            return False, (
-                f"BLOCKED: Cannot modify git identity configuration\n\n"
-                f"You attempted to set '{blocked_key}' which is not allowed.\n\n"
-                f"WHY: Git identity (user.name, user.email) must inherit from the user's "
-                f"global git configuration. Setting fake identities like 'Test User' breaks "
-                f"commit attribution and causes serious issues.\n\n"
-                f"WHAT TO DO: Simply commit without setting any user configuration. "
-                f"The repository will use the correct identity automatically."
-            )
+    # Check if the config key is blocked (exact match or wildcard rule).
+    if _is_blocked_config_key(config_key):
+        return False, (
+            f"BLOCKED: Cannot modify git configuration key '{config_key}'\n\n"
+            f"This key is on the blocklist (identity attribution or "
+            f"code-execution vector).\n\n"
+            f"WHY: Git identity (user.name, user.email) must inherit from the user's "
+            f"global git configuration. Code-execution keys (core.editor, core.pager, "
+            f"core.sshcommand, include.path, etc.) let arbitrary commands run on "
+            f"subsequent git operations.\n\n"
+            f"WHAT TO DO: Remove the offending config and commit normally."
+        )
 
     return True, ""
 
@@ -119,16 +140,15 @@ def validate_git_inline_config(tokens: list[str]) -> ValidationResult:
                 # Extract the key from key=value
                 if "=" in config_pair:
                     config_key = config_pair.split("=", 1)[0].lower()
-                    if config_key in BLOCKED_GIT_CONFIG_KEYS:
+                    if _is_blocked_config_key(config_key):
                         return False, (
-                            f"BLOCKED: Cannot set git identity via -c flag\n\n"
-                            f"You attempted to use '-c {config_pair}' which sets a blocked "
-                            f"identity configuration.\n\n"
-                            f"WHY: Git identity (user.name, user.email) must inherit from the "
-                            f"user's global git configuration. Setting fake identities breaks "
-                            f"commit attribution and causes serious issues.\n\n"
-                            f"WHAT TO DO: Remove the -c flag and commit normally. "
-                            f"The repository will use the correct identity automatically."
+                            f"BLOCKED: Cannot set '{config_key}' via -c flag\n\n"
+                            f"You attempted to use '-c {config_pair}'. This key is blocked "
+                            f"(identity attribution or code-execution vector).\n\n"
+                            f"WHY: Identity keys break commit attribution. "
+                            f"core.editor / core.pager / core.sshcommand / include.path "
+                            f"let arbitrary commands run on subsequent git operations.\n\n"
+                            f"WHAT TO DO: Remove the -c flag and commit normally."
                         )
                 i += 2  # Skip -c and its value
                 continue
@@ -137,14 +157,14 @@ def validate_git_inline_config(tokens: list[str]) -> ValidationResult:
             config_pair = token[2:]  # Remove "-c" prefix
             if "=" in config_pair:
                 config_key = config_pair.split("=", 1)[0].lower()
-                if config_key in BLOCKED_GIT_CONFIG_KEYS:
+                if _is_blocked_config_key(config_key):
                     return False, (
-                        f"BLOCKED: Cannot set git identity via -c flag\n\n"
-                        f"You attempted to use '{token}' which sets a blocked "
-                        f"identity configuration.\n\n"
-                        f"WHY: Git identity (user.name, user.email) must inherit from the "
-                        f"user's global git configuration. Setting fake identities breaks "
-                        f"commit attribution and causes serious issues.\n\n"
+                        f"BLOCKED: Cannot set '{config_key}' via -c flag\n\n"
+                        f"You attempted to use '{token}'. This key is blocked "
+                        f"(identity attribution or code-execution vector).\n\n"
+                        f"WHY: Identity keys break commit attribution. "
+                        f"core.editor / core.pager / core.sshcommand / include.path "
+                        f"let arbitrary commands run on subsequent git operations.\n\n"
                         f"WHAT TO DO: Remove the -c flag and commit normally. "
                         f"The repository will use the correct identity automatically."
                     )
@@ -185,11 +205,34 @@ def validate_git_command(command_string: str) -> ValidationResult:
     if not is_valid:
         return is_valid, error_msg
 
-    # Find the actual subcommand (skip global options like -c, -C, --git-dir, etc.)
+    # Find the actual subcommand (skip global options AND their values).
+    # Without this, `git -C /tmp commit` and `git --git-dir=… commit` resolve
+    # to subcommand="/tmp" and silently bypass commit secret-scanning.
+    # See: git(1) "OPTIONS" section for the value-bearing global flags.
+    _value_bearing_global_opts = {
+        "-C",
+        "-c",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--super-prefix",
+        "--exec-path",
+        "--config-env",
+        "--list-cmds",
+        "--attr-source",
+    }
     subcommand = None
+    skip_next = False
     for token in tokens[1:]:
-        # Skip options and their values
+        if skip_next:
+            skip_next = False
+            continue
         if token.startswith("-"):
+            # `--git-dir=…` (value attached) carries its own value, no skip needed.
+            if "=" in token:
+                continue
+            if token in _value_bearing_global_opts:
+                skip_next = True
             continue
         subcommand = token
         break

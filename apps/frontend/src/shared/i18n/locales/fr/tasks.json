@@ -14,9 +14,21 @@
 		"title": "Provider mis à jour",
 		"description": "La tâche va maintenant s'exécuter avec {{to}} au lieu de {{from}}"
 	},
+	"tdd": {
+		"toggleAria": "Activer ou désactiver le mode TDD strict pour cette tâche",
+		"tooltipOn": "Mode TDD strict activé pour cette tâche (Red-Green-Refactor). Cliquez pour désactiver.",
+		"tooltipOff": "Mode TDD strict désactivé. Cliquez pour activer le cycle Red-Green-Refactor sur cette tâche.",
+		"enabledTitle": "Mode TDD activé",
+		"enabledDescription": "L'agent suivra un cycle TDD strict pour cette tâche.",
+		"disabledTitle": "Mode TDD désactivé",
+		"disabledDescription": "Cette tâche n'utilisera plus le cycle TDD strict.",
+		"errorTitle": "Échec de la mise à jour",
+		"errorDescription": "Impossible de modifier le mode TDD. Veuillez réessayer."
+	},
 	"actions": {
 		"start": "Démarrer",
 		"stop": "Arrêter",
+		"pause": "Mettre en pause",
 		"recover": "Récupérer",
 		"resume": "Reprendre",
 		"archive": "Archiver",
@@ -46,7 +58,21 @@
 		"incomplete": "Incomplet",
 		"recovering": "Récupération...",
 		"needsRecovery": "Récupération requise",
-		"needsResume": "Reprise requise"
+		"needsResume": "Reprise requise",
+		"tdd": "TDD"
+	},
+	"warnings": {
+		"stuck": {
+			"title": "Tâche Bloquée",
+			"description": "Cette tâche est marquée comme en cours mais aucun processus actif n'a été trouvé. Cela peut se produire si l'application s'est bloquée ou si le processus a été arrêté de manière inattendue.",
+			"button": "Récupérer et Relancer la Tâche",
+			"recovering": "Récupération en cours..."
+		},
+		"incomplete": {
+			"title": "Tâche Incomplète",
+			"description": "Cette tâche a une spécification et un plan d'implémentation mais n'a jamais complété aucune sous-tâche ({{completed}}/{{total}}). Le processus s'est probablement bloqué lors de la création de la spécification. Cliquez sur Reprendre pour continuer l'implémentation.",
+			"button": "Reprendre la Tâche"
+		}
 	},
 	"reviewReason": {
 		"completed": "Terminé",
@@ -61,7 +87,9 @@
 		"archiveAllDone": "Archiver toutes les tâches terminées",
 		"viewPR": "Ouvrir la pull request dans le navigateur",
 		"viewPRFiles": "Voir les fichiers modifiés",
-		"previewApp": "Prévisualiser l'application"
+		"previewApp": "Prévisualiser l'application",
+		"pauseTask": "Mettre en pause la tâche",
+		"resumeTask": "Reprendre la tâche"
 	},
 	"prFiles": {
 		"short": "Fichiers"
@@ -168,7 +196,22 @@
 		"columnLocked": "La largeur de la colonne est verrouillée",
 		"expandAll": "Développer toutes les colonnes",
 		"azureDevOpsNotConnected": "Azure DevOps non connecté — cliquez pour configurer",
-		"jiraNotConnected": "Jira non connecté — cliquez pour configurer"
+		"jiraNotConnected": "Jira non connecté — cliquez pour configurer",
+		"quickCommand": {
+			"placeholder": "Commande rapide (ex. /review, /help)",
+			"buttonLabel": "Exécuter",
+			"running": "Exécution…",
+			"hint": "Tape / puis le nom de la commande. Tab pour autocompléter.",
+			"noResults": "Aucune commande correspondante",
+			"sourceProject": "Projet",
+			"sourceUser": "Utilisateur",
+			"sourceBuiltIn": "Intégrée",
+			"missingProject": "Sélectionne d'abord un projet",
+			"errorTitle": "Échec de la commande",
+			"successTitle": "Commande terminée",
+			"successBody": "La sortie a été écrite dans la console.",
+			"ariaListLabel": "Commandes slash disponibles"
+		}
 	},
 	"queue": {
 		"limitReached": "Limite de tâches parallèles atteinte ({{current}}/{{max}}). Tâche déplacée vers la file d'attente.",
@@ -198,6 +241,7 @@
 			"auth_failure_paused": "Auth requise",
 			"reviewing": "Révision",
 			"fixing": "Correction",
+			"validation": "Validation",
 			"complete": "Terminé",
 			"failed": "Échoué"
 		},
@@ -205,7 +249,8 @@
 			"interrupted": "Interrompu",
 			"progress": "Progression",
 			"entry": "entrée",
-			"entries": "entrées"
+			"entries": "entrées",
+			"step": "Étape {{current}}/{{total}}"
 		},
 		"shortPhases": {
 			"plan": "Plan",
@@ -227,6 +272,47 @@
 		"selectFile": "Sélectionnez un fichier pour voir son contenu",
 		"openInIDE": "Ouvrir dans l'IDE"
 	},
+	"visualProof": {
+		"tab": "Preuves visuelles",
+		"title": "Preuve visuelle de la PR",
+		"emptyTitle": "Aucune preuve visuelle pour cette tâche",
+		"emptyDescription": "Lancez l'émulateur pour générer des captures et les publier dans la PR.",
+		"run": "Lancer la preuve visuelle",
+		"retry": "Relancer",
+		"runFailed": "Échec du lancement de la preuve visuelle",
+		"openComment": "Ouvrir le commentaire",
+		"openPr": "Ouvrir la PR",
+		"openCapturedUrl": "Ouvrir l'URL capturée",
+		"provider": "Provider",
+		"target": "Cible",
+		"framework": "Framework",
+		"completedAt": "Terminé le",
+		"defaultDetails": "Capture automatisée générée par WorkPilot.",
+		"isolated": "isolé",
+		"local": "local",
+		"screenshots": "{{count}} capture",
+		"screenshots_other": "{{count}} captures",
+		"loadingScreenshot": "Chargement de la capture...",
+		"imageLoadFailed": "Impossible de charger la capture locale",
+		"noScreenshots": "Aucune capture n'a été générée pour ce run.",
+		"passedHint": "Ces captures ont été ajoutées comme preuve dans la PR.",
+		"status": {
+			"pending": "en attente",
+			"passed": "réussie",
+			"failed": "échouée",
+			"skipped": "ignorée"
+		}
+	},
+	"emulator": {
+		"tab": "Émulateur",
+		"title": "Émulateur manuel",
+		"description": "Démarrez l'application et laissez-la tourner pour réaliser des tests manuels.",
+		"persistenceHint": "L'émulateur reste actif tant que vous n'appuyez pas sur Arrêter ou que l'application n'est pas fermée.",
+		"runtimePath": "Chemin démarré",
+		"noProjectTitle": "Projet introuvable",
+		"noProjectDescription": "Impossible de démarrer l'émulateur sans le chemin du projet associé à cette tâche.",
+		"otherProjectWarning": "Un émulateur semble déjà actif pour un autre projet. Redémarrez pour basculer vers cette tâche."
+	},
 	"metadata": {
 		"severity": "sévérité",
 		"pullRequest": "Pull Request",
@@ -239,7 +325,25 @@
 		"targetAudience": "Public cible",
 		"dependencies": "Dépendances",
 		"acceptanceCriteria": "Critères d'acceptation",
-		"affectedFiles": "Fichiers affectés"
+		"acEmpty": "Aucun critère défini. Cliquez pour en ajouter.",
+		"acSyncFromAdo": "Synchroniser depuis Azure DevOps",
+		"acSyncing": "Synchronisation…",
+		"acPlaceholder": "Un critère par ligne…",
+		"acEdit": "Modifier",
+		"acSave": "Enregistrer",
+		"acSaving": "Enregistrement…",
+		"acSaved": "Enregistré.",
+		"acCancel": "Annuler",
+		"acHelp": "Un critère par ligne. Enregistré dans task_metadata.json.",
+		"acSaveErrorTitle": "Échec de l'enregistrement",
+		"acSaveErrorDesc": "Impossible de sauvegarder les critères d'acceptation. Voir la console pour les détails.",
+		"affectedFiles": "Fichiers affectés",
+		"extraNote": "Note supplémentaire",
+		"extraNotePlaceholder": "Ajoutez des précisions, contraintes ou indices. Ces notes sont transmises à toutes les phases du pipeline (plan, code, QA, review).",
+		"extraNoteHelp": "Enregistré dans requirements.json comme additional_context.",
+		"extraNoteSaved": "Enregistré.",
+		"extraNoteSave": "Enregistrer la note",
+		"extraNoteSaving": "Enregistrement…"
 	},
 	"images": {
 		"removeImageAriaLabel": "Supprimer l'image {{filename}}",
@@ -318,6 +422,19 @@
 		"classificationOptional": "Classification (optionnel)",
 		"requireReviewLabel": "Exiger une révision humaine avant le codage",
 		"requireReviewDescription": "Lorsque activé, vous serez invité à réviser la spécification et le plan d'implémentation avant le début de la phase de codage. Cela vous permet d'approuver, de demander des modifications ou de fournir des commentaires.",
+		"tddModeLabel": "Mode TDD strict (Red-Green-Refactor)",
+		"tddModeDescription": "Lorsque activé, l'agent suit un cycle TDD strict pour cette tâche : écrire d'abord un test qui échoue, puis le code minimal pour le faire passer, puis refactoriser. Remplace le réglage TDD du projet pour cette tâche uniquement.",
+		"editor": {
+			"bold": "Gras",
+			"italic": "Italique",
+			"underline": "Souligné",
+			"bulletList": "Liste à puces",
+			"numberedList": "Liste numérotée",
+			"link": "Insérer un lien",
+			"linkPlaceholder": "https://...",
+			"apply": "Appliquer",
+			"clearFormatting": "Effacer la mise en forme"
+		},
 		"errors": {
 			"descriptionRequired": "Veuillez fournir une description",
 			"maxImagesReached": "Maximum de 5 images autorisé",
@@ -399,6 +516,15 @@
 		"title": "Images de référence (facultatif)",
 		"description": "Ajoutez des références visuelles comme des captures d'écran ou des conceptions pour aider l'IA à comprendre vos exigences."
 	},
+	"logs": {
+		"thinking": {
+			"selectAria": "Niveau de réflexion pour cette phase",
+			"selectTooltip": "Changer le niveau de réflexion pour cette phase",
+			"updatedTitle": "Réflexion mise à jour",
+			"updatedDesc": "Le niveau de réflexion sera appliqué au démarrage de cette phase.",
+			"updateFailed": "Échec de la mise à jour"
+		}
+	},
 	"modal": {
 		"tabs": {
 			"overview": "Vue d'ensemble",
@@ -410,13 +536,45 @@
 			"recoverTask": "Récupérer la tâche",
 			"loadingPlan": "Chargement du plan...",
 			"resumeTask": "Reprendre la tâche",
+			"resumeSession": "Reprendre la session",
+			"resumeWithProvider": "Reprendre avec…",
+			"resumingWithProvider": "Reprise en cours…",
+			"resumeWithProviderTooltip": "Reprendre cette tâche avec un autre provider LLM",
+			"resumeWithProviderMenuLabel": "Choisir un provider",
+			"resumeWithProviderSuccessTitle": "Reprise avec {{provider}}",
+			"resumeWithProviderSuccessDesc": "La conversation précédente sera rejouée vers le nouveau provider.",
+			"resumeWithProviderErrorTitle": "Échec de la reprise",
+			"resetConversation": "Réinitialiser la conversation",
+			"resetConversationTooltip": "Effacer l'historique de la conversation pour repartir avec un contexte vierge",
 			"stopTask": "Arrêter la tâche",
 			"startTask": "Démarrer la tâche",
 			"deleteTask": "Supprimer la tâche",
 			"close": "Fermer",
 			"watchLive": "Regarder en direct",
 			"activating": "Activation...",
-			"syncFromBranch": "Synchroniser depuis une branche"
+			"syncFromBranch": "Synchroniser depuis une branche",
+			"taskControls": "Contrôles de la tâche",
+			"taskIsPaused": "Tâche en pause",
+			"providerSwitch": "Changement de provider LLM",
+			"providerSwitchDesc": "Met la tâche en pause à la fin de l'étape en cours, puis vous laisse choisir un autre LLM.",
+			"providerSwitchPaused": "Tâche en pause",
+			"providerSwitchPausedDesc": "Choisissez un provider et un modèle, puis reprenez la tâche.",
+			"pauseToSwitch": "Mettre en pause et changer de LLM",
+			"pauseToSwitchTooltip": "La tâche termine l'étape en cours puis s'arrête. Vous pourrez alors choisir un provider et un modèle, puis reprendre.",
+			"pauseRequestedTitle": "Pause demandée",
+			"pauseRequestedDesc": "La tâche s'arrêtera à la fin de l'étape en cours.",
+			"pauseFailed": "Échec de la mise en pause",
+			"pausingInProgress": "Pause en cours… fin de l'étape en cours",
+			"loadingProviders": "Chargement des providers…",
+			"noConfiguredProviders": "Aucun provider configuré. Ajoutez une clé API dans les Paramètres.",
+			"chooseProvider": "Provider",
+			"chooseModel": "Modèle",
+			"resumeWithChosenLlm": "Reprendre avec ce LLM",
+			"resumeSameProvider": "Reprendre sans changer de LLM",
+			"previousTask": "Tâche précédente",
+			"nextTask": "Tâche suivante",
+			"maximize": "Plein écran",
+			"restore": "Réduire"
 		},
 		"badges": {
 			"stuck": "Bloqué",
@@ -450,6 +608,34 @@
 			"cancel": "Annuler",
 			"deleting": "Suppression...",
 			"deletePermanently": "Supprimer définitivement"
+		},
+		"plan": {
+			"edit": "Modifier le plan",
+			"save": "Enregistrer",
+			"cancel": "Annuler",
+			"addSubtask": "Ajouter une sous-tâche",
+			"deleteSubtask": "Supprimer",
+			"editingNotAllowed": "Impossible de modifier les sous-tâches complétées ou en cours",
+			"pendingOnly": "Seules les sous-tâches en attente peuvent être modifiées",
+			"addPhase": "Ajouter une phase",
+			"deletePhase": "Supprimer la phase",
+			"phaseTitle": "Titre de la phase",
+			"subtaskTitle": "Titre de la sous-tâche",
+			"subtaskDescription": "Description",
+			"files": "Fichiers",
+			"verification": "Vérification",
+			"savingChanges": "Enregistrement...",
+			"changesSaved": "Modifications enregistrées",
+			"saveError": "Erreur lors de l'enregistrement",
+			"emptyTitle": "Le titre ne peut pas être vide",
+			"approvalRequired": "Approbation du plan requise",
+			"approvalDescription": "Vérifiez le plan d'implémentation ci-dessus. Approuvez pour procéder au codage, ou demandez des modifications.",
+			"approvePlan": "Approuver le plan",
+			"rejectPlan": "Demander des modifications",
+			"approving": "Approbation en cours...",
+			"rejecting": "Rejet en cours...",
+			"rejectionReason": "Raison des modifications (optionnel)",
+			"rejectionPlaceholder": "Décrivez ce qui doit être modifié dans le plan..."
 		}
 	}
 }

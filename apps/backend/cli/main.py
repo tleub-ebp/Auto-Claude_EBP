@@ -6,6 +6,7 @@ Command-line interface for the WorkPilot AI autonomous coding framework.
 """
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -183,6 +184,15 @@ Environment Variables:
         action="store_true",
         help="Push branch and create a GitHub Pull Request",
     )
+    build_group.add_argument(
+        "--analyze-impact",
+        action="store_true",
+        help=(
+            "Preview the PR body + impact analysis WITHOUT pushing or creating "
+            "a PR. Outputs JSON {body, rating, features} for the frontend "
+            "review modal."
+        ),
+    )
 
     # PR options
     parser.add_argument(
@@ -201,6 +211,16 @@ Environment Variables:
         "--pr-draft",
         action="store_true",
         help="With --create-pr: create as draft PR",
+    )
+    parser.add_argument(
+        "--pr-body-file",
+        type=str,
+        metavar="PATH",
+        help=(
+            "With --create-pr: read PR body verbatim from this file. Disables "
+            "AI body generation and impact block auto-injection. Useful when "
+            "the frontend has already let the user edit them in the review modal."
+        ),
     )
 
     # Merge options
@@ -509,8 +529,6 @@ Environment Variables:
 
 
 def handle_provider_command(args):
-    import json
-
     from src.connectors.llm_config import (
         delete_provider_config,
         get_active_provider,
@@ -830,7 +848,36 @@ def _run_cli() -> None:
         handle_discard_command(project_dir, spec_dir.name)
         return
 
+    if args.analyze_impact:
+        from .workspace_commands import handle_analyze_impact_command
+
+        result = handle_analyze_impact_command(
+            project_dir=project_dir,
+            spec_name=spec_dir.name,
+            target_branch=args.pr_target,
+        )
+        if not result.get("success", True):
+            sys.exit(1)
+        return
+
     if args.create_pr:
+        # Optional body override from a file (used by the frontend review modal)
+        body_override: str | None = None
+        if args.pr_body_file:
+            body_path = Path(args.pr_body_file)
+            try:
+                body_override = body_path.read_text(encoding="utf-8")
+            except OSError as e:
+                print(
+                    json.dumps(
+                        {
+                            "success": False,
+                            "error": f"Could not read --pr-body-file: {e}",
+                        }
+                    )
+                )
+                sys.exit(1)
+
         # Pass args.pr_target directly - WorktreeManager._detect_base_branch
         # handles base branch detection internally when target_branch is None
         result = handle_create_pr_command(
@@ -839,6 +886,7 @@ def _run_cli() -> None:
             target_branch=args.pr_target,
             title=args.pr_title,
             draft=args.pr_draft,
+            body=body_override,
         )
         # JSON output is already printed by handle_create_pr_command
         if not result.get("success"):

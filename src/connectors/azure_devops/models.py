@@ -89,6 +89,9 @@ class WorkItem:
             unavailable.
         priority: The priority level (integer), or None if unset.
         url: The API URL for the work item, or None if unavailable.
+        acceptance_criteria: The HTML acceptance criteria
+            (``Microsoft.VSTS.Common.AcceptanceCriteria`` field), or None
+            if unset.
     """
 
     id: int
@@ -103,6 +106,7 @@ class WorkItem:
     iteration_path: str | None = None
     priority: int | None = None
     url: str | None = None
+    acceptance_criteria: str | None = None
 
     @classmethod
     def from_api_response(cls, api_work_item: Any) -> "WorkItem":
@@ -159,6 +163,9 @@ class WorkItem:
             iteration_path=fields.get("System.IterationPath"),
             priority=priority,
             url=getattr(api_work_item, "url", None),
+            acceptance_criteria=fields.get(
+                "Microsoft.VSTS.Common.AcceptanceCriteria"
+            ),
         )
 
 

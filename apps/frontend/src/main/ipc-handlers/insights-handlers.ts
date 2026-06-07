@@ -230,7 +230,7 @@ export function registerInsightsHandlers(
 				// Create spec ID with zero-padded number and slugified title
 				const slugifiedTitle = title
 					.toLowerCase()
-					.replaceAll(/[^a-z0-9]+/g, "-")
+					.replaceAll(/[^\p{L}\p{N}]+/gu, "-")
 					.replaceAll(/^-|-$/g, "")
 					.substring(0, 50);
 				const specId = `${String(specNumber).padStart(3, "0")}-${slugifiedTitle}`;

@@ -41,6 +41,32 @@ import { parseUsageOutput } from "./usage-parser";
 import { getVelocityTracker } from "./velocity-tracker";
 
 /**
+ * Translate usage window label keys to human-readable values for debug logging.
+ * Since the main process doesn't have access to i18next, we use a simple mapping.
+ *
+ * @param labelKey - The translation key (e.g., "common:usage.windowWeeklyQuota")
+ * @returns Human-readable label or the original key if not found
+ */
+function translateUsageLabel(labelKey: string | undefined): string {
+	if (!labelKey) return "Unknown";
+	const translations: Record<string, string> = {
+		"common:usage.window5Hour": "5-hour window",
+		"common:usage.window7Day": "7-day window",
+		"common:usage.window5HoursQuota": "5 Hours Quota",
+		"common:usage.windowMonthlyToolsQuota": "Monthly Tools Quota",
+		"common:usage.windowCredits": "Credits used",
+		"common:usage.windowBillingCycle": "Billing cycle",
+		"common:usage.windowDailyQuota": "Daily quota",
+		"common:usage.windowWeeklyQuota": "Weekly quota",
+		"common:usage.windowMonthlyQuota": "Monthly quota",
+		"common:usage.windowMonthlyProgress": "Monthly progress",
+		"common:usage.sessionDefault": "Session",
+		"common:usage.weeklyDefault": "Weekly",
+	};
+	return translations[labelKey] || labelKey;
+}
+
+/**
  * Create a safe fingerprint of a credential for debug logging.
  * Shows first 8 and last 4 characters, hiding the sensitive middle portion.
  * This is NOT for authentication - only for human-readable debug identification.
@@ -328,6 +354,33 @@ export class UsageMonitor extends EventEmitter {
 				frontendDebugLog(message);
 			}
 		}
+	}
+
+	private async fetchBackendWithRetry(
+		url: string,
+		init: RequestInit,
+		context: string,
+	): Promise<Response> {
+		const MAX_RETRIES = 2;
+		const BASE_DELAY_MS = 500;
+		let lastResponse: Response | null = null;
+		for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+			const response = await fetch(url, init);
+			if (response.status !== 429) {
+				return response;
+			}
+			lastResponse = response;
+			if (attempt === MAX_RETRIES) break;
+			const retryAfter = Number(response.headers.get("retry-after"));
+			const delay = Number.isFinite(retryAfter) && retryAfter > 0
+				? retryAfter * 1000
+				: BASE_DELAY_MS * 2 ** attempt;
+			this.debugLog(
+				`[UsageMonitor:${context}] 429 received, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`,
+			);
+			await new Promise((resolve) => setTimeout(resolve, delay));
+		}
+		return lastResponse as Response;
 	}
 
 	private constructor() {
@@ -704,8 +757,24 @@ export class UsageMonitor extends EventEmitter {
 				}
 			});
 
-			// Wait for all fetches to complete in parallel
-			const fetchResults = await Promise.all(fetchPromises);
+			// Wait for all fetches to complete in parallel, with a global safety timeout
+			// in case any sub-promise hangs (sub-promises have their own 10s timeouts).
+			const FETCH_ALL_TIMEOUT_MS = 30000;
+			const timeoutPromise = new Promise<never>((_, reject) =>
+				setTimeout(
+					() =>
+						reject(
+							new Error(
+								`Usage fetch batch timed out after ${FETCH_ALL_TIMEOUT_MS}ms`,
+							),
+						),
+					FETCH_ALL_TIMEOUT_MS,
+				),
+			);
+			const fetchResults = await Promise.race([
+				Promise.all(fetchPromises),
+				timeoutPromise,
+			]);
 
 			// Collect all updates and build summaries
 			for (const result of fetchResults) {
@@ -2274,13 +2343,17 @@ export class UsageMonitor extends EventEmitter {
 				try {
 					// Call our FastAPI backend endpoint
 					const backendUrl = `http://localhost:9000/providers/usage/${provider}`;
-					const response = await fetch(backendUrl, {
-						method: "GET",
-						headers: {
-							"Content-Type": "application/json",
+					const response = await this.fetchBackendWithRetry(
+						backendUrl,
+						{
+							method: "GET",
+							headers: {
+								"Content-Type": "application/json",
+							},
+							signal: AbortSignal.timeout(10000), // 10 second timeout
 						},
-						signal: AbortSignal.timeout(10000), // 10 second timeout
-					});
+						provider,
+					);
 
 					if (!response.ok) {
 						this.debugLog(
@@ -2433,6 +2506,7 @@ export class UsageMonitor extends EventEmitter {
 			const response = await fetch(usageEndpoint, {
 				method: "GET",
 				headers,
+				signal: AbortSignal.timeout(15000),
 			});
 
 			if (!response.ok) {
@@ -3046,8 +3120,41 @@ export class UsageMonitor extends EventEmitter {
 			const usage = data.usage;
 			const copilotDetails = data.copilotUsageDetails || {};
 
+			// New branch: personal-quotas (Premium Requests from /copilot_internal/user)
+			if (copilotDetails.scope === "personal-quotas") {
+				const pctUsed =
+					typeof copilotDetails.premiumRequestsPercentUsed === "number"
+						? copilotDetails.premiumRequestsPercentUsed
+						: 0;
+				const sessionPct = copilotDetails.premiumRequestsUnlimited
+					? 0
+					: Math.min(Math.max(pctUsed, 0), 100);
+
+				return {
+					sessionPercent: sessionPct,
+					weeklyPercent: sessionPct,
+					sessionResetTime: copilotDetails.quotaResetDate,
+					weeklyResetTime: copilotDetails.quotaResetDate,
+					sessionResetTimestamp: copilotDetails.quotaResetDate,
+					weeklyResetTimestamp: copilotDetails.quotaResetDate,
+					profileId,
+					profileName,
+					profileEmail,
+					fetchedAt: new Date(data.fetched_at || Date.now()),
+					limitType: "session" as const,
+					usageWindows: {
+						sessionWindowLabel: "common:usage.window5Hour",
+						weeklyWindowLabel: "common:usage.window7Day",
+					},
+					sessionUsageValue: copilotDetails.premiumRequestsUsed,
+					sessionUsageLimit: copilotDetails.premiumRequestsEntitlement,
+					providerName: "copilot",
+					copilotUsageDetails: copilotDetails,
+				} as UsageSnapshot;
+			}
+
+			// Legacy branch: aggregated metrics (admin enterprise/org)
 			// Calculate percentages based on suggestions (assuming 1000 as a reasonable limit)
-			// This is a placeholder - in a real implementation, you'd get actual limits from GitHub
 			const suggestions =
 				usage.total_suggestions || copilotDetails.suggestions || 0;
 			const sessionPercent = Math.min((suggestions / 1000) * 100, 100);
@@ -3305,6 +3412,9 @@ export class UsageMonitor extends EventEmitter {
 
 		try {
 			const { spawn } = await import("node:child_process");
+			const { getSpawnCommand, getSpawnOptions } = await import(
+				"../env-utils"
+			);
 
 			const result = await new Promise<{
 				stdout: string;
@@ -3316,20 +3426,23 @@ export class UsageMonitor extends EventEmitter {
 				// Try different approaches to find claude executable
 				const claudePath = "claude"; // Let system find it in PATH
 
-				const process = spawn(claudePath, ["usage"], {
-					shell: true,
+				// Use helpers so shell:true is only set on Windows .cmd/.bat targets,
+				// avoiding Node DEP0190 (shell:true with array args).
+				const spawnCommand = getSpawnCommand(claudePath);
+				const spawnOptions = getSpawnOptions(claudePath, {
 					stdio: ["pipe", "pipe", "pipe"],
-					timeout: 15000, // 15 second timeout
+					timeout: 15000,
 				});
+				const process = spawn(spawnCommand, ["usage"], spawnOptions);
 
 				let stdout = "";
 				let stderr = "";
 
-				process.stdout.on("data", (data) => {
+				process.stdout?.on("data", (data) => {
 					stdout += data.toString();
 				});
 
-				process.stderr.on("data", (data) => {
+				process.stderr?.on("data", (data) => {
 					stderr += data.toString();
 				});
 
@@ -3893,7 +4006,12 @@ export class UsageMonitor extends EventEmitter {
 						{
 							sessionPercent: result.sessionPercent,
 							weeklyPercent: result.weeklyPercent,
-							usageWindows: result.usageWindows,
+							usageWindows: result.usageWindows
+								? {
+										sessionWindowLabel: translateUsageLabel(result.usageWindows.sessionWindowLabel),
+										weeklyWindowLabel: translateUsageLabel(result.usageWindows.weeklyWindowLabel),
+									}
+								: undefined,
 							windsurfCredits: result.windsurfCredits,
 						},
 					);

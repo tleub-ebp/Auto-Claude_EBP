@@ -301,7 +301,17 @@ class IssueResponder:
                     text=True,
                 )
 
-                _, stderr = await asyncio.wait_for(process.communicate(), timeout=15)
+                try:
+                    _, stderr = await asyncio.wait_for(
+                        process.communicate(), timeout=15
+                    )
+                except asyncio.TimeoutError:
+                    process.kill()
+                    try:
+                        await process.wait()
+                    except Exception:
+                        pass
+                    raise
 
                 if process.returncode == 0:
                     results.append(f"Added label: {label}")

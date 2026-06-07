@@ -578,8 +578,10 @@ class MergeResult:
         )
 
 
-def compute_content_hash(content: str) -> str:
+def compute_content_hash(content: str | None) -> str:
     """Compute a hash of file content for comparison."""
+    if content is None:
+        content = ""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 

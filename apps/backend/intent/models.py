@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from apps.backend.implementation_plan import WorkflowType
+from implementation_plan import WorkflowType
 
 
 class IntentCategory(str, Enum):

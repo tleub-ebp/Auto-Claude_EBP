@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from tech_debt.scanner import DebtItem
@@ -51,7 +51,7 @@ def _slugify(text: str) -> str:
 
 
 def _render_spec(item: DebtItem, llm_hint: str | None) -> str:
-    now = datetime.utcnow().isoformat(timespec="seconds")
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     lines = [
         f"# Tech Debt: {item.message}",
         "",

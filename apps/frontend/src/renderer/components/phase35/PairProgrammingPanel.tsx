@@ -5,7 +5,7 @@
  * messages and watch operations stream in via SSE.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	setupPairRealtimeListeners,
@@ -15,7 +15,17 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { PanelShell } from "./_panel-shell";
 
-const ROLES = ["driver", "navigator", "ai"] as const;
+const ROLES = [
+	{ value: "driver", labelKey: "pair.roleDriver" },
+	{ value: "navigator", labelKey: "pair.roleNavigator" },
+	{ value: "ai", labelKey: "pair.roleAi" },
+] as const;
+
+const ROOM_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const NAME_MAX_LEN = 64;
+const MESSAGE_MAX_LEN = 2000;
+
+type Role = (typeof ROLES)[number]["value"];
 
 export function PairProgrammingPanel() {
 	const { t } = useTranslation("phase35");
@@ -34,17 +44,16 @@ export function PairProgrammingPanel() {
 	const [roomId, setRoomId] = useState("demo-room");
 	const [userId, setUserId] = useState("you");
 	const [displayName, setDisplayName] = useState("You");
-	const [role, setRole] = useState<"driver" | "navigator" | "ai">("driver");
+	const [role, setRole] = useState<Role>("driver");
 	const [chatText, setChatText] = useState("");
+	const [chatError, setChatError] = useState<string | null>(null);
 	const opsScrollRef = useRef<HTMLDivElement>(null);
 
-	// Wire SSE → store on mount.
 	useEffect(() => {
 		const teardown = setupPairRealtimeListeners();
 		return teardown;
 	}, []);
 
-	// Auto-subscribe when joining a room; auto-unsubscribe on leave/unmount.
 	useEffect(() => {
 		if (currentRoom && !isStreaming) {
 			void subscribe();
@@ -54,16 +63,28 @@ export function PairProgrammingPanel() {
 		};
 	}, [currentRoom, isStreaming, subscribe, unsubscribe]);
 
-	// Auto-scroll the ops feed to the bottom.
 	useEffect(() => {
 		if (opsScrollRef.current) {
 			opsScrollRef.current.scrollTop = opsScrollRef.current.scrollHeight;
 		}
 	}, []);
 
-		const isRunning = phase === "running";
+	const isRunning = phase === "running";
 
-	// Helper to safely stringify values, converting objects to JSON instead of "[object Object]"
+	const roomIdError = useMemo(() => {
+		const trimmed = roomId.trim();
+		if (trimmed.length === 0) return t("pair.validation.roomIdRequired");
+		if (!ROOM_ID_PATTERN.test(trimmed)) return t("pair.validation.roomIdInvalid");
+		return null;
+	}, [roomId, t]);
+
+	const nameError = useMemo(
+		() => (displayName.trim().length === 0 ? t("pair.validation.nameRequired") : null),
+		[displayName, t],
+	);
+
+	const canJoin = !roomIdError && !nameError && userId.trim().length > 0;
+
 	const safeStringify = (value: unknown): string => {
 		if (typeof value === "string") return value;
 		if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -73,6 +94,22 @@ export function PairProgrammingPanel() {
 		} catch {
 			return "[object]";
 		}
+	};
+
+	const handleSubmitChat = (e: React.FormEvent) => {
+		e.preventDefault();
+		const trimmed = chatText.trim();
+		if (trimmed.length === 0) {
+			setChatError(t("pair.validation.messageEmpty"));
+			return;
+		}
+		if (chatText.length > MESSAGE_MAX_LEN) {
+			setChatError(t("pair.validation.messageTooLong", { max: MESSAGE_MAX_LEN }));
+			return;
+		}
+		setChatError(null);
+		void sendChat(trimmed);
+		setChatText("");
 	};
 
 	return (
@@ -88,8 +125,10 @@ export function PairProgrammingPanel() {
 				) : (
 					<Button
 						size="sm"
-						onClick={() => createOrJoin(roomId, userId, displayName, role)}
-						disabled={isRunning || !roomId || !userId}
+						onClick={() =>
+							createOrJoin(roomId.trim(), userId.trim(), displayName.trim(), role)
+						}
+						disabled={isRunning || !canJoin}
 					>
 						{t("pair.joinRoom")}
 					</Button>
@@ -99,7 +138,9 @@ export function PairProgrammingPanel() {
 			{currentRoom ? (
 				<div className="space-y-3 text-sm">
 					<div className="flex items-center gap-3">
-						<Badge variant="outline">room: {currentRoom.room_id}</Badge>
+						<Badge variant="outline">
+							{t("pair.roomLabel")}: {currentRoom.room_id}
+						</Badge>
 						<Badge
 							className={
 								isStreaming
@@ -158,60 +199,88 @@ export function PairProgrammingPanel() {
 						</div>
 					</div>
 
-					<form
-						className="flex gap-2"
-						onSubmit={(e) => {
-							e.preventDefault();
-							if (!chatText.trim()) return;
-							void sendChat(chatText);
-							setChatText("");
-						}}
-					>
-						<input
-							value={chatText}
-							onChange={(e) => setChatText(e.target.value)}
-							placeholder={t("pair.chatPlaceholder")}
-							className="flex-1 rounded border bg-background p-2 text-sm"
-						/>
-						<Button type="submit" size="sm">
-							{t("pair.send")}
-						</Button>
+					<form className="space-y-1" onSubmit={handleSubmitChat}>
+						<div className="flex gap-2">
+							<input
+								value={chatText}
+								onChange={(e) => {
+									setChatText(e.target.value.slice(0, MESSAGE_MAX_LEN));
+									if (chatError) setChatError(null);
+								}}
+								maxLength={MESSAGE_MAX_LEN}
+								aria-invalid={Boolean(chatError) || undefined}
+								aria-describedby={chatError ? "chat-error" : undefined}
+								placeholder={t("pair.chatPlaceholder")}
+								className="flex-1 rounded border bg-background p-2 text-sm"
+							/>
+							<Button type="submit" size="sm" disabled={chatText.trim().length === 0}>
+								{t("pair.send")}
+							</Button>
+						</div>
+						{chatError && (
+							<p id="chat-error" className="text-xs text-destructive">
+								{chatError}
+							</p>
+						)}
 					</form>
 				</div>
 			) : (
 				<div className="grid grid-cols-2 gap-3 text-sm">
 					<div>
-						<label htmlFor="room-id-input" className="block font-medium mb-1">{t("pair.roomId")}</label>
+						<label htmlFor="room-id-input" className="block font-medium mb-1">
+							{t("pair.roomId")}
+						</label>
 						<input
 							id="room-id-input"
 							value={roomId}
-							onChange={(e) => setRoomId(e.target.value)}
+							onChange={(e) => setRoomId(e.target.value.slice(0, 64))}
+							maxLength={64}
+							aria-invalid={Boolean(roomIdError) || undefined}
+							aria-describedby={roomIdError ? "room-id-error" : undefined}
 							className="w-full rounded border bg-background p-2 text-sm"
 						/>
+						{roomIdError && (
+							<p id="room-id-error" className="mt-1 text-xs text-destructive">
+								{roomIdError}
+							</p>
+						)}
 					</div>
 					<div>
-						<label htmlFor="display-name-input" className="block font-medium mb-1">{t("pair.yourName")}</label>
+						<label htmlFor="display-name-input" className="block font-medium mb-1">
+							{t("pair.yourName")}
+						</label>
 						<input
 							id="display-name-input"
 							value={displayName}
 							onChange={(e) => {
-								setDisplayName(e.target.value);
-								setUserId(e.target.value.toLowerCase().replaceAll(/\s+/g, "-") || "you");
+								const v = e.target.value.slice(0, NAME_MAX_LEN);
+								setDisplayName(v);
+								setUserId(v.toLowerCase().replaceAll(/\s+/g, "-") || "you");
 							}}
+							maxLength={NAME_MAX_LEN}
+							aria-invalid={Boolean(nameError) || undefined}
+							aria-describedby={nameError ? "display-name-error" : undefined}
 							className="w-full rounded border bg-background p-2 text-sm"
 						/>
+						{nameError && (
+							<p id="display-name-error" className="mt-1 text-xs text-destructive">
+								{nameError}
+							</p>
+						)}
 					</div>
 					<div>
-						<label htmlFor="role-select" className="block font-medium mb-1">{t("pair.role")}</label>
+						<label htmlFor="role-select" className="block font-medium mb-1">
+							{t("pair.role")}
+						</label>
 						<select
 							id="role-select"
 							value={role}
-							onChange={(e) => setRole(e.target.value as typeof role)}
+							onChange={(e) => setRole(e.target.value as Role)}
 							className="w-full rounded border bg-background p-2 text-sm"
 						>
 							{ROLES.map((r) => (
-								<option key={r} value={r}>
-									{r}
+								<option key={r.value} value={r.value}>
+									{t(r.labelKey as never)}
 								</option>
 							))}
 						</select>

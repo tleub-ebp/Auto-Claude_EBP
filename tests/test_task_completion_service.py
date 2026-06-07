@@ -48,25 +48,28 @@ def test_complete_task_success(temp_project_dir, mock_worktree_manager):
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
     
+    # Mock _has_uncommitted_changes (no changes)
+    mock_instance._has_uncommitted_changes.return_value = (False, [])
+
     # Mock push_branch success
     mock_instance.push_branch.return_value = {
         "success": True,
         "branch": "auto-claude/test-spec",
     }
-    
+
     # Mock create_pull_request success
     mock_instance.create_pull_request.return_value = {
         "success": True,
         "pr_url": "https://github.com/owner/repo/pull/123",
         "already_exists": False,
     }
-    
+
     # Create service
     service = TaskCompletionService(
         project_path=temp_project_dir, base_branch="develop"
     )
     service.worktree_manager = mock_instance
-    
+
     # Complete task
     result = service.complete_task(
         spec_id="test-spec",
@@ -91,18 +94,21 @@ def test_complete_task_push_failure(temp_project_dir, mock_worktree_manager):
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
     
+    # Mock _has_uncommitted_changes (no changes)
+    mock_instance._has_uncommitted_changes.return_value = (False, [])
+
     # Mock push_branch failure
     mock_instance.push_branch.return_value = {
         "success": False,
         "error": "Network error",
     }
-    
+
     # Create service
     service = TaskCompletionService(
         project_path=temp_project_dir, base_branch="develop"
     )
     service.worktree_manager = mock_instance
-    
+
     # Complete task
     result = service.complete_task(
         spec_id="test-spec",
@@ -126,24 +132,27 @@ def test_complete_task_pr_creation_failure(
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
     
+    # Mock _has_uncommitted_changes (no changes)
+    mock_instance._has_uncommitted_changes.return_value = (False, [])
+
     # Mock push_branch success
     mock_instance.push_branch.return_value = {
         "success": True,
         "branch": "auto-claude/test-spec",
     }
-    
+
     # Mock create_pull_request failure
     mock_instance.create_pull_request.return_value = {
         "success": False,
         "error": "Authentication failed",
     }
-    
+
     # Create service
     service = TaskCompletionService(
         project_path=temp_project_dir, base_branch="develop"
     )
     service.worktree_manager = mock_instance
-    
+
     # Complete task
     result = service.complete_task(
         spec_id="test-spec",
@@ -164,6 +173,9 @@ def test_complete_task_with_custom_target_branch(
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
     
+    # Mock _has_uncommitted_changes (no changes)
+    mock_instance._has_uncommitted_changes.return_value = (False, [])
+
     # Mock success
     mock_instance.push_branch.return_value = {"success": True, "branch": "test"}
     mock_instance.create_pull_request.return_value = {
@@ -171,13 +183,13 @@ def test_complete_task_with_custom_target_branch(
         "pr_url": "https://github.com/owner/repo/pull/123",
         "already_exists": False,
     }
-    
+
     # Create service
     service = TaskCompletionService(
         project_path=temp_project_dir, base_branch="develop"
     )
     service.worktree_manager = mock_instance
-    
+
     # Complete task with custom target
     result = service.complete_task(
         spec_id="test-spec",
@@ -201,6 +213,9 @@ def test_complete_task_pr_already_exists(
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
     
+    # Mock _has_uncommitted_changes (no changes)
+    mock_instance._has_uncommitted_changes.return_value = (False, [])
+
     # Mock success with existing PR
     mock_instance.push_branch.return_value = {"success": True, "branch": "test"}
     mock_instance.create_pull_request.return_value = {
@@ -208,13 +223,13 @@ def test_complete_task_pr_already_exists(
         "pr_url": "https://github.com/owner/repo/pull/123",
         "already_exists": True,
     }
-    
+
     # Create service
     service = TaskCompletionService(
         project_path=temp_project_dir, base_branch="develop"
     )
     service.worktree_manager = mock_instance
-    
+
     # Complete task
     result = service.complete_task(
         spec_id="test-spec",

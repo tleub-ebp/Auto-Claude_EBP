@@ -28,6 +28,10 @@ export interface AzureDevOpsAPI {
 		itemTypes?: string[],
 		maxItems?: number,
 	) => Promise<IPCResult<AzureDevOpsWorkItem[]>>;
+	getAzureDevOpsWorkItem: (
+		projectId: string,
+		workItemId: number,
+	) => Promise<IPCResult<AzureDevOpsWorkItem>>;
 	importAzureDevOpsWorkItems: (
 		projectId: string,
 		workItemIds: number[],
@@ -35,6 +39,15 @@ export interface AzureDevOpsAPI {
 	checkAzureDevOpsConnection: (
 		projectId: string,
 	) => Promise<IPCResult<AzureDevOpsSyncStatus>>;
+	syncAzureDevOpsTaskAC: (
+		projectId: string,
+		taskId: string,
+		workItemId: number,
+	) => Promise<IPCResult<{ acceptanceCriteria: string[] }>>;
+	hydrateAzureDevOpsTaskDisplay: (
+		projectId: string,
+		taskId: string,
+	) => Promise<IPCResult<{ html: string; title?: string }>>;
 }
 
 /**
@@ -70,6 +83,12 @@ export const createAzureDevOpsAPI = (): AzureDevOpsAPI => ({
 			maxItems,
 		),
 
+	getAzureDevOpsWorkItem: (
+		projectId: string,
+		workItemId: number,
+	): Promise<IPCResult<AzureDevOpsWorkItem>> =>
+		invokeIpc(IPC_CHANNELS.AZURE_DEVOPS_GET_WORK_ITEM, projectId, workItemId),
+
 	importAzureDevOpsWorkItems: (
 		projectId: string,
 		workItemIds: number[],
@@ -86,4 +105,26 @@ export const createAzureDevOpsAPI = (): AzureDevOpsAPI => ({
 		projectId: string,
 	): Promise<IPCResult<AzureDevOpsSyncStatus>> =>
 		invokeIpc(IPC_CHANNELS.AZURE_DEVOPS_CHECK_CONNECTION, projectId),
+
+	syncAzureDevOpsTaskAC: (
+		projectId: string,
+		taskId: string,
+		workItemId: number,
+	): Promise<IPCResult<{ acceptanceCriteria: string[] }>> =>
+		invokeIpc(
+			IPC_CHANNELS.AZURE_DEVOPS_SYNC_TASK_AC,
+			projectId,
+			taskId,
+			workItemId,
+		),
+
+	hydrateAzureDevOpsTaskDisplay: (
+		projectId: string,
+		taskId: string,
+	): Promise<IPCResult<{ html: string; title?: string }>> =>
+		invokeIpc(
+			IPC_CHANNELS.AZURE_DEVOPS_HYDRATE_TASK_DISPLAY,
+			projectId,
+			taskId,
+		),
 });

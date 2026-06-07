@@ -5,7 +5,7 @@
  * the hash chain. Read-only — append happens from agents, not the UI.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuditTrailStore } from "../../stores/phase35-stores";
 import { Badge } from "../ui/badge";
@@ -30,6 +30,25 @@ export function AuditTrailPanel() {
 
 	const isRunning = phase === "running";
 
+	const storageDirError = useMemo(
+		() => (storageDir.trim().length === 0 ? t("audit.validation.storageDirRequired") : null),
+		[storageDir, t],
+	);
+	const trailNameError = useMemo(
+		() => (trailName.trim().length === 0 ? t("audit.validation.trailNameRequired") : null),
+		[trailName, t],
+	);
+	const correlationIdError = useMemo(
+		() =>
+			correlationId.trim().length === 0
+				? t("audit.validation.correlationIdRequired")
+				: null,
+		[correlationId, t],
+	);
+
+	const canBrowse = !storageDirError && !trailNameError;
+	const canReplay = canBrowse && !correlationIdError;
+
 	return (
 		<PanelShell
 			title={t("audit.title")}
@@ -40,15 +59,15 @@ export function AuditTrailPanel() {
 					<Button
 						size="sm"
 						variant="outline"
-						onClick={() => loadEvents(storageDir, trailName)}
-						disabled={isRunning || !storageDir}
+						onClick={() => loadEvents(storageDir.trim(), trailName.trim())}
+						disabled={isRunning || !canBrowse}
 					>
 						{t("audit.events")}
 					</Button>
 					<Button
 						size="sm"
-						onClick={() => verify(storageDir, trailName)}
-						disabled={isRunning || !storageDir}
+						onClick={() => verify(storageDir.trim(), trailName.trim())}
+						disabled={isRunning || !canBrowse}
 					>
 						{t("audit.verify")}
 					</Button>
@@ -65,9 +84,16 @@ export function AuditTrailPanel() {
 							id="storage-dir-input"
 							value={storageDir}
 							onChange={(e) => setStorageDir(e.target.value)}
+							aria-invalid={Boolean(storageDirError) || undefined}
+							aria-describedby={storageDirError ? "storage-dir-error" : undefined}
 							className="w-full rounded border bg-background p-2 font-mono text-xs"
-							placeholder=".workpilot/audit"
+							placeholder={t("audit.storageDirPlaceholder")}
 						/>
+						{storageDirError && (
+							<p id="storage-dir-error" className="mt-1 text-xs text-destructive">
+								{storageDirError}
+							</p>
+						)}
 					</div>
 					<div>
 						<label htmlFor="trail-name-input" className="block font-medium mb-1">
@@ -76,9 +102,17 @@ export function AuditTrailPanel() {
 						<input
 							id="trail-name-input"
 							value={trailName}
-							onChange={(e) => setTrailName(e.target.value)}
+							onChange={(e) => setTrailName(e.target.value.slice(0, 64))}
+							maxLength={64}
+							aria-invalid={Boolean(trailNameError) || undefined}
+							aria-describedby={trailNameError ? "trail-name-error" : undefined}
 							className="w-full rounded border bg-background p-2 text-sm"
 						/>
+						{trailNameError && (
+							<p id="trail-name-error" className="mt-1 text-xs text-destructive">
+								{trailNameError}
+							</p>
+						)}
 					</div>
 				</div>
 
@@ -90,15 +124,25 @@ export function AuditTrailPanel() {
 						<input
 							id="correlation-id-input"
 							value={correlationId}
-							onChange={(e) => setCorrelationId(e.target.value)}
+							onChange={(e) => setCorrelationId(e.target.value.slice(0, 128))}
+							maxLength={128}
+							aria-invalid={Boolean(correlationIdError) || undefined}
+							aria-describedby={correlationIdError ? "correlation-id-error" : undefined}
 							className="w-full rounded border bg-background p-2 text-sm"
-							placeholder="spec-001"
+							placeholder={t("audit.correlationIdPlaceholder")}
 						/>
+						{correlationIdError && (
+							<p id="correlation-id-error" className="mt-1 text-xs text-destructive">
+								{correlationIdError}
+							</p>
+						)}
 					</div>
 					<Button
 						size="sm"
-						onClick={() => replay(correlationId, storageDir, trailName)}
-						disabled={isRunning || !correlationId || !storageDir}
+						onClick={() =>
+							replay(correlationId.trim(), storageDir.trim(), trailName.trim())
+						}
+						disabled={isRunning || !canReplay}
 					>
 						{t("audit.replay")}
 					</Button>
@@ -116,7 +160,7 @@ export function AuditTrailPanel() {
 							{integrity.is_intact ? t("audit.intact") : t("audit.tampered")}
 						</Badge>
 						<span className="ml-2 text-xs text-muted-foreground">
-							{integrity.events_checked} events checked
+							{integrity.events_checked} {t("audit.eventsChecked")}
 						</span>
 						{integrity.breakage_reason && (
 							<div className="mt-1 text-xs text-destructive">
@@ -129,7 +173,7 @@ export function AuditTrailPanel() {
 				{(replayEvents.length > 0 || events.length > 0) && (
 					<div>
 						<div className="font-medium mb-1">
-							{replayEvents.length > 0 ? "Replay" : t("audit.events")} (
+							{replayEvents.length > 0 ? t("audit.replayLabel") : t("audit.events")} (
 							{(replayEvents.length || events.length).toLocaleString()})
 						</div>
 						<ol className="space-y-1 text-xs max-h-96 overflow-auto">

@@ -697,13 +697,29 @@ def _try_smart_merge_inner(
                     },
                 }
             else:
-                # Merge failed unexpectedly - abort and fall back to semantic analysis
+                # Merge failed unexpectedly despite merge-tree reporting no
+                # conflicts. Before aborting, capture the actually-unmerged files
+                # so we can route them to AI resolution instead of silently
+                # falling through to a no-op "semantic analysis" success (which
+                # would later trigger a plain `git merge` that aborts on conflict).
                 debug_warning(
                     MODULE,
                     "Git merge failed unexpectedly despite no conflicts detected",
                     stderr=merge_result.stderr[:500] if merge_result.stderr else "",
                 )
-                # Abort the merge to restore clean state
+
+                unmerged_result = run_git(
+                    ["diff", "--name-only", "--diff-filter=U"],
+                    cwd=project_dir,
+                )
+                unmerged_files = [
+                    f.strip()
+                    for f in unmerged_result.stdout.splitlines()
+                    if f.strip() and not _is_workpilot_file(f.strip())
+                ]
+
+                # Abort the merge to restore clean state before AI resolution
+                # (AI resolution reads file contents from refs, not the index).
                 abort_result = run_git(["merge", "--abort"], cwd=project_dir)
                 if abort_result.returncode != 0:
                     debug_error(
@@ -712,6 +728,79 @@ def _try_smart_merge_inner(
                         stderr=abort_result.stderr,
                     )
                     return None  # Trigger fallback to avoid operating on inconsistent state
+
+                if unmerged_files:
+                    # Real conflicts existed but were missed by detection.
+                    # Route them through the AI resolver so the merge never fails.
+                    debug_warning(
+                        MODULE,
+                        "Detected unmerged files after failed git merge - routing to AI resolution",
+                        unmerged_files=unmerged_files,
+                    )
+                    print(
+                        warning(
+                            f"  Git merge surfaced {len(unmerged_files)} conflict(s), resolving with AI..."
+                        )
+                    )
+
+                    git_conflicts["has_conflicts"] = True
+                    git_conflicts["conflicting_files"] = unmerged_files
+                    git_conflicts["diverged_but_no_conflicts"] = False
+
+                    if progress_callback is not None:
+                        progress_callback(
+                            MergeProgressStage.RESOLVING,
+                            50,
+                            f"Resolving {len(unmerged_files)} conflicting files with AI",
+                            {"conflicts_found": len(unmerged_files)},
+                        )
+
+                    resolution_result = _resolve_git_conflicts_with_ai(
+                        project_dir,
+                        spec_name,
+                        worktree_path,
+                        git_conflicts,
+                        orchestrator,
+                        no_commit=no_commit,
+                    )
+
+                    if resolution_result.get("success"):
+                        if progress_callback is not None:
+                            stats = resolution_result.get("stats", {})
+                            progress_callback(
+                                MergeProgressStage.COMPLETE,
+                                100,
+                                "Merge complete",
+                                {
+                                    "conflicts_found": len(unmerged_files),
+                                    "conflicts_resolved": stats.get(
+                                        "conflicts_resolved", 0
+                                    ),
+                                },
+                            )
+                        return resolution_result
+
+                    if progress_callback is not None:
+                        remaining_count = len(
+                            resolution_result.get("remaining_conflicts", [])
+                        )
+                        progress_callback(
+                            MergeProgressStage.ERROR,
+                            0,
+                            "Some conflicts could not be resolved",
+                            {
+                                "conflicts_found": len(unmerged_files),
+                                "conflicts_remaining": remaining_count,
+                            },
+                        )
+                    return {
+                        "success": False,
+                        "conflicts": resolution_result.get("remaining_conflicts", []),
+                        "resolved": resolution_result.get("resolved_files", []),
+                        "git_conflicts": True,
+                        "error": resolution_result.get("error"),
+                    }
+
                 print(
                     warning(
                         "  Git merge failed unexpectedly, falling back to semantic analysis..."
@@ -944,6 +1033,52 @@ def _rebase_spec_branch(
                 )
 
 
+def _parse_merge_tree_conflicts(output: str) -> list[str]:
+    """
+    Parse the output of `git merge-tree --write-tree` to extract conflicting files.
+
+    The output (without -z) is structured as:
+        <OID of toplevel tree>
+        <conflicted file info lines>   e.g. "100644 <sha> 1\t<path>" (stages 1/2/3)
+        <informational messages>       e.g. "CONFLICT (content): Merge conflict in <path>"
+
+    We collect conflicting paths from BOTH sections for robustness:
+    - the human-readable "CONFLICT ...: Merge conflict in <path>" messages, and
+    - the machine-readable conflicted-file-info entries (present even when
+      messages are suppressed).
+
+    Returns a de-duplicated, order-preserving list of conflicting file paths.
+    """
+    import re
+
+    conflicting: list[str] = []
+    seen: set[str] = set()
+
+    def _add(path: str) -> None:
+        path = path.strip().strip('"')
+        if path and path not in seen:
+            seen.add(path)
+            conflicting.append(path)
+
+    # Pattern for conflicted-file-info entries: <mode> <object> <stage>\t<path>
+    # This section is the most reliable source and is present for every conflict.
+    info_re = re.compile(r"^[0-7]{6}\s+[0-9a-f]{7,}\s+[123][ \t]+(.+)$")
+    # Secondary fallback: human-readable "Merge conflict in <path>" messages
+    msg_re = re.compile(r"Merge conflict in (.+?)(?:\s*$|\s+\()")
+
+    for line in output.split("\n"):
+        line = line.rstrip("\r")
+        info_match = info_re.match(line)
+        if info_match:
+            _add(info_match.group(1))
+            continue
+        msg_match = msg_re.search(line)
+        if msg_match:
+            _add(msg_match.group(1))
+
+    return conflicting
+
+
 def _check_git_conflicts(project_dir: Path, spec_name: str) -> dict:
     """
     Check for git-level conflicts WITHOUT modifying the working directory.
@@ -954,8 +1089,6 @@ def _check_git_conflicts(project_dir: Path, spec_name: str) -> dict:
     Returns:
         Dict with has_conflicts, conflicting_files, etc.
     """
-    import re
-
     spec_branch = f"workpilot/{spec_name}"
     result = {
         "has_conflicts": False,
@@ -1042,11 +1175,16 @@ def _check_git_conflicts(project_dir: Path, spec_name: str) -> dict:
 
         # Use git merge-tree to check for conflicts WITHOUT touching working directory
         # Note: --write-tree mode only accepts 2 branches (it auto-finds the merge base)
+        #
+        # IMPORTANT: Do NOT pass --no-messages here. That flag suppresses the
+        # informational "CONFLICT (...): Merge conflict in <file>" lines that we
+        # rely on to detect conflicts. Without those markers, real conflicts get
+        # misclassified as "diverged_but_no_conflicts", bypassing AI resolution
+        # and causing the subsequent real `git merge` to abort on conflict.
         merge_tree_result = run_git(
             [
                 "merge-tree",
                 "--write-tree",
-                "--no-messages",
                 result["base_branch"],  # Use branch names, not commit hashes
                 spec_branch,
             ],
@@ -1056,23 +1194,16 @@ def _check_git_conflicts(project_dir: Path, spec_name: str) -> dict:
         # merge-tree returns exit code 1 if there are actual text conflicts
         # Exit code 0 means clean merge possible
         if merge_tree_result.returncode != 0:
-            # Parse the output for ACTUAL conflicting files (look for CONFLICT markers)
             output = merge_tree_result.stdout + merge_tree_result.stderr
-            for line in output.split("\n"):
-                if "CONFLICT" in line:
-                    match = re.search(
-                        r"(?:Merge conflict in|CONFLICT.*?:)\s*(.+?)(?:\s*$|\s+\()",
-                        line,
-                    )
-                    if match:
-                        file_path = match.group(1).strip()
-                        # Skip .workpilot files - they should never be merged
-                        if (
-                            file_path
-                            and file_path not in result["conflicting_files"]
-                            and not _is_workpilot_file(file_path)
-                        ):
-                            result["conflicting_files"].append(file_path)
+            conflicting_files = _parse_merge_tree_conflicts(output)
+            for file_path in conflicting_files:
+                # Skip .workpilot files - they should never be merged
+                if (
+                    file_path
+                    and file_path not in result["conflicting_files"]
+                    and not _is_workpilot_file(file_path)
+                ):
+                    result["conflicting_files"].append(file_path)
 
             # Only set has_conflicts if we found ACTUAL CONFLICT markers
             # A non-zero exit code without CONFLICT markers just means branches diverged

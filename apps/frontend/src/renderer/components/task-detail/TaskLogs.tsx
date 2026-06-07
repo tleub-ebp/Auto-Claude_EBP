@@ -17,7 +17,8 @@ import {
 	Wrench,
 	XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type {
 	Task,
 	TaskLogEntry,
@@ -26,18 +27,29 @@ import type {
 	TaskMetadata,
 	TaskPhaseLog,
 } from "../../../shared/types";
-import type {
-	PhaseModelConfig,
-	ThinkingLevel,
-} from "../../../shared/types/settings";
+import type { ThinkingLevel } from "../../../shared/types/settings";
 import { cn } from "../../lib/utils";
+import { useToast } from "../../hooks/use-toast";
+import { persistUpdateTask } from "../../stores/task-store";
 import { useSettingsStore } from "../../stores/settings-store";
+import { THINKING_LEVELS } from "../../../shared/constants/models";
+import {
+	buildThinkingMetadataUpdate,
+	LOG_PHASE_TO_CONFIG_PHASE,
+} from "../../../shared/utils/task-thinking";
 import { Badge } from "../ui/badge";
 import {
 	Collapsible,
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from "../ui/collapsible";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../ui/select";
 
 interface TaskLogsProps {
 	task: Task;
@@ -49,7 +61,10 @@ interface TaskLogsProps {
 	logsContainerRef: React.RefObject<HTMLDivElement | null>;
 	onLogsScroll: (e: React.UIEvent<HTMLDivElement>) => void;
 	onTogglePhase: (phase: TaskLogPhase) => void;
+	onVisiblePhaseChange?: (phase: TaskLogPhase | null) => void;
 }
+
+const PHASE_ORDER: TaskLogPhase[] = ["planning", "coding", "validation"];
 
 const PHASE_LABELS: Record<TaskLogPhase, string> = {
 	planning: "Planning",
@@ -71,12 +86,7 @@ const PHASE_COLORS: Record<TaskLogPhase, string> = {
 
 // Map log phases to config phase keys
 // Note: 'planning' log phase covers both spec creation and implementation planning
-const LOG_PHASE_TO_CONFIG_PHASE: Record<TaskLogPhase, keyof PhaseModelConfig> =
-	{
-		planning: "spec", // Planning log phase primarily shows spec creation
-		coding: "coding",
-		validation: "qa",
-	};
+// (LOG_PHASE_TO_CONFIG_PHASE is imported from shared/utils/task-thinking)
 
 // Short labels for models
 const MODEL_SHORT_LABELS: Record<string, string> = {
@@ -98,7 +108,7 @@ const THINKING_SHORT_LABELS: Record<ThinkingLevel, string> = {
 function getPhaseConfig(
 	metadata: TaskMetadata | undefined,
 	logPhase: TaskLogPhase,
-): { model: string; thinking: string } | null {
+): { model: string; thinking: string; thinkingValue: ThinkingLevel } | null {
 	if (!metadata) return null;
 
 	const configPhase = LOG_PHASE_TO_CONFIG_PHASE[logPhase];
@@ -114,6 +124,7 @@ function getPhaseConfig(
 		return {
 			model: MODEL_SHORT_LABELS[model] || model,
 			thinking: THINKING_SHORT_LABELS[thinking] || thinking,
+			thinkingValue: thinking,
 		};
 	}
 
@@ -123,6 +134,7 @@ function getPhaseConfig(
 			model: MODEL_SHORT_LABELS[metadata.model] || metadata.model,
 			thinking:
 				THINKING_SHORT_LABELS[metadata.thinkingLevel] || metadata.thinkingLevel,
+			thinkingValue: metadata.thinkingLevel,
 		};
 	}
 
@@ -140,12 +152,93 @@ export function TaskLogs({
 	logsContainerRef,
 	onLogsScroll,
 	onTogglePhase,
+	onVisiblePhaseChange,
 }: TaskLogsProps) {
+	const { t } = useTranslation(["tasks"]);
+	const { toast } = useToast();
+	const [savingPhase, setSavingPhase] = useState<TaskLogPhase | null>(null);
+
+	// Persist a per-phase thinking-effort change. For Auto-profile tasks this
+	// updates only the targeted phase; for single-model tasks it updates the
+	// shared thinking level. The change applies when that phase next runs.
+	const handleThinkingChange = useCallback(
+		async (logPhase: TaskLogPhase, level: ThinkingLevel) => {
+			setSavingPhase(logPhase);
+			try {
+				const metadata = buildThinkingMetadataUpdate(
+					task.metadata,
+					logPhase,
+					level,
+				);
+				const ok = await persistUpdateTask(task.id, { metadata });
+				if (!ok) throw new Error("update failed");
+				toast({
+					title: t("tasks:logs.thinking.updatedTitle", "Réflexion mise à jour"),
+					description: t(
+						"tasks:logs.thinking.updatedDesc",
+						"Le niveau de réflexion sera appliqué au démarrage de cette phase.",
+					),
+				});
+			} catch (error) {
+				toast({
+					title: t("tasks:logs.thinking.updateFailed", "Échec de la mise à jour"),
+					description: error instanceof Error ? error.message : String(error),
+					variant: "destructive",
+				});
+			} finally {
+				setSavingPhase(null);
+			}
+		},
+		[task.id, task.metadata, toast, t],
+	);
+
+	// Refs to each rendered phase section so we can detect which phase is
+	// currently scrolled to the top of the viewport.
+	const phaseRefs = useRef<Partial<Record<TaskLogPhase, HTMLDivElement | null>>>(
+		{},
+	);
+
+	// Determine which phase section currently sits at the top of the scroll
+	// container and notify the parent so the sticky phase bar can follow.
+	const computeVisiblePhase = useCallback(() => {
+		const container = logsContainerRef.current;
+		if (!container || !onVisiblePhaseChange) return;
+
+		const containerTop = container.getBoundingClientRect().top;
+		let current: TaskLogPhase | null = null;
+		for (const phase of PHASE_ORDER) {
+			const el = phaseRefs.current[phase];
+			if (!el) continue;
+			// The last phase whose header has reached (or passed) the top edge of
+			// the viewport is the one we are currently reading.
+			if (el.getBoundingClientRect().top - containerTop <= 8) {
+				current = phase;
+			}
+		}
+		onVisiblePhaseChange(current);
+	}, [logsContainerRef, onVisiblePhaseChange]);
+
+	const handleScroll = useCallback(
+		(e: React.UIEvent<HTMLDivElement>) => {
+			onLogsScroll(e);
+			computeVisiblePhase();
+		},
+		[onLogsScroll, computeVisiblePhase],
+	);
+
+	// Recompute when logs content changes (new entries, expand/collapse, load).
+	// These deps trigger DOM layout changes even though computeVisiblePhase
+	// reads layout via refs rather than these values directly.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: layout-driven recompute
+	useEffect(() => {
+		computeVisiblePhase();
+	}, [computeVisiblePhase, phaseLogs, expandedPhases, isLoadingLogs]);
+
 	return (
 		<div
 			ref={logsContainerRef}
 			className="h-full overflow-y-auto scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent"
-			onScroll={onLogsScroll}
+			onScroll={handleScroll}
 		>
 			<div className="p-4 space-y-2">
 				{isLoadingLogs ? (
@@ -155,19 +248,25 @@ export function TaskLogs({
 				) : phaseLogs ? (
 					<>
 						{/* Phase-based collapsible logs */}
-						{(["planning", "coding", "validation"] as TaskLogPhase[]).map(
-							(phase) => (
+						{PHASE_ORDER.map((phase) => (
+							<div
+								key={phase}
+								ref={(el) => {
+									phaseRefs.current[phase] = el;
+								}}
+							>
 								<PhaseLogSection
-									key={phase}
 									phase={phase}
 									phaseLog={phaseLogs.phases[phase]}
 									isExpanded={expandedPhases.has(phase)}
 									onToggle={() => onTogglePhase(phase)}
 									isTaskStuck={isStuck}
 									phaseConfig={getPhaseConfig(task.metadata, phase)}
+									onThinkingChange={handleThinkingChange}
+									isSavingThinking={savingPhase === phase}
 								/>
-							),
-						)}
+							</div>
+						))}
 						<div ref={logsEndRef} />
 					</>
 				) : task.logs && task.logs.length > 0 ? (
@@ -197,7 +296,13 @@ interface PhaseLogSectionProps {
 	isExpanded: boolean;
 	onToggle: () => void;
 	isTaskStuck?: boolean;
-	phaseConfig?: { model: string; thinking: string } | null;
+	phaseConfig?: {
+		model: string;
+		thinking: string;
+		thinkingValue: ThinkingLevel;
+	} | null;
+	onThinkingChange?: (phase: TaskLogPhase, level: ThinkingLevel) => void;
+	isSavingThinking?: boolean;
 }
 
 function PhaseLogSection({
@@ -207,7 +312,10 @@ function PhaseLogSection({
 	onToggle,
 	isTaskStuck,
 	phaseConfig,
+	onThinkingChange,
+	isSavingThinking,
 }: PhaseLogSectionProps) {
+	const { t } = useTranslation(["tasks"]);
 	const Icon = PHASE_ICONS[phase];
 	const logOrder = useSettingsStore((s) => s.settings.logOrder);
 	const status = phaseLog?.status || "pending";
@@ -278,20 +386,21 @@ function PhaseLogSection({
 
 	return (
 		<Collapsible open={isExpanded} onOpenChange={onToggle}>
-			<CollapsibleTrigger asChild>
-				<button
-					type="button"
-					className={cn(
-						"w-full flex items-center justify-between p-3 rounded-lg border transition-colors",
-						"hover:bg-secondary/50",
-						status === "active" && !isInterrupted && PHASE_COLORS[phase],
-						isInterrupted && "border-warning/30 bg-warning/5",
-						status === "completed" && "border-success/30 bg-success/5",
-						status === "failed" && "border-destructive/30 bg-destructive/5",
-						status === "pending" && "border-border bg-secondary/30",
-					)}
-				>
-					<div className="flex items-center gap-2">
+			<div
+				className={cn(
+					"w-full flex items-center justify-between p-3 rounded-lg border transition-colors",
+					status === "active" && !isInterrupted && PHASE_COLORS[phase],
+					isInterrupted && "border-warning/30 bg-warning/5",
+					status === "completed" && "border-success/30 bg-success/5",
+					status === "failed" && "border-destructive/30 bg-destructive/5",
+					status === "pending" && "border-border bg-secondary/30",
+				)}
+			>
+				<CollapsibleTrigger asChild>
+					<button
+						type="button"
+						className="flex items-center gap-2 flex-1 min-w-0 text-left rounded hover:bg-secondary/50 transition-colors"
+					>
 						{isExpanded ? (
 							<ChevronDown className="h-4 w-4 text-muted-foreground" />
 						) : (
@@ -313,19 +422,55 @@ function PhaseLogSection({
 								({phaseLog?.entries.length} entries)
 							</span>
 						)}
-					</div>
-					<div className="flex items-center gap-2">
-						{/* Model and thinking level indicator */}
-						{phaseConfig && (
-							<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-								<div
-									className="flex items-center gap-0.5"
-									title={`Model: ${phaseConfig.model}`}
+					</button>
+				</CollapsibleTrigger>
+				<div className="flex items-center gap-2">
+					{/* Model and thinking level indicator */}
+					{phaseConfig && (
+						<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+							<div
+								className="flex items-center gap-0.5"
+								title={`Model: ${phaseConfig.model}`}
+							>
+								<Cpu className="h-3 w-3" />
+								<span>{phaseConfig.model}</span>
+							</div>
+							<span className="text-muted-foreground/50">|</span>
+							{onThinkingChange ? (
+								<Select
+									value={phaseConfig.thinkingValue}
+									onValueChange={(value) =>
+										onThinkingChange(phase, value as ThinkingLevel)
+									}
+									disabled={isSavingThinking}
 								>
-									<Cpu className="h-3 w-3" />
-									<span>{phaseConfig.model}</span>
-								</div>
-								<span className="text-muted-foreground/50">|</span>
+									<SelectTrigger
+										className="h-5 gap-1 border-0 bg-transparent px-1 py-0 text-[10px] text-muted-foreground hover:text-foreground focus:ring-0 focus:ring-offset-0 [&>svg]:h-3 [&>svg]:w-3"
+										aria-label={t(
+											"tasks:logs.thinking.selectAria",
+											"Niveau de réflexion pour cette phase",
+										)}
+										title={t(
+											"tasks:logs.thinking.selectTooltip",
+											"Changer le niveau de réflexion pour cette phase",
+										)}
+									>
+										{isSavingThinking ? (
+											<Loader2 className="h-3 w-3 animate-spin" />
+										) : (
+											<Brain className="h-3 w-3" />
+										)}
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{THINKING_LEVELS.map((level) => (
+											<SelectItem key={level.value} value={level.value}>
+												{level.label}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							) : (
 								<div
 									className="flex items-center gap-0.5"
 									title={`Thinking: ${phaseConfig.thinking}`}
@@ -333,12 +478,12 @@ function PhaseLogSection({
 									<Brain className="h-3 w-3" />
 									<span>{phaseConfig.thinking}</span>
 								</div>
-							</div>
-						)}
-						{getStatusBadge()}
-					</div>
-				</button>
-			</CollapsibleTrigger>
+							)}
+						</div>
+					)}
+					{getStatusBadge()}
+				</div>
+			</div>
 			<CollapsibleContent>
 				<div className="mt-1 ml-6 border-l-2 border-border pl-4 py-2 space-y-1">
 					{!hasEntries ? (
@@ -441,15 +586,15 @@ function LogEntry({ entry }: LogEntryProps) {
 			<div className="flex flex-col">
 				<div
 					className={cn(
-						"inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs",
+						"flex items-start gap-2 rounded-md px-2 py-1 text-xs",
 						color,
 					)}
 				>
-					<Icon className="h-3 w-3 animate-pulse" />
-					<span className="font-medium">{label}</span>
+					<Icon className="h-3 w-3 mt-0.5 shrink-0 animate-pulse" />
+					<span className="font-medium shrink-0 mt-px">{label}</span>
 					{entry.tool_input && (
 						<span
-							className="text-muted-foreground truncate max-w-[500px]"
+							className="text-muted-foreground break-all whitespace-pre-wrap flex-1 min-w-0"
 							title={entry.tool_input}
 						>
 							{entry.tool_input}

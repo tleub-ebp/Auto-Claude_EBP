@@ -119,29 +119,35 @@ def sync_spec_to_source(spec_dir: Path, source_spec_dir: Path | None) -> bool:
     # Ensure source directory exists
     source_spec_dir.mkdir(parents=True, exist_ok=True)
 
+    # Sync all files and directories from worktree spec to source spec.
+    # Per-item try/except so a single permission error doesn't abort the
+    # entire sync (which previously left the source spec dir in a
+    # silently-partial state — synced_any could still be True from earlier
+    # successful copies, masking the failure).
     try:
-        # Sync all files and directories from worktree spec to source spec
-        for item in spec_dir.iterdir():
-            # Skip symlinks to prevent path traversal attacks
-            if item.is_symlink():
-                logger.warning(f"Skipping symlink during sync: {item.name}")
-                continue
+        items = list(spec_dir.iterdir())
+    except OSError as exc:
+        logger.warning(f"Cannot list spec directory {spec_dir}: {exc}")
+        return False
 
-            source_item = source_spec_dir / item.name
+    for item in items:
+        # Skip symlinks to prevent path traversal attacks
+        if item.is_symlink():
+            logger.warning(f"Skipping symlink during sync: {item.name}")
+            continue
 
+        source_item = source_spec_dir / item.name
+
+        try:
             if item.is_file():
-                # Copy file (preserves timestamps)
                 shutil.copy2(item, source_item)
                 logger.debug(f"Synced {item.name} to source")
                 synced_any = True
-
             elif item.is_dir():
-                # Recursively sync directory
                 _sync_directory(item, source_item)
                 synced_any = True
-
-    except Exception as e:
-        logger.warning(f"Failed to sync spec directory to source: {e}")
+        except (OSError, shutil.Error) as exc:
+            logger.warning(f"Failed to sync {item.name} to source: {exc}")
 
     return synced_any
 
@@ -179,3 +185,57 @@ def _sync_directory(source_dir: Path, target_dir: Path) -> None:
 def sync_plan_to_source(spec_dir: Path, source_spec_dir: Path | None) -> bool:
     """Alias for sync_spec_to_source for backward compatibility."""
     return sync_spec_to_source(spec_dir, source_spec_dir)
+
+
+def set_pause_state(
+    plan: dict,
+    paused: bool,
+    subtask_id: str | None = None,
+    provider: str = "anthropic",
+    model: str = "claude-opus-4-7",
+) -> dict:
+    """
+    Set or update pause state in the plan.
+
+    Args:
+        plan: Implementation plan dict
+        paused: Whether to pause execution
+        subtask_id: Current subtask ID when pausing
+        provider: LLM provider name
+        model: LLM model name
+
+    Returns:
+        Updated plan dict
+    """
+    if "paused" not in plan:
+        plan["paused"] = {}
+
+    plan["paused"] = {
+        "enabled": paused,
+        "paused_at": None,
+        "paused_subtask_id": subtask_id if paused else None,
+        "provider": provider,
+        "model": model,
+    }
+
+    if paused:
+        from datetime import datetime, timezone
+
+        plan["paused"]["paused_at"] = datetime.now(timezone.utc).isoformat()
+
+    return plan
+
+
+def get_pause_state(plan: dict) -> dict:
+    """
+    Get pause state from plan.
+
+    Returns:
+        Dict with keys: enabled, paused_at, paused_subtask_id, provider, model
+    """
+    return plan.get("paused", {})
+
+
+def is_paused(plan: dict) -> bool:
+    """Check if execution is paused."""
+    return plan.get("paused", {}).get("enabled", False)

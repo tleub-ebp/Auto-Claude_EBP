@@ -346,7 +346,15 @@ def _fetch_json(url: str, timeout: int = 5) -> dict[str, Any] | None:
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
-    except Exception:
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        # Bare `except Exception` previously hid every cause (including
+        # KeyboardInterrupt-adjacent), making "Ollama down" indistinguishable
+        # from "model errored" indistinguishable from "JSON malformed".
+        # Narrow to network/parse errors and log so callers can debug.
+        logger.warning("HTTP GET %s failed: %s", url, e)
+        return None
+    except json.JSONDecodeError as e:
+        logger.warning("HTTP GET %s returned invalid JSON: %s", url, e)
         return None
 
 
@@ -369,7 +377,11 @@ def _post_json(
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
-    except Exception:
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        logger.warning("HTTP POST %s failed: %s", url, e)
+        return None
+    except json.JSONDecodeError as e:
+        logger.warning("HTTP POST %s returned invalid JSON: %s", url, e)
         return None
 
 

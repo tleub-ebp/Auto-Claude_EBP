@@ -1,0 +1,47 @@
+{
+	"buttonLabel": "⚙ Agent",
+	"menuLabel": "Agent tools",
+	"estimateCost": "Estimate cost…",
+	"restartAgent": "Restart agent…",
+	"showActivePrompt": "Show active prompt…",
+	"promptPreview": {
+		"title": "Active system prompt",
+		"description": "The exact prompt that would be sent to the SDK for {{agentType}}. No tokens spent — this is reconstructed locally from the same code path as create_client.",
+		"loading": "Loading…",
+		"copyPrompt": "Copy prompt",
+		"close": "Close",
+		"badges": {
+			"model": "model:",
+			"provider": "provider:",
+			"chars": "{{count}} chars",
+			"claudeMd": "CLAUDE.md",
+			"domainAddendum": "domain addendum (+{{count}}ch)",
+			"tools": "{{count}} tools"
+		},
+		"allowedTools": "Allowed tools ({{count}})"
+	},
+	"restartDialog": {
+		"title": "Restart agent",
+		"description": "Pick the smallest restart that covers your problem.",
+		"progress": "Progress: {{completed}}/{{total}} subtasks completed",
+		"nextSubtask": ", next: {{next}}",
+		"loading": "Inspecting spec…",
+		"close": "Close",
+		"restart": "Restart",
+		"willDelete": "Will delete {{count}} file(s):",
+		"modes": {
+			"qa": {
+				"title": "Restart QA only",
+				"description": "Re-run the reviewer + fixer against the current implementation. Cheap and safe."
+			},
+			"coder": {
+				"title": "Restart coder",
+				"description": "Re-run the coder from the first non-completed subtask. Earlier work is preserved."
+			},
+			"full": {
+				"title": "Restart full build",
+				"description": "Discard the current plan and start over. Most expensive — equivalent to a fresh build."
+			}
+		}
+	}
+}

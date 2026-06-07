@@ -1,0 +1,20 @@
+#!/bin/bash
+# Pre-merge hook: Backs up .workpilot before merge
+# This hook runs before git merge completes
+
+set -e
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+MANAGER="$REPO_ROOT/scripts/smart-merge-manager.py"
+
+if [ ! -f "$MANAGER" ]; then
+    exit 0
+fi
+
+# Get the branch being merged in
+TARGET_BRANCH=$(cat .git/MERGE_HEAD 2>/dev/null || echo "unknown")
+
+echo "[Smart Merge] Running pre-merge backup..."
+python3 "$MANAGER" prepare "$TARGET_BRANCH" || true
+
+exit 0

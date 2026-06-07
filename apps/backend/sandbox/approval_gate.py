@@ -4,6 +4,11 @@ Approval Gate — Human-in-the-loop for sandbox results.
 After a dry-run, the user reviews the predicted diff and either
 approves (apply to real working tree), rejects, or partially approves
 specific files.
+
+Not to be confused with ``core.governance.approval_gate``: that module
+gates *policy-flagged* actions (persistent request queue, deny/approve
+by approver), while this module tracks per-file approval of a sandbox
+diff prediction and physically applies it to the working tree.
 """
 
 from __future__ import annotations
@@ -19,6 +24,23 @@ from typing import Any
 from .diff_predictor import DiffPrediction
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_join(root: Path, rel: str) -> Path:
+    """Join `rel` onto `root` and refuse paths that escape the root.
+
+    Refuses absolute paths, `..` traversal, and symlink targets that resolve
+    outside `root`. `root` MUST already be resolved by the caller.
+    """
+    if not rel:
+        raise ValueError("Empty path")
+    rel_path = Path(rel)
+    if rel_path.is_absolute():
+        raise ValueError(f"Absolute path not allowed: {rel}")
+    candidate = (root / rel_path).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError(f"Path escapes root {root}: {rel}")
+    return candidate
 
 
 class ApprovalDecision(str, Enum):
@@ -131,13 +153,29 @@ class ApprovalGate:
             logger.warning("Cannot apply pending request %s", request.id)
             return []
 
+        sandbox_root_resolved = sandbox_root.resolve()
+        target_root_resolved = target_root.resolve()
+
         applied: list[str] = []
         for fa in request.file_approvals:
             if not fa.approved:
                 continue
 
-            src = sandbox_root / fa.path
-            dst = target_root / fa.path
+            try:
+                src = _safe_join(sandbox_root_resolved, fa.path)
+                dst = _safe_join(target_root_resolved, fa.path)
+            except ValueError as exc:
+                # Path escapes the sandbox/target — refuse to apply.
+                # This guards against malicious diff entries with `..` or
+                # absolute paths that would let an approve click overwrite
+                # arbitrary host files.
+                logger.error(
+                    "Refused to apply path %r in request %s: %s",
+                    fa.path,
+                    request.id,
+                    exc,
+                )
+                continue
 
             if src.exists():
                 dst.parent.mkdir(parents=True, exist_ok=True)

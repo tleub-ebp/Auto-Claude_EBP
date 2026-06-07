@@ -18,6 +18,14 @@ interface ProjectState {
 	activeProjectId: string | null; // Currently active tab
 	tabOrder: string[]; // Order of tabs for drag and drop
 
+	/**
+	 * Set of project IDs whose on-disk path no longer exists. Refreshed
+	 * via `refreshMissingPaths()` and consumed by the tab bar to display
+	 * a warning indicator. An ID is absent from the set when the path is
+	 * known to exist OR when the check has not run yet.
+	 */
+	missingPaths: ReadonlySet<string>;
+
 	// Actions
 	setProjects: (projects: Project[]) => void;
 	addProject: (project: Project) => void;
@@ -26,6 +34,19 @@ interface ProjectState {
 	selectProject: (projectId: string | null) => void;
 	setLoading: (loading: boolean) => void;
 	setError: (error: string | null) => void;
+
+	/**
+	 * Refresh `missingPaths` by asking the main process whether each
+	 * project's path still exists. Safe to call repeatedly (cheap fs.stat
+	 * batch in the main process).
+	 */
+	refreshMissingPaths: () => Promise<void>;
+	/**
+	 * Repoint a project at a new on-disk location after the user picked
+	 * a folder via the directory picker. Updates state and clears the
+	 * missing-path flag on success.
+	 */
+	repathProject: (projectId: string, newPath: string) => Promise<boolean>;
 
 	// Tab management actions
 	openProjectTab: (projectId: string) => void;
@@ -51,6 +72,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	openProjectIds: [],
 	activeProjectId: null,
 	tabOrder: [],
+
+	missingPaths: new Set<string>(),
 
 	setProjects: (projects) => set({ projects }),
 
@@ -92,6 +115,46 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	setLoading: (isLoading) => set({ isLoading }),
 
 	setError: (error) => set({ error }),
+
+	refreshMissingPaths: async () => {
+		try {
+			const api = globalThis.electronAPI?.checkProjectPaths;
+			if (!api) return;
+			const result = await api();
+			if (!result.success || !result.data) return;
+			const missing = new Set<string>();
+			for (const [projectId, exists] of Object.entries(result.data)) {
+				if (!exists) missing.add(projectId);
+			}
+			set({ missingPaths: missing });
+		} catch (err) {
+			console.error("[ProjectStore] refreshMissingPaths failed:", err);
+		}
+	},
+
+	repathProject: async (projectId, newPath) => {
+		try {
+			const api = globalThis.electronAPI?.repathProject;
+			if (!api) return false;
+			const result = await api(projectId, newPath);
+			if (!result.success || !result.data) return false;
+			const updated = result.data;
+			set((state) => {
+				const newMissing = new Set(state.missingPaths);
+				newMissing.delete(projectId);
+				return {
+					projects: state.projects.map((p) =>
+						p.id === projectId ? { ...p, path: updated.path } : p,
+					),
+					missingPaths: newMissing,
+				};
+			});
+			return true;
+		} catch (err) {
+			console.error("[ProjectStore] repathProject failed:", err);
+			return false;
+		}
+	},
 
 	// Tab management actions
 	openProjectTab: (projectId) => {
@@ -288,6 +351,10 @@ export async function loadProjects(): Promise<void> {
 		} else if (!result.success) {
 			store.setError(result.error || "Erreur lors du chargement des projets.");
 		}
+
+		// Refresh missing-paths flags so the tab bar can mark stale projects.
+		// Don't await — this is purely cosmetic and shouldn't block load.
+		void useProjectStore.getState().refreshMissingPaths();
 		// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
 	} catch (err: any) {
 		// Gestion d'erreur améliorée pour les réponses HTML ou backend injoignable
@@ -304,9 +371,12 @@ export async function loadProjects(): Promise<void> {
 }
 
 /**
- * Add a new project
+ * Add a new project. Returns the created project plus an optional warning
+ * (e.g. when the chosen path is a Git sub-folder instead of the Git root).
  */
-export async function addProject(projectPath: string): Promise<Project | null> {
+export async function addProject(
+	projectPath: string,
+): Promise<{ project: Project; warning?: string } | null> {
 	const store = useProjectStore.getState();
 
 	try {
@@ -316,7 +386,7 @@ export async function addProject(projectPath: string): Promise<Project | null> {
 			store.selectProject(result.data.id);
 			// Also open a tab for the new project
 			store.openProjectTab(result.data.id);
-			return result.data;
+			return { project: result.data, warning: result.warning };
 		} else {
 			store.setError(result.error || "Failed to add project");
 			return null;
@@ -391,10 +461,20 @@ export async function updateProjectSettings(
 			settings,
 		);
 		if (result.success) {
-			const project = store.projects.find((p) => p.id === projectId);
-			if (project) {
-				store.updateProject(projectId, settings);
-			}
+			// Merge the saved values into the in-memory project so the UI reflects
+			// what was persisted. The updates MUST be merged into `project.settings`
+			// (not spread onto the top-level project object), otherwise the settings
+			// dialog's reset-on-project-change effect reads a stale `project.settings`
+			// and reverts toggles like tddMode/useClaudeMd back to their old value.
+			// Use a functional setState to avoid clobbering concurrent store updates
+			// that may have landed during the await above.
+			useProjectStore.setState((state) => ({
+				projects: state.projects.map((p) =>
+					p.id === projectId
+						? { ...p, settings: { ...p.settings, ...settings } }
+						: p,
+				),
+			}));
 			return true;
 		}
 		return false;

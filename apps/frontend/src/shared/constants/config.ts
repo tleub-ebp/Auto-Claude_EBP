@@ -88,6 +88,8 @@ export const DEFAULT_PROJECT_SETTINGS = {
 	graphitiMcpUrl: "http://localhost:9000/mcp/",
 	// Include CLAUDE.md instructions in agent context (enabled by default)
 	useClaudeMd: true,
+	// Strict TDD (Red-Green-Refactor) when implementing tasks (opt-in)
+	tddMode: false,
 };
 
 // ============================================

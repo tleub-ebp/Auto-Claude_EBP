@@ -223,11 +223,10 @@ class TestHasRecurringIssues:
         """Test detection of recurring issues."""
         current = [{"title": "Same error", "file": "app.py"}]
         history = [
-            {"issues": [{"title": "Same error", "file": "app.py"}]},
-            {"issues": [{"title": "Same error", "file": "app.py"}]},
+            {"issues": [{"title": "Same error", "file": "app.py"}]}
+            for _ in range(RECURRING_ISSUE_THRESHOLD - 1)
         ]
 
-        # Current + 2 history = 3 occurrences >= threshold
         has_recurring, recurring = has_recurring_issues(current, history)
 
         assert has_recurring is True
@@ -266,13 +265,8 @@ class TestHasRecurringIssues:
                     {"title": "Error A", "file": "a.py"},
                     {"title": "Error B", "file": "b.py"},
                 ]
-            },
-            {
-                "issues": [
-                    {"title": "Error A", "file": "a.py"},
-                    {"title": "Error B", "file": "b.py"},
-                ]
-            },
+            }
+            for _ in range(RECURRING_ISSUE_THRESHOLD - 1)
         ]
 
         has_recurring, recurring = has_recurring_issues(current, history)
@@ -283,16 +277,16 @@ class TestHasRecurringIssues:
     def test_includes_occurrence_count(self) -> None:
         """Test that recurring issues include occurrence count."""
         current = [{"title": "Error", "file": "app.py"}]
+        history_size = RECURRING_ISSUE_THRESHOLD  # current + N history => N+1
         history = [
-            {"issues": [{"title": "Error", "file": "app.py"}]},
-            {"issues": [{"title": "Error", "file": "app.py"}]},
-            {"issues": [{"title": "Error", "file": "app.py"}]},
+            {"issues": [{"title": "Error", "file": "app.py"}]}
+            for _ in range(history_size)
         ]
 
         has_recurring, recurring = has_recurring_issues(current, history)
 
         assert has_recurring is True
-        assert recurring[0]["occurrence_count"] == 4  # current + 3 history
+        assert recurring[0]["occurrence_count"] == history_size + 1
 
     def test_history_with_missing_issues_key(self) -> None:
         """Test history records missing issues key."""
@@ -305,6 +299,26 @@ class TestHasRecurringIssues:
         # Should not crash
         has_recurring, recurring = has_recurring_issues(current, history)
         assert has_recurring is False
+
+    def test_non_fixable_issues_excluded_from_recurrence(self) -> None:
+        """Les issues non-actionables ne doivent pas faire escalader la boucle."""
+        current = [
+            {
+                "title": "Locale resources cannot be verified without runtime",
+                "description": "Cannot verify without runtime environment",
+            }
+        ]
+        # Historique massif de la même issue : sans le filtre, la boucle
+        # escaladerait au moindre seuil. Avec le filtre, ce type d'issue
+        # (revue humaine de toute façon) est ignoré.
+        history = [
+            {"issues": [current[0]]} for _ in range(RECURRING_ISSUE_THRESHOLD * 2)
+        ]
+
+        has_recurring, recurring = has_recurring_issues(current, history)
+
+        assert has_recurring is False
+        assert recurring == []
 
 
 # =============================================================================

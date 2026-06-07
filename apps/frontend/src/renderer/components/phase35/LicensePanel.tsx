@@ -89,9 +89,9 @@ export function LicensePanel({ projectPath }: LicensePanelProps) {
 							<table className="w-full text-sm border">
 								<thead>
 									<tr className="border-b bg-muted/40">
-										<th className="text-left p-2">package</th>
-										<th className="text-left p-2">category</th>
-										<th className="text-left p-2">remediation</th>
+										<th className="text-left p-2">{t("license.colPackage")}</th>
+										<th className="text-left p-2">{t("license.colCategory")}</th>
+										<th className="text-left p-2">{t("license.colRemediation")}</th>
 									</tr>
 								</thead>
 								<tbody>

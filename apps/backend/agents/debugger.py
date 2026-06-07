@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -153,14 +154,20 @@ class DebuggerRegistry:
     """Process-wide registry of debugger sessions."""
 
     _instance: DebuggerRegistry | None = None
+    _instance_lock: threading.Lock = threading.Lock()
 
     def __init__(self) -> None:
         self._sessions: dict[str, DebuggerSession] = {}
 
     @classmethod
     def instance(cls) -> DebuggerRegistry:
+        # Double-checked locking — the previous TOCTOU could create two
+        # DebuggerRegistry instances under concurrent access, splitting
+        # the session dict between them.
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     def attach(self, session_id: str) -> DebuggerSession:

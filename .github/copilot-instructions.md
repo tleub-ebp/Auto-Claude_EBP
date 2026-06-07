@@ -1,3 +1,18 @@
+<!-- COPILOT:HEADER -->
+# Copilot — Instructions WorkPilot AI
+
+> **Entry-point** : lire d'abord [`AGENTS.md`](../AGENTS.md) à la racine pour la
+> cartographie complète du repo. Les conventions par dossier sont chargées
+> automatiquement via `.github/instructions/*.instructions.md` (path-scoped
+> `applyTo`), donc inutile de tout détailler ici.
+
+**Optimisation tokens** : préférer les `AGENTS.md` locaux + `grep` ciblé plutôt
+qu'un `view` complet d'un fichier > 1 000 lignes. Voir
+`.github/hooks/pre-tool-large-file.hook.md`.
+
+**Bloc BMAD ci-dessous** : géré par BMAD method, ne pas éditer manuellement.
+<!-- /COPILOT:HEADER -->
+
 <!-- BMAD:START -->
 # BMAD Method — Project Instructions
 

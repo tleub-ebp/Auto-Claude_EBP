@@ -128,16 +128,20 @@ export async function createTerminal(
 		}
 
 		// Validate cwd exists - if the directory doesn't exist (e.g., worktree removed),
-		// fall back to project path to prevent shell exit with code 1
+		// fall back to project path. If the project path itself is gone, fall back
+		// to the user's home dir — without this final guard, node-pty receives a
+		// missing cwd and crashes with Windows error 267 / ENOENT on Unix.
 		let effectiveCwd = cwd;
 		if (cwd && !existsSync(cwd)) {
+			const fallback =
+				projectPath && existsSync(projectPath) ? projectPath : os.homedir();
 			debugLog(
 				"[TerminalLifecycle] Terminal cwd does not exist, falling back:",
 				cwd,
 				"->",
-				projectPath || os.homedir(),
+				fallback,
 			);
-			effectiveCwd = projectPath || os.homedir();
+			effectiveCwd = fallback;
 		}
 
 		const { pty: ptyProcess, shellType } = PtyManager.spawnPtyProcess(
@@ -240,16 +244,21 @@ export async function restoreTerminal(
 	);
 
 	// Validate cwd exists - if the directory was deleted (e.g., worktree removed),
-	// fall back to project path to prevent shell exit with code 1
+	// fall back to project path. If the project itself is gone, fall back
+	// further to the user's home dir to keep the shell spawnable.
 	let effectiveCwd = session.cwd;
 	if (!existsSync(session.cwd)) {
+		const fallback =
+			session.projectPath && existsSync(session.projectPath)
+				? session.projectPath
+				: os.homedir();
 		debugLog(
-			"[TerminalLifecycle] Session cwd does not exist, falling back to project path:",
+			"[TerminalLifecycle] Session cwd does not exist, falling back:",
 			session.cwd,
 			"->",
-			session.projectPath,
+			fallback,
 		);
-		effectiveCwd = session.projectPath || os.homedir();
+		effectiveCwd = fallback;
 	}
 
 	const result = await createTerminal(

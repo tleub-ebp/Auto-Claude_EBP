@@ -6,6 +6,10 @@ parked until a designated approver grants or denies it.
 
 The gate stores pending requests in-memory (with optional persistence via
 JSON) and exposes a simple API for the frontend to list / approve / deny.
+
+Not to be confused with ``sandbox.approval_gate``: that module reviews
+sandbox dry-run diffs file-by-file and applies them to the working tree.
+This module is purely a request queue for policy-gated actions.
 """
 
 from __future__ import annotations

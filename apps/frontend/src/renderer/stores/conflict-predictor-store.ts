@@ -7,6 +7,29 @@ declare global {
 }
 
 /**
+ * Conflict predictor event types
+ */
+export type ConflictPredictionStartEvent = {
+	type: "start";
+	data: { status?: string };
+};
+
+export type ConflictPredictionProgressEvent = {
+	type: "progress";
+	data: { status?: string };
+};
+
+export type ConflictPredictionOutputEvent = {
+	type: "output";
+	data: string;
+};
+
+export type ConflictPredictionEvent =
+	| ConflictPredictionStartEvent
+	| ConflictPredictionProgressEvent
+	| ConflictPredictionOutputEvent;
+
+/**
  * Conflict risk information
  */
 export interface ConflictRisk {
@@ -188,8 +211,7 @@ export const startConflictPrediction = async (projectId: string) => {
 /**
  * Handle conflict prediction events
  */
-// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
-const handleConflictPredictionEvent = (data: any) => {
+const handleConflictPredictionEvent = (data: ConflictPredictionEvent) => {
 	const { type, data: eventData } = data;
 
 	switch (type) {
@@ -215,8 +237,7 @@ const handleConflictPredictionEvent = (data: any) => {
 /**
  * Handle conflict prediction completion
  */
-// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
-const handleConflictPredictionComplete = (data: any) => {
+const handleConflictPredictionComplete = (data: ConflictPredictionResult) => {
 	useConflictPredictorStore.setState({
 		result: data,
 		phase: "complete",
@@ -238,12 +259,10 @@ const handleConflictPredictionError = (error: string) => {
 /**
  * Helper function to setup event listener with error handling
  */
-const setupEventListener = (
-	// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
-	apiFunction: (callback: (data: any) => void) => (() => void) | undefined,
+const setupEventListener = <T>(
+	apiFunction: (callback: (data: T) => void) => (() => void) | undefined,
 	eventName: string,
-	// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
-	handler: (data: any) => void,
+	handler: (data: T) => void,
 	cleanupFns: (() => void)[],
 ) => {
 	if (apiFunction) {

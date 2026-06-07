@@ -547,7 +547,7 @@ ${safeDescription || "No description provided."}
 						// Create spec ID with zero-padded number and slugified title
 						const slugifiedTitle = safeTitle
 							.toLowerCase()
-							.replace(/[^a-z0-9]+/g, "-")
+							.replace(/[^\p{L}\p{N}]+/gu, "-")
 							.replace(/^-|-$/g, "")
 							.substring(0, 50);
 						const specId = `${String(specNumber).padStart(3, "0")}-${slugifiedTitle}`;

@@ -93,7 +93,7 @@ export function AzureDevOpsImportModal({
 			const result = await globalThis.electronAPI.getAzureDevOpsWorkItems(
 				projectId,
 				undefined, // Use default project from config
-				undefined, // Use default item types (Bug, Task, User Story)
+				undefined, // No type restriction — returns all work item types (incl. custom, e.g. RSD)
 				1000, // Max items
 			);
 

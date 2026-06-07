@@ -5,6 +5,7 @@ Point d'entrée unique pour le backend
 
 import os
 import subprocess
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -51,18 +52,30 @@ class ProviderStatus:
 
 class ProviderRegistry:
     _instance = None
+    # Lock guards both __new__ and get_instance against concurrent
+    # bootstrap. Without it, two threads racing into ProviderRegistry()
+    # could both observe `_instance is None`, each create + initialize
+    # their own dict (2x `_initialize_providers` work), and the loser
+    # would discard updates the winner just made.
+    _instance_lock = threading.Lock()
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._providers = {}
-            cls._instance._initialize_providers()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    instance = super().__new__(cls)
+                    instance._providers = {}
+                    instance._initialize_providers()
+                    # Publish AFTER initialization so other threads never
+                    # see a half-built instance.
+                    cls._instance = instance
         return cls._instance
 
     @classmethod
     def get_instance(cls):
+        # __new__ already handles the locking; calling cls() here is safe.
         if cls._instance is None:
-            cls._instance = cls()
+            return cls()
         return cls._instance
 
     def _initialize_providers(self):

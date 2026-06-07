@@ -586,8 +586,100 @@ class TestPhaseQuickSpec:
         assert result.success is True
         assert agent_fn.called
 
+    @pytest.mark.asyncio
+    async def test_quick_spec_escalates_to_standard_on_failure(
+        self,
+        temp_dir: Path,
+        spec_dir: Path,
+        mock_run_agent_fn,
+        mock_task_logger,
+        mock_ui_module,
+        mock_spec_validator,
+    ):
+        """Quick spec escalates to STANDARD phases when the agent never creates spec.md."""
+        executor = PhaseExecutor(
+            project_dir=temp_dir,
+            spec_dir=spec_dir,
+            task_description="Test task",
+            spec_validator=mock_spec_validator(),
+            # Agent always fails and never writes spec.md -> triggers escalation
+            run_agent_fn=mock_run_agent_fn(success=False, output="agent failed"),
+            task_logger=mock_task_logger,
+            ui_module=mock_ui_module,
+        )
 
-class TestPhaseResearch:
+        # Fallback phases write the expected files and report success
+        async def context_ok():
+            return PhaseResult("context", True, [], [], 0)
+
+        async def spec_writing_ok():
+            (spec_dir / "spec.md").write_text("# Escalated Spec")
+            return PhaseResult("spec_writing", True, [], [], 0)
+
+        async def planning_ok():
+            (spec_dir / "implementation_plan.json").write_text(
+                json.dumps({"phases": []})
+            )
+            return PhaseResult("planning", True, [], [], 0)
+
+        with (
+            patch.object(executor, "phase_context", AsyncMock(side_effect=context_ok)),
+            patch.object(
+                executor, "phase_spec_writing", AsyncMock(side_effect=spec_writing_ok)
+            ),
+            patch.object(
+                executor, "phase_planning", AsyncMock(side_effect=planning_ok)
+            ),
+        ):
+            result = await executor.phase_quick_spec()
+
+        assert result.success is True
+        assert result.phase == "quick_spec"
+        assert (spec_dir / "spec.md").exists()
+        assert (spec_dir / "implementation_plan.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_quick_spec_escalation_failure_returns_error(
+        self,
+        temp_dir: Path,
+        spec_dir: Path,
+        mock_run_agent_fn,
+        mock_task_logger,
+        mock_ui_module,
+        mock_spec_validator,
+    ):
+        """Quick spec returns failure when an escalation phase fails."""
+        executor = PhaseExecutor(
+            project_dir=temp_dir,
+            spec_dir=spec_dir,
+            task_description="Test task",
+            spec_validator=mock_spec_validator(),
+            run_agent_fn=mock_run_agent_fn(success=False, output="agent failed"),
+            task_logger=mock_task_logger,
+            ui_module=mock_ui_module,
+        )
+
+        async def context_ok():
+            return PhaseResult("context", True, [], [], 0)
+
+        async def spec_writing_fail():
+            return PhaseResult("spec_writing", False, [], ["could not write spec"], 0)
+
+        with (
+            patch.object(executor, "phase_context", AsyncMock(side_effect=context_ok)),
+            patch.object(
+                executor,
+                "phase_spec_writing",
+                AsyncMock(side_effect=spec_writing_fail),
+            ),
+            patch.object(executor, "phase_planning", AsyncMock()) as planning_mock,
+        ):
+            result = await executor.phase_quick_spec()
+
+        assert result.success is False
+        assert result.phase == "quick_spec"
+        # Planning must not run once spec_writing has failed
+        planning_mock.assert_not_called()
     """Tests for phase_research method."""
 
     @pytest.mark.asyncio

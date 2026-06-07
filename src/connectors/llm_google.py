@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 from .llm_base import BaseLLMProvider
 
@@ -7,7 +7,7 @@ class GoogleLLMProvider(BaseLLMProvider):
     def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
         self.api_key = api_key
         self.model = model
-        self._client = None
+        self._client: Optional[Any] = None
 
     def connect(self) -> None:
         try:

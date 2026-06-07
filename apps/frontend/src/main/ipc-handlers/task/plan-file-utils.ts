@@ -18,11 +18,14 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import path from "node:path";
 import { AUTO_BUILD_PATHS, getSpecsDir } from "../../../shared/constants";
 import type { Project, Task, TaskStatus } from "../../../shared/types";
 import type { TaskEventPayload } from "../../agent/task-event-schema";
+import { getIsolatedGitEnv } from "../../utils/git-isolation";
 import { projectStore } from "../../project-store";
+import type { VisualProofRun } from "../../../shared/types";
 
 // In-memory locks for plan file operations
 // Key: plan file path, Value: Promise chain for serializing operations
@@ -486,6 +489,32 @@ export async function createPlanIfNotExists(
 }
 
 /**
+ * Update plan phases and subtasks.
+ * This allows adding, modifying, or removing pending subtasks from the implementation plan.
+ *
+ * @param planPath - Path to the implementation_plan.json file
+ * @param phases - The updated phases array with potentially modified subtasks
+ * @param projectId - Optional project ID to invalidate cache
+ * @returns The updated plan, or null if the file doesn't exist
+ */
+export async function updatePlanSubtasks(
+	planPath: string,
+	phases: Array<Record<string, unknown>>,
+	projectId?: string,
+): Promise<Record<string, unknown> | null> {
+	return updatePlanFile(planPath, (plan) => {
+		plan.phases = phases;
+		return plan;
+	}).then((updatedPlan) => {
+		// Invalidate cache after successful update
+		if (updatedPlan && projectId) {
+			projectStore.invalidateTasksCache(projectId);
+		}
+		return updatedPlan;
+	});
+}
+
+/**
  * Update task_metadata.json to add PR URL.
  * This is a simple JSON file update (no locking needed as it's rarely updated concurrently).
  *
@@ -527,4 +556,148 @@ export function updateTaskMetadataPrUrl(
 		);
 		return false;
 	}
+}
+
+/**
+ * Update task_metadata.json with the latest automated visual proof run.
+ */
+export function updateTaskMetadataVisualProof(
+	metadataPath: string,
+	visualProof: VisualProofRun,
+): boolean {
+	try {
+		let metadata: Record<string, unknown> = {};
+
+		try {
+			const content = readFileSync(metadataPath, "utf-8");
+			metadata = JSON.parse(content);
+		} catch (err) {
+			if (!isFileNotFoundError(err)) {
+				throw err;
+			}
+		}
+
+		metadata.visualProof = visualProof;
+		mkdirSync(path.dirname(metadataPath), { recursive: true });
+		writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
+		return true;
+	} catch (err) {
+		console.warn(
+			`[plan-file-utils] Could not update visual proof at ${metadataPath}:`,
+			err,
+		);
+		return false;
+	}
+}
+
+/**
+ * Get modified files from a git worktree compared to the main branch.
+ * Detects files changed, added, or deleted.
+ *
+ * @param worktreePath - Path to the git worktree
+ * @param mainBranch - The main branch to compare against (default: "main")
+ * @returns Array of modified file paths
+ */
+export function getModifiedFilesFromWorktree(
+	worktreePath: string,
+	mainBranch: string = "main",
+): string[] {
+	try {
+		// Get diff between main branch and current branch
+		// Shows files that are: modified (M), added (A), or deleted (D)
+		const output = execSync(
+			`git diff --name-status ${mainBranch}...HEAD`,
+			{
+				cwd: worktreePath,
+				encoding: "utf-8",
+				stdio: ["pipe", "pipe", "pipe"],
+				env: getIsolatedGitEnv(),
+			},
+		);
+
+		if (!output.trim()) {
+			return [];
+		}
+
+		// Parse the diff output
+		// Format: STATUS\tFILEPATH
+		const files = output
+			.trim()
+			.split("\n")
+			.map((line) => {
+				const parts = line.split("\t");
+				return parts[1] || "";
+			})
+			.filter((file) => file.length > 0);
+
+		return files;
+	} catch (error) {
+		console.warn(
+			`[plan-file-utils] Could not get modified files from ${worktreePath}:`,
+			error,
+		);
+		return [];
+	}
+}
+
+/**
+ * Generate subtasks from modified files and feedback.
+ * Groups related files together based on directory structure.
+ *
+ * @param modifiedFiles - Array of file paths that were modified
+ * @param feedback - User feedback about what needs to be done
+ * @returns Array of generated subtasks
+ */
+export function generateSubtasksFromModifiedFiles(
+	modifiedFiles: string[],
+	feedback: string,
+): Array<{
+	id: string;
+	title: string;
+	description: string;
+	status: "pending";
+	files: string[];
+}> {
+	if (modifiedFiles.length === 0) {
+		return [];
+	}
+
+	// Group files by directory for better organization
+	const filesByDir = new Map<string, string[]>();
+
+	for (const file of modifiedFiles) {
+		const dir = path.dirname(file);
+		if (!filesByDir.has(dir)) {
+			filesByDir.set(dir, []);
+		}
+		filesByDir.get(dir)?.push(file);
+	}
+
+	// Generate subtasks - one per directory group or one for all if only one dir
+	const subtasks: Array<{
+		id: string;
+		title: string;
+		description: string;
+		status: "pending";
+		files: string[];
+	}> = [];
+
+	let dirIndex = 0;
+	for (const [dir, files] of filesByDir.entries()) {
+		const dirName =
+			dir === "." ? "root" : dir.split("/").pop() || "files";
+		const fileCount = files.length;
+
+		subtasks.push({
+			id: `subtask-${Date.now()}-${dirIndex}`,
+			title: `Fix ${dirName} - ${fileCount} file${fileCount !== 1 ? "s" : ""}`,
+			description: `Address feedback in ${dirName}:\n\n${feedback}\n\nModified files in this directory:\n${files.map((f) => `- ${f}`).join("\n")}`,
+			status: "pending",
+			files,
+		});
+
+		dirIndex++;
+	}
+
+	return subtasks;
 }

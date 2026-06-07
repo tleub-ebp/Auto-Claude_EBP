@@ -70,12 +70,12 @@ export function ArchDriftPanel({ projectPath }: ArchDriftPanelProps) {
 			{scanReport && (
 				<div className="text-sm space-y-1 mb-3">
 					<div>
-						<span className="font-medium">Status: </span>
+						<span className="font-medium">{t("common.status")}: </span>
 						<Badge variant="outline">{scanReport.status}</Badge>
 					</div>
 					<div className="text-muted-foreground">
-						{scanReport.violation_count} violations · {scanReport.warning_count}{" "}
-						warnings
+						{scanReport.violation_count} {t("common.violations")} ·{" "}
+						{scanReport.warning_count} {t("common.warnings")}
 					</div>
 				</div>
 			)}

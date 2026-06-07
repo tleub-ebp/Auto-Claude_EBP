@@ -546,6 +546,26 @@ class TaskQueue:
         with self._lock:
             return [t for t in self._tasks if t.is_due]
 
+    def pop_all_due(self) -> list[ScheduledTask]:
+        """Atomically remove and return all due tasks.
+
+        The previous tick() pattern called list_due() (snapshot under lock)
+        then remove(task.task_id) per task (re-acquiring the lock each
+        time). Between snapshot and remove, the queue could be mutated by
+        add_task / remove_task / a manual second tick(), causing
+        double-execution of the same task or lost-update on next_run.
+        """
+        with self._lock:
+            due: list[ScheduledTask] = []
+            remaining: list[ScheduledTask] = []
+            for task in self._tasks:
+                if task.is_due:
+                    due.append(task)
+                else:
+                    remaining.append(task)
+            self._tasks = remaining
+            return due
+
     @property
     def size(self) -> int:
         """Number of tasks in the queue."""
@@ -603,6 +623,9 @@ class TaskScheduler:
         self._thread: threading.Thread | None = None
         self._check_interval = check_interval
         self._execution_log: list[dict[str, Any]] = []
+        # Heartbeat: updated at the end of every tick so callers can detect
+        # a wedged loop (alive thread but no progress).
+        self._last_tick_at: float | None = None
 
     # ── Task management ─────────────────────────────────────────
 
@@ -817,11 +840,12 @@ class TaskScheduler:
             List of execution results from this tick.
         """
         results: list[dict[str, Any]] = []
-        due_tasks = self._queue.list_due()
+        # Atomic drain: snapshot + remove happens under a single lock so a
+        # concurrent tick() / add_task / remove_task cannot cause the same
+        # task to be popped twice or a recurring task to be lost.
+        due_tasks = self._queue.pop_all_due()
 
         for task in due_tasks:
-            # Remove from queue, execute, re-add if recurring
-            self._queue.remove(task.task_id)
             result = self.execute_task(task)
             results.append(result)
 
@@ -858,17 +882,46 @@ class TaskScheduler:
 
     @property
     def is_running(self) -> bool:
-        """Whether the scheduler loop is active."""
-        return self._running
+        """Whether the scheduler loop is active.
+
+        Cross-checks the thread state in addition to the `_running` flag —
+        without this, a non-Exception (SystemExit, MemoryError, etc.) that
+        kills the thread leaves `_running=True`, so callers think
+        scheduling still works while no tasks ever fire.
+        """
+        if not self._running:
+            return False
+        if self._thread is not None and not self._thread.is_alive():
+            return False
+        return True
+
+    @property
+    def last_tick_at(self) -> float | None:
+        """Unix timestamp of the most recent tick, or None if never ticked.
+
+        Callers can compare against `time.time()` to detect a wedged loop
+        even when the thread is technically alive but blocked.
+        """
+        return self._last_tick_at
 
     def _run_loop(self) -> None:
         """Background loop that checks and executes due tasks."""
-        while self._running:
-            try:
-                self.tick()
-            except Exception:
-                logger.exception("Error in scheduler tick.")
-            time.sleep(self._check_interval)
+        try:
+            while self._running:
+                try:
+                    self.tick()
+                except Exception:
+                    logger.exception("Error in scheduler tick.")
+                self._last_tick_at = time.time()
+                time.sleep(self._check_interval)
+        finally:
+            # Mark not-running so callers don't think the loop is alive
+            # after a fatal exit (SystemExit, KeyboardInterrupt in worker
+            # context, etc.). Without this `is_running` returned True
+            # forever and the UI showed "scheduler running" while no tasks
+            # ever fired.
+            self._running = False
+            logger.info("Scheduler background loop exited.")
 
     # ── Reporting ───────────────────────────────────────────────
 

@@ -120,6 +120,10 @@ export function useSidebarPrefs() {
 		[update],
 	);
 
+	const clearAllFavorites = useCallback(() => {
+		update({ pinnedItems: [], pinnedGroups: [] });
+	}, [update]);
+
 	const reset = useCallback(() => {
 		saveSettings({ sidebarPrefs: DEFAULT_SIDEBAR_PREFS });
 	}, []);
@@ -133,6 +137,7 @@ export function useSidebarPrefs() {
 			reorderItems,
 			toggleGroupExpanded,
 			setFavoritesExpanded,
+			clearAllFavorites,
 			reset,
 			mergeOrder,
 		}),
@@ -144,6 +149,7 @@ export function useSidebarPrefs() {
 			reorderItems,
 			toggleGroupExpanded,
 			setFavoritesExpanded,
+			clearAllFavorites,
 			reset,
 		],
 	);

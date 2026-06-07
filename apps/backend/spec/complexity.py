@@ -366,6 +366,12 @@ async def run_ai_complexity_assessment(
     if requirements_file.exists():
         with open(requirements_file, encoding="utf-8") as f:
             req = json.load(f)
+            extra_note = (req.get("additional_context") or "").strip()
+            extra_note_block = (
+                f"\n**Additional Notes (from Kanban card)**:\n{extra_note}\n"
+                if extra_note
+                else ""
+            )
             context += f"""
 ## Requirements (from user)
 **Task Description**: {req.get("task_description", "Not provided")}
@@ -377,7 +383,7 @@ async def run_ai_complexity_assessment(
 {chr(10).join(f"- {c}" for c in req.get("acceptance_criteria", []))}
 **Constraints**:
 {chr(10).join(f"- {c}" for c in req.get("constraints", []))}
-"""
+{extra_note_block}"""
     else:
         context += f"\n**Task Description**: {task_description or 'Not provided'}\n"
 

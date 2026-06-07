@@ -67,8 +67,33 @@ export const showSaveDialog = async (
 	}
 };
 
+// Allowed URL schemes for shell.openExternal. WITHOUT this allowlist a
+// renderer (or a malicious LLM tool call routed through the renderer)
+// could open `file://path/to/evil.exe`, `javascript:`, or arbitrary
+// custom protocols (`vscode:`, `slack:`, ...) that map to local apps and
+// trigger code execution. We restrict to plain web + mailto.
+const _ALLOWED_OPEN_EXTERNAL_SCHEMES = new Set([
+	"http:",
+	"https:",
+	"mailto:",
+]);
+
 export const openExternal = async (url: string): Promise<void> => {
-	return shell.openExternal(url);
+	if (typeof url !== "string" || url.length === 0) {
+		throw new Error("openExternal: url must be a non-empty string");
+	}
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new Error(`openExternal: invalid URL: ${url.slice(0, 200)}`);
+	}
+	if (!_ALLOWED_OPEN_EXTERNAL_SCHEMES.has(parsed.protocol)) {
+		throw new Error(
+			`openExternal: scheme "${parsed.protocol}" not allowed (only http/https/mailto)`,
+		);
+	}
+	return shell.openExternal(parsed.toString());
 };
 
 export const quitApp = (): void => {

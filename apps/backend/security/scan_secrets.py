@@ -101,12 +101,18 @@ SERVICE_PATTERNS = [
     (r"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]{50,}", "Supabase/JWT Token"),
     # Linear
     (r"lin_api_[a-zA-Z0-9]{40,}", "Linear API Key"),
-    # Vercel
-    (r"[a-zA-Z0-9]{24}_[a-zA-Z0-9]{28,}", "Potential Vercel Token"),
-    # Heroku
+    # Vercel — require a context word nearby. The bare "24+_+28+ alnum"
+    # shape matches countless test fixtures, base64 blobs, and minified JS.
     (
-        r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
-        "Heroku API Key / UUID",
+        r"(?i)vercel[^\n]{0,40}[\"' :=]([a-zA-Z0-9]{24}_[a-zA-Z0-9]{28,})",
+        "Potential Vercel Token",
+    ),
+    # Heroku — require a context word. UUID alone causes massive false-positive
+    # noise (every test fixture, migration ID, and sample JSON triggers an
+    # alert), which leads users to broaden .secretsignore and miss real secrets.
+    (
+        r"(?i)heroku[^\n]{0,40}[\"' :=]([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})",
+        "Heroku API Key",
     ),
     # Doppler
     (r"dp\.pt\.[a-zA-Z0-9]{40,}", "Doppler Service Token"),
@@ -180,7 +186,8 @@ DEFAULT_IGNORE_PATTERNS = [
     r"\.example$",
     r"\.sample$",
     r"\.template$",
-    r"\.md$",  # Documentation files
+    # Skip markdown files by default to reduce noise in documentation
+    r"\.md$",
     r"\.rst$",
     r"\.txt$",
     r"package-lock\.json$",
@@ -230,22 +237,27 @@ BINARY_EXTENSIONS = {
     ".o",
 }
 
-# False positive patterns to filter out
+# False positive patterns to filter out.
+#
+# These match the LINE containing the candidate secret. Be conservative —
+# overly generic words like "example", "sample", or "test" appear on millions
+# of lines of legitimate code, so matching them as bare substrings causes real
+# secrets to be silently dropped. Anchor to placeholder-shaped contexts only.
 FALSE_POSITIVE_PATTERNS = [
     r"process\.env\.",  # Environment variable references
     r"os\.environ",  # Python env references
     r"ENV\[",  # Ruby/other env references
     r"\$\{[A-Z_]+\}",  # Shell variable substitution
-    r"your[-_]?api[-_]?key",  # Placeholder values
-    r"xxx+",  # Placeholder
-    r"placeholder",  # Placeholder
-    r"example",  # Example value
-    r"sample",  # Sample value
-    r"test[-_]?key",  # Test placeholder
+    r"your[-_]?(api[-_]?)?key",  # Placeholder values
+    r"\bxxx+\b",  # Placeholder, anchored
+    r"\bplaceholder\b",  # Placeholder, anchored
+    r"example[-_](?:api[-_])?key",  # `example_key`, `example-api-key`
+    r"sample[-_](?:api[-_])?key",  # `sample_key`, `sample-api-key`
+    r"test[-_](?:api[-_])?key",  # `test_key`, `test-api-key`
     r"<[A-Z_]+>",  # Placeholder like <API_KEY>
-    r"TODO",  # Comment markers
-    r"FIXME",
-    r"CHANGEME",
+    r"\bTODO\b",  # Comment markers, anchored to avoid matching `todo` in identifiers
+    r"\bFIXME\b",
+    r"\bCHANGEME\b",
     r"INSERT[-_]?YOUR",
     r"REPLACE[-_]?WITH",
 ]
