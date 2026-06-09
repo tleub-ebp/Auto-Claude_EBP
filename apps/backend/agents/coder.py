@@ -44,7 +44,12 @@ from linear_updater import (
     linear_task_started,
     linear_task_stuck,
 )
-from phase_config import get_phase_model, get_phase_thinking_budget
+from phase_config import (
+    get_phase_model,
+    get_phase_provider,
+    get_phase_thinking_budget,
+    load_task_metadata,
+)
 from phase_event import ExecutionPhase, emit_phase
 from progress import (
     count_subtasks,
@@ -975,12 +980,25 @@ async def run_autonomous_agent(
         phase_model = get_phase_model(spec_dir, current_phase, model)
         phase_thinking_budget = get_phase_thinking_budget(spec_dir, current_phase)
         agent_type = "planner" if first_run else "coder"
+
+        # Honor a per-phase provider override (phaseProviders) when present so a
+        # task can route, e.g., coding to Copilot and QA to Anthropic. When no
+        # per-phase provider is configured we pass None and let
+        # create_agent_client() resolve the provider as before (IPC marker,
+        # env, task-wide metadata.provider), preserving existing behavior.
+        _metadata = load_task_metadata(spec_dir)
+        phase_provider = (
+            get_phase_provider(spec_dir, phase=current_phase)
+            if _metadata and _metadata.get("phaseProviders")
+            else None
+        )
         client = create_agent_client(
             project_dir=project_dir,
             spec_dir=spec_dir,
             model=phase_model,
             agent_type=agent_type,
             max_thinking_tokens=phase_thinking_budget,
+            provider=phase_provider,
         )
 
         # Generate appropriate prompt

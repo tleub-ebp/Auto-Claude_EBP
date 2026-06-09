@@ -8,6 +8,7 @@ import type {
 } from "../constants/phase-protocol";
 import type {
 	PhaseModelConfig,
+	PhaseProviderConfig,
 	PhaseThinkingConfig,
 	ThinkingLevel,
 } from "./settings";
@@ -306,6 +307,7 @@ export interface TaskMetadata {
 	isAutoProfile?: boolean; // True when using Auto (Optimized) profile
 	phaseModels?: PhaseModelConfig; // Per-phase model configuration
 	phaseThinking?: PhaseThinkingConfig; // Per-phase thinking configuration
+	phaseProviders?: PhaseProviderConfig; // Per-phase LLM provider configuration
 
 	// Git/Worktree configuration
 	baseBranch?: string; // Override base branch for this task's worktree

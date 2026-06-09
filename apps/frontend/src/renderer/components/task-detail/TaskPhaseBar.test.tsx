@@ -114,4 +114,33 @@ describe("TaskPhaseBar", () => {
 		expect(screen.getByText("Rédaction du plan")).toBeInTheDocument();
 		expect(screen.queryByText("ANALYSE")).not.toBeInTheDocument();
 	});
+
+	it("affiche l'ellipsis animée quand la phase affichée est en cours", () => {
+		render(<TaskPhaseBar phaseLogs={makePhaseLogs("coding")} />);
+		expect(screen.getByRole("status")).toBeInTheDocument();
+	});
+
+	it("masque l'ellipsis animée quand on défile vers une phase inactive", () => {
+		render(
+			<TaskPhaseBar
+				phaseLogs={makePhaseLogs("validation")}
+				currentPhase="planning"
+			/>,
+		);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+
+	it("retire l'ellipsis finale de l'activité pour éviter les points doublés", () => {
+		render(
+			<TaskPhaseBar
+				phaseLogs={makePhaseLogs("coding")}
+				currentActivity="Starting build process..."
+			/>,
+		);
+		expect(screen.getByText("Starting build process")).toBeInTheDocument();
+		expect(
+			screen.queryByText("Starting build process..."),
+		).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toBeInTheDocument();
+	});
 });

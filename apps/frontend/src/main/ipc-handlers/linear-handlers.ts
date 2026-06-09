@@ -23,6 +23,7 @@ import type {
 	Project,
 	TaskMetadata,
 } from "../../shared/types";
+import { slugifySpecTitle } from "../../shared/utils/spec-slug";
 import type { AgentManager } from "../agent";
 import { projectStore } from "../project-store";
 import { sanitizeText, sanitizeUrl } from "./shared/sanitize";
@@ -545,11 +546,7 @@ ${safeDescription || "No description provided."}
 						}
 
 						// Create spec ID with zero-padded number and slugified title
-						const slugifiedTitle = safeTitle
-							.toLowerCase()
-							.replace(/[^\p{L}\p{N}]+/gu, "-")
-							.replace(/^-|-$/g, "")
-							.substring(0, 50);
+						const slugifiedTitle = slugifySpecTitle(safeTitle);
 						const specId = `${String(specNumber).padStart(3, "0")}-${slugifiedTitle}`;
 
 						// Create spec directory

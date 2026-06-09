@@ -28,6 +28,7 @@ def _apply_qa_update(
     status: str,
     issues: list[Any],
     tests_passed: dict[str, Any],
+    coverage: dict[str, Any] | None = None,
 ) -> int:
     """
     Apply QA update to the plan and return the new QA session number.
@@ -37,6 +38,8 @@ def _apply_qa_update(
         status: QA status (pending, in_review, approved, rejected, fixes_applied)
         issues: List of issues found
         tests_passed: Dict of test results
+        coverage: Optional dict of coverage percentages (unit/integration/e2e).
+            Enforced by the deterministic Coverage Gate (qa/coverage_gate.py).
 
     Returns:
         The new QA session number
@@ -52,6 +55,7 @@ def _apply_qa_update(
         "qa_session": qa_session,
         "issues_found": issues,
         "tests_passed": tests_passed,
+        "coverage": coverage or {},
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "ready_for_qa_revalidation": status == "fixes_applied",
     }
@@ -88,13 +92,14 @@ def create_qa_tools(spec_dir: Path, project_dir: Path) -> list:
     @tool(
         "update_qa_status",
         "Update the QA sign-off status in implementation_plan.json. Use after QA review.",
-        {"status": str, "issues": str, "tests_passed": str},
+        {"status": str, "issues": str, "tests_passed": str, "coverage": str},
     )
     async def update_qa_status(args: dict[str, Any]) -> dict[str, Any]:
         """Update QA status in the implementation plan."""
         status = args["status"]
         issues_str = args.get("issues", "[]")
         tests_str = args.get("tests_passed", "{}")
+        coverage_str = args.get("coverage", "{}")
 
         valid_statuses = [
             "pending",
@@ -136,10 +141,17 @@ def create_qa_tools(spec_dir: Path, project_dir: Path) -> list:
             except json.JSONDecodeError:
                 tests_passed = {}
 
+            try:
+                coverage = json.loads(coverage_str) if coverage_str else {}
+            except json.JSONDecodeError:
+                coverage = {}
+            if not isinstance(coverage, dict):
+                coverage = {}
+
             with open(plan_file, encoding="utf-8") as f:
                 plan = json.load(f)
 
-            qa_session = _apply_qa_update(plan, status, issues, tests_passed)
+            qa_session = _apply_qa_update(plan, status, issues, tests_passed, coverage)
 
             # Use atomic write to prevent file corruption
             write_json_atomic(plan_file, plan, indent=2)
@@ -161,7 +173,9 @@ def create_qa_tools(spec_dir: Path, project_dir: Path) -> list:
                     with open(plan_file, encoding="utf-8") as f:
                         plan = json.load(f)
 
-                    qa_session = _apply_qa_update(plan, status, issues, tests_passed)
+                    qa_session = _apply_qa_update(
+                        plan, status, issues, tests_passed, coverage
+                    )
                     write_json_atomic(plan_file, plan, indent=2)
 
                     return {

@@ -141,17 +141,33 @@ class ProviderRegistry:
             requires_oauth=False,
             requires_cli=False,
             models=[
-                {"value": "gpt-4o", "label": "GPT-4o", "tier": "flagship"},
-                {"value": GPT_4_1, "label": "GPT-4.1", "tier": "flagship"},
                 {
-                    "value": "o3",
-                    "label": "o3",
+                    "value": "gpt-5.5-pro",
+                    "label": "GPT-5.5 Pro",
                     "tier": "flagship",
                     "supportsThinking": True,
                 },
                 {
-                    "value": "o1-pro",
-                    "label": "o1 Pro",
+                    "value": "gpt-5.5",
+                    "label": "GPT-5.5",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "gpt-5.5-mini",
+                    "label": "GPT-5.5 mini",
+                    "tier": "standard",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "gpt-5.2",
+                    "label": "GPT-5.2",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "o4",
+                    "label": "o4",
                     "tier": "flagship",
                     "supportsThinking": True,
                 },
@@ -161,28 +177,8 @@ class ProviderRegistry:
                     "tier": "standard",
                     "supportsThinking": True,
                 },
-                {"value": "gpt-4.1-mini", "label": "GPT-4.1 mini", "tier": "standard"},
-                {
-                    "value": "o1",
-                    "label": "o1",
-                    "tier": "standard",
-                    "supportsThinking": True,
-                },
-                {
-                    "value": "o3-mini",
-                    "label": "o3-mini",
-                    "tier": "standard",
-                    "supportsThinking": True,
-                },
-                {"value": "gpt-4o-mini", "label": "GPT-4o mini", "tier": "fast"},
-                {"value": "gpt-4.1-nano", "label": "GPT-4.1 nano", "tier": "fast"},
-                {
-                    "value": "o1-mini",
-                    "label": "o1-mini",
-                    "tier": "fast",
-                    "supportsThinking": True,
-                },
-                {"value": "gpt-4-turbo", "label": "GPT-4 Turbo", "tier": "standard"},
+                {"value": GPT_4_1, "label": "GPT-4.1", "tier": "standard"},
+                {"value": "gpt-4.1-mini", "label": "GPT-4.1 mini", "tier": "fast"},
             ],
         )
 
@@ -363,6 +359,18 @@ class ProviderRegistry:
             requires_cli=False,
             models=[
                 {
+                    "value": "anthropic.claude-opus-4-8-v1",
+                    "label": "Claude Opus 4.8 (Bedrock)",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "anthropic.claude-opus-4-7-v1",
+                    "label": "Claude Opus 4.7 (Bedrock)",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
                     "value": "anthropic.claude-opus-4-6-v1",
                     "label": "Claude Opus 4.6 (Bedrock)",
                     "tier": "flagship",
@@ -457,18 +465,66 @@ class ProviderRegistry:
             requires_oauth=False,
             requires_cli=True,  # Requiert gh CLI
             models=[
-                {"value": "gpt-4o", "label": "GPT-4o (Copilot)", "tier": "flagship"},
-                {"value": GPT_4_1, "label": "GPT-4.1 (Copilot)", "tier": "flagship"},
                 {
-                    "value": "claude-sonnet-4-5",
-                    "label": "Claude Sonnet 4.5 (Copilot)",
+                    "value": "claude-opus-4.8",
+                    "label": "Claude Opus 4.8 (Copilot)",
                     "tier": "flagship",
                     "supportsThinking": True,
                 },
                 {
-                    "value": "claude-opus-4-5",
+                    "value": "claude-opus-4.7",
+                    "label": "Claude Opus 4.7 (Copilot)",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "claude-opus-4.6",
+                    "label": "Claude Opus 4.6 (Copilot)",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "claude-opus-4.5",
                     "label": "Claude Opus 4.5 (Copilot)",
                     "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "gpt-5.5",
+                    "label": "GPT-5.5 (Copilot)",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "gpt-5.4",
+                    "label": "GPT-5.4 (Copilot)",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {"value": GPT_4_1, "label": "GPT-4.1 (Copilot)", "tier": "flagship"},
+                {"value": "gpt-4o", "label": "GPT-4o (Copilot)", "tier": "flagship"},
+                {
+                    "value": "claude-sonnet-4.6",
+                    "label": "Claude Sonnet 4.6 (Copilot)",
+                    "tier": "standard",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "claude-sonnet-4.5",
+                    "label": "Claude Sonnet 4.5 (Copilot)",
+                    "tier": "standard",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "o4-mini",
+                    "label": "o4-mini (Copilot)",
+                    "tier": "standard",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "o3",
+                    "label": "o3 (Copilot)",
+                    "tier": "standard",
                     "supportsThinking": True,
                 },
                 {
@@ -484,17 +540,6 @@ class ProviderRegistry:
                     "supportsThinking": True,
                 },
                 {
-                    "value": "o1-mini",
-                    "label": "o1-mini (Copilot)",
-                    "tier": "standard",
-                    "supportsThinking": True,
-                },
-                {
-                    "value": "gpt-4.1-mini",
-                    "label": "GPT-4.1 mini (Copilot)",
-                    "tier": "standard",
-                },
-                {
                     "value": "claude-3.7-sonnet",
                     "label": "Claude 3.7 Sonnet (Copilot)",
                     "tier": "standard",
@@ -507,7 +552,7 @@ class ProviderRegistry:
                     "supportsThinking": True,
                 },
                 {
-                    "value": "claude-haiku-4-5",
+                    "value": "claude-haiku-4.5",
                     "label": "Claude Haiku 4.5 (Copilot)",
                     "tier": "fast",
                 },
@@ -515,6 +560,17 @@ class ProviderRegistry:
                     "value": "gemini-2.0-flash",
                     "label": "Gemini 2.0 Flash (Copilot)",
                     "tier": "fast",
+                },
+                {
+                    "value": "gpt-4.1-mini",
+                    "label": "GPT-4.1 mini (Copilot)",
+                    "tier": "fast",
+                },
+                {
+                    "value": "o1-mini",
+                    "label": "o1-mini (Copilot)",
+                    "tier": "fast",
+                    "supportsThinking": True,
                 },
                 {
                     "value": "gpt-4o-mini",
@@ -535,13 +591,35 @@ class ProviderRegistry:
             requires_cli=False,
             models=[
                 {
-                    "value": "grok-2",
-                    "label": "Grok 2",
+                    "value": "grok-4.3",
+                    "label": "Grok 4.3",
                     "tier": "flagship",
                     "supportsThinking": True,
                 },
-                {"value": "grok-2-mini", "label": "Grok 2 Mini", "tier": "standard"},
-                {"value": "grok-beta", "label": "Grok Beta", "tier": "fast"},
+                {
+                    "value": "grok-4.20-reasoning",
+                    "label": "Grok 4.20 Reasoning",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "grok-4.1-fast",
+                    "label": "Grok 4.1 Fast",
+                    "tier": "fast",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "grok-4",
+                    "label": "Grok 4",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
+                    "value": "grok-3",
+                    "label": "Grok 3",
+                    "tier": "standard",
+                    "supportsThinking": True,
+                },
             ],
         )
 

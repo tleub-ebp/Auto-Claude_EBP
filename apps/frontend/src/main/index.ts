@@ -508,6 +508,14 @@ async function launchBackendIfNeeded() {
 			"--port",
 			"9000",
 			"--reload",
+			// Watch only backend source; the shared virtualenv lives at the repo
+			// root, so scoping the watcher to backendDir keeps pip installs (from
+			// the PythonEnvManager) from triggering an endless reload storm.
+			// NOTE: do not add glob --reload-exclude patterns (e.g. ".venv/*"):
+			// the bundled Windows python.exe expands wildcard argv, turning the
+			// pattern into extra positional args and making uvicorn exit code 2.
+			"--reload-dir",
+			backendDir,
 		],
 		{
 			cwd: backendDir,

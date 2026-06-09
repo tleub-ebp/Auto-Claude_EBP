@@ -426,6 +426,13 @@ function determineStartEvent(
 	}
 
 	if (currentXState === "human_review" || currentXState === "error") {
+		// Une tache en echec pendant la planification n'a pas de plan/sous-taches :
+		// il faut relancer la planification, pas sauter au codage. Sinon XState
+		// reste sur un etat incoherent et le garde "settled-state" peut bloquer la
+		// progression cote frontend.
+		if (currentXState === "error" && (task.subtasks?.length ?? 0) === 0) {
+			return { type: "PLANNING_STARTED" };
+		}
 		return { type: "USER_RESUMED" };
 	}
 
@@ -450,6 +457,9 @@ function determineStartEvent(
 	}
 
 	if (task.status === "human_review" || task.status === "error") {
+		if (task.status === "error" && (task.subtasks?.length ?? 0) === 0) {
+			return { type: "PLANNING_STARTED" };
+		}
 		return { type: "USER_RESUMED" };
 	}
 

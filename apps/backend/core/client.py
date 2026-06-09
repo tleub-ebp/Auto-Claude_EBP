@@ -155,6 +155,38 @@ except ImportError:
     ClaudeSDKClient = None
     HookMatcher = None
 
+
+def _claude_options_supports(field_name: str) -> bool:
+    """Return True if the installed ``ClaudeAgentOptions`` accepts ``field_name``.
+
+    The Claude Agent SDK evolves quickly and newer constructor parameters
+    (e.g. ``effort``) are absent from older installed versions. Passing an
+    unknown kwarg raises ``TypeError: __init__() got an unexpected keyword
+    argument`` and aborts the whole agent run. Introspecting the dataclass
+    fields lets us pass such kwargs only when the SDK actually supports them,
+    keeping WorkPilot compatible across SDK versions.
+    """
+    if ClaudeAgentOptions is None:
+        return False
+    try:
+        import dataclasses
+
+        if dataclasses.is_dataclass(ClaudeAgentOptions):
+            return any(
+                f.name == field_name for f in dataclasses.fields(ClaudeAgentOptions)
+            )
+        # Non-dataclass fallback: inspect the constructor signature.
+        import inspect
+
+        params = inspect.signature(ClaudeAgentOptions.__init__).parameters
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            # Accepts **kwargs — assume the field is supported.
+            return True
+        return field_name in params
+    except (TypeError, ValueError):
+        return False
+
+
 # BUG FIX #12: Monkey-patch SDK message parser to handle unknown message types
 # gracefully instead of raising MessageParseError. The Claude CLI may send message
 # types (e.g., "rate_limit_event") that the SDK version doesn't recognize yet.
@@ -1289,6 +1321,10 @@ def create_client(
     # phases get "low" to save tokens. Env var override wins so a user can
     # force a level for debugging.
     # See: code.claude.com/docs/en/agent-sdk/agent-loop#effort-level
+    #
+    # Only emit the kwarg when the installed SDK actually supports it: older
+    # ``claude_agent_sdk`` builds lack the ``effort`` field and would otherwise
+    # raise "unexpected keyword argument 'effort'", aborting the agent run.
     if "opus" in (model or "").lower():
         _effort_map = {
             "explorer": "low",
@@ -1307,8 +1343,20 @@ def create_client(
         _effort = os.environ.get("AUTO_CLAUDE_EFFORT") or _effort_map.get(
             agent_type, "high"
         )
-        options_kwargs["effort"] = _effort
-        print(f"   - Effort: {_effort} (agent_type={agent_type}, model=opus)")
+        if _claude_options_supports("effort"):
+            options_kwargs["effort"] = _effort
+            print(f"   - Effort: {_effort} (agent_type={agent_type}, model=opus)")
+        else:
+            logger.info(
+                "Skipping 'effort=%s' — installed claude_agent_sdk's "
+                "ClaudeAgentOptions does not support it (upgrade the SDK to "
+                "enable reasoning effort control)",
+                _effort,
+            )
+            print(
+                "   - Effort: unsupported by installed SDK "
+                f"(would be {_effort}); skipping"
+            )
 
     return ClaudeSDKClient(options=ClaudeAgentOptions(**options_kwargs))
 

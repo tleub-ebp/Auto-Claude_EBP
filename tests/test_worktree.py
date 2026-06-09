@@ -82,6 +82,44 @@ class TestWorktreeManagerInitialization:
         assert manager.worktrees_dir.is_dir()
 
 
+class TestSpecNameValidation:
+    """Tests for spec_name sanitization and validation."""
+
+    def test_accented_name_is_transliterated_to_ascii(self):
+        """Legacy accented spec folders are mapped to ASCII branch/path names."""
+        result = WorktreeManager._validate_spec_name(
+            "002-limitation-du-numéro-de-tva-intracommunautaire-du-"
+        )
+        assert result == "002-limitation-du-numero-de-tva-intracommunautaire-du-"
+
+    def test_ascii_name_is_unchanged(self):
+        """A clean ASCII spec name passes through untouched."""
+        assert WorktreeManager._validate_spec_name("001-feature") == "001-feature"
+
+    def test_branch_name_uses_ascii_for_accented_spec(self):
+        """get_branch_name yields an ASCII git ref for an accented spec."""
+        manager = WorktreeManager.__new__(WorktreeManager)
+        assert (
+            manager.get_branch_name("003-fenêtre-d-avertissement")
+            == "workpilot/003-fenetre-d-avertissement"
+        )
+
+    def test_path_traversal_still_rejected(self):
+        """Accent stripping must not weaken path-traversal protection."""
+        with pytest.raises(ValueError):
+            WorktreeManager._validate_spec_name("../../etc/passwd")
+
+    def test_separator_still_rejected(self):
+        """Slashes are not 'fixed' by transliteration and stay rejected."""
+        with pytest.raises(ValueError):
+            WorktreeManager._validate_spec_name("foo/bar")
+
+    def test_empty_name_rejected(self):
+        """Empty spec_name is rejected."""
+        with pytest.raises(ValueError):
+            WorktreeManager._validate_spec_name("")
+
+
 class TestWorktreeCreation:
     """Tests for creating worktrees."""
 

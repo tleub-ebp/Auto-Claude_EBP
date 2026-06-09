@@ -18,6 +18,17 @@ export const workspaceMock = {
 		},
 	}),
 
+	getFileDiff: async (_taskId: string, filePath: string) => ({
+		success: true,
+		data: {
+			path: filePath,
+			status: "modified" as const,
+			additions: 0,
+			deletions: 0,
+			patch: undefined,
+		},
+	}),
+
 	mergeWorktree: async () => ({
 		success: true,
 		data: {

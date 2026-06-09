@@ -2232,16 +2232,19 @@ export function Sidebar({
 						</CollapsibleTrigger>
 
 						<CollapsibleContent className="mt-2 space-y-2">
-							{/* CLI Tools â€” compact grouped badges */}
-							<div className="rounded-lg bg-white/4 border border-white/8 p-2 space-y-0.5">
+							{/* CLI Tools — compact grouped badges */}
+							<div className="rounded-lg bg-white/4 border border-white/8 p-2 space-y-0.5 overflow-hidden">
 								<ClaudeCodeStatusBadge
 									onNavigateToTerminals={() => onViewChange?.("terminals", true)}
+									isCollapsed={isCollapsed}
 								/>
 								<CopilotCliStatusBadge
 									onNavigateToTerminals={() => onViewChange?.("terminals", true)}
+									isCollapsed={isCollapsed}
 								/>
 								<CodexCliStatusBadge
 									onNavigateToTerminals={() => onViewChange?.("terminals", true)}
+									isCollapsed={isCollapsed}
 								/>
 							</div>
 						</CollapsibleContent>

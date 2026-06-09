@@ -45,6 +45,7 @@ export const IPC_CHANNELS = {
 	// Per-spec architecture: Each spec has its own worktree at .worktrees/{spec-name}/
 	TASK_WORKTREE_STATUS: "task:worktreeStatus",
 	TASK_WORKTREE_DIFF: "task:worktreeDiff",
+	TASK_FILE_DIFF: "task:fileDiff", // Diff à la demande d'un fichier impacté (inclut les changements non commités)
 	TASK_WORKTREE_MERGE: "task:worktreeMerge",
 	TASK_WORKTREE_MERGE_PREVIEW: "task:worktreeMergePreview", // Preview merge conflicts before merging
 	TASK_WORKTREE_DISCARD: "task:worktreeDiscard",

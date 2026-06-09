@@ -200,6 +200,9 @@ def get_planner_prompt(spec_dir: Path) -> str:
 
     prompt = prompt_file.read_text(encoding="utf-8")
 
+    # Keep the planner prompt in sync with the Coverage Enforcement Gate threshold.
+    prompt = prompt.replace("{{MIN_COVERAGE}}", str(_min_coverage()))
+
     # Inject spec directory information at the beginning
     spec_context = f"""## SPEC LOCATION
 
@@ -242,6 +245,9 @@ def get_coding_prompt(spec_dir: Path) -> str:
         )
 
     prompt = prompt_file.read_text(encoding="utf-8")
+
+    # Keep the coder prompt in sync with the Coverage Enforcement Gate threshold.
+    prompt = prompt.replace("{{MIN_COVERAGE}}", str(_min_coverage()))
 
     spec_context = f"""## SPEC LOCATION
 
@@ -435,6 +441,16 @@ def is_first_run(spec_dir: Path) -> bool:
         return True
 
 
+def _min_coverage() -> int:
+    """Seuil de couverture minimal requis (WORKPILOT_QA_MIN_COVERAGE, défaut 100)."""
+    try:
+        from qa.coverage_gate import get_min_coverage
+
+        return get_min_coverage()
+    except Exception:
+        return 100
+
+
 def _load_prompt_file(filename: str) -> str:
     """
     Load a prompt file from the prompts directory.
@@ -487,7 +503,10 @@ def get_qa_reviewer_prompt(spec_dir: Path, project_dir: Path) -> str:
     # This ensures the QA agent uses correct paths for implementation_plan.json etc.
     base_prompt = base_prompt.replace("{{SPEC_DIR}}", str(spec_dir))
 
-    # Load project index and detect capabilities
+    # Replace {{MIN_COVERAGE}} with the enforced minimum test coverage threshold.
+    # Controlled by WORKPILOT_QA_MIN_COVERAGE (default 100). This keeps the prompt
+    # in sync with the deterministic Coverage Enforcement Gate in qa/loop.py.
+    base_prompt = base_prompt.replace("{{MIN_COVERAGE}}", str(_min_coverage()))
     project_index = load_project_index(project_dir)
     capabilities = detect_project_capabilities(project_index)
 
@@ -590,6 +609,9 @@ def get_qa_fixer_prompt(spec_dir: Path, project_dir: Path) -> str:
 
     # Replace {{SPEC_DIR}} placeholder with the absolute spec directory path
     base_prompt = base_prompt.replace("{{SPEC_DIR}}", str(spec_dir))
+
+    # Keep the fixer prompt in sync with the Coverage Enforcement Gate threshold.
+    base_prompt = base_prompt.replace("{{MIN_COVERAGE}}", str(_min_coverage()))
 
     spec_context = f"""## SPEC LOCATION
 

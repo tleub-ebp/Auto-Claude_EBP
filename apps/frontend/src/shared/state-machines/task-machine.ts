@@ -215,6 +215,20 @@ export const taskMachine = createMachine(
 					USER_RESUMED: { target: "coding", actions: "clearReviewReason" },
 					USER_STOPPED: { target: "backlog", actions: "clearReviewReason" },
 					MARK_DONE: "done",
+					// Relaunching a failed task must re-enter the active pipeline.
+					// Without these, a new agent run's PLANNING_STARTED/CODING_STARTED
+					// is ignored (error is a settled state), the settled-state guard
+					// drops all execution-progress events, and the frontend stays
+					// frozen on the previous failure even though the backend is
+					// actively re-running.
+					PLANNING_STARTED: {
+						target: "planning",
+						actions: "clearReviewReason",
+					},
+					CODING_STARTED: {
+						target: "coding",
+						actions: "clearReviewReason",
+					},
 				},
 			},
 			creating_pr: {

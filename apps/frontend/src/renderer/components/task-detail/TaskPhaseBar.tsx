@@ -1,6 +1,7 @@
 import type { TaskLogPhase, TaskLogs } from "../../../shared/types";
 import { cn } from "../../lib/utils";
 import { useTranslation } from "react-i18next";
+import { AnimatedEllipsis } from "../ui/AnimatedEllipsis";
 
 interface TaskPhaseBarProps {
 	phaseLogs: TaskLogs | null;
@@ -73,7 +74,18 @@ export function TaskPhaseBar({
 		.find((entry) => entry.subphase?.trim())?.subphase;
 	const liveActivity =
 		displayPhase === activePhase ? currentActivity?.trim() : undefined;
-	const activity = liveActivity || lastSubphase?.trim() || null;
+	const rawActivity = liveActivity || lastSubphase?.trim() || null;
+
+	// La phase affichée correspond-elle à celle réellement en cours d'exécution ?
+	// Dans ce cas, on signale la « réflexion » via des points de suspension animés.
+	const isRunning = displayPhase === activePhase;
+
+	// Évite de doubler les points : on retire toute ellipsis finale du libellé
+	// lorsqu'on ajoute l'animation juste après.
+	const activity =
+		isRunning && rawActivity
+			? rawActivity.replace(/[.\u2026]+\s*$/, "").trim() || null
+			: rawActivity;
 
 	return (
 		<div
@@ -102,6 +114,12 @@ export function TaskPhaseBar({
 						{activity}
 					</span>
 				</>
+			)}
+			{isRunning && (
+				<AnimatedEllipsis
+					className={cn("text-xs font-medium shrink-0", styles.text)}
+					aria-label={t("execution.labels.thinking")}
+				/>
 			)}
 		</div>
 	);

@@ -243,20 +243,37 @@
 			"fixing": "Fixing",
 			"validation": "Validation",
 			"complete": "Complete",
-			"failed": "Failed"
+			"failed": "Failed",
+			"running": "Running",
+			"pending": "Pending"
 		},
 		"labels": {
 			"interrupted": "Interrupted",
 			"progress": "Progress",
 			"entry": "entry",
 			"entries": "entries",
-			"step": "Step {{current}}/{{total}}"
+			"step": "Step {{current}}/{{total}}",
+			"thinking": "Processing in progress"
 		},
 		"shortPhases": {
 			"plan": "Plan",
 			"code": "Code",
 			"qa": "QA",
 			"planTooltip": "View implementation plan"
+		},
+		"activity": {
+			"discoveringContext": "Discovering project context…",
+			"gatheringRequirements": "Gathering requirements…",
+			"writingSpec": "Writing specification…",
+			"validatingSpec": "Validating specification…",
+			"specComplete": "Specification complete",
+			"creatingPlan": "Creating implementation plan…",
+			"implementingCode": "Implementing code changes…",
+			"workingOnSubtask": "Working on subtask {{subtask}}…",
+			"subtaskCompleted": "Subtask {{subtask}} completed",
+			"fixingQa": "Fixing QA issues…",
+			"runningQa": "Running QA review…",
+			"buildPaused": "Build paused — subtasks still pending"
 		}
 	},
 	"files": {
@@ -483,7 +500,32 @@
 		}
 	},
 	"subtasks": {
-		"untitled": "Untitled subtask"
+		"untitled": "Untitled subtask",
+		"filesViewer": {
+			"filesModified_one": "{{count}} file modified",
+			"filesModified_other": "{{count}} files modified",
+			"expandAll": "Expand all",
+			"collapseAll": "Collapse all",
+			"noFiles": "No files modified yet",
+			"noFilesHint": "Files will appear here as changes are made",
+			"loading": "Loading changes…",
+			"loadError": "Unable to load changes for this task",
+			"viewDiff": "View changes",
+			"hideDiff": "Hide changes",
+			"noDiff": "No recorded changes for this file",
+			"stats": {
+				"files": "Files",
+				"folders": "Folders",
+				"additions": "Additions",
+				"deletions": "Deletions"
+			},
+			"status": {
+				"added": "Added",
+				"modified": "Modified",
+				"deleted": "Deleted",
+				"renamed": "Renamed"
+			}
+		}
 	},
 	"bulkPR": {
 		"selectAllInColumn": "Select all tasks in column",
@@ -517,12 +559,36 @@
 		"description": "Add visual references like screenshots or designs to help the AI understand your requirements."
 	},
 	"logs": {
+		"scrollToTop": "Back to top",
+		"scrollToTopHint": "Back to top (Home)",
+		"scrollToBottom": "Jump to latest",
+		"scrollToBottomHint": "Jump to latest (End)",
+		"viewportAria": "Task logs — press Home to jump to top, End to jump to bottom",
+		"empty": {
+			"title": "No logs yet",
+			"description": "Logs will appear here when the task runs"
+		},
+		"phaseEmpty": "No logs yet",
+		"hideOutput": "Hide output",
+		"showOutput": "Show output",
 		"thinking": {
 			"selectAria": "Thinking effort for this phase",
 			"selectTooltip": "Change the thinking effort for this phase",
 			"updatedTitle": "Thinking effort updated",
 			"updatedDesc": "The thinking effort will be applied when this phase starts.",
 			"updateFailed": "Update failed"
+		},
+		"provider": {
+			"selectAria": "Provider for this phase",
+			"selectTooltip": "Change the provider for this phase",
+			"updatedTitle": "Provider updated",
+			"updatedDesc": "The provider will be applied when this phase starts."
+		},
+		"model": {
+			"selectAria": "Model for this phase",
+			"selectTooltip": "Change the model for this phase",
+			"updatedTitle": "Model updated",
+			"updatedDesc": "The model will be applied when this phase starts."
 		}
 	},
 	"modal": {
@@ -555,12 +621,15 @@
 			"syncFromBranch": "Sync from branch",
 			"taskControls": "Task controls",
 			"taskIsPaused": "Task is paused",
-			"providerSwitch": "Switch LLM Provider",
-			"providerSwitchDesc": "Pauses the task after the current step finishes, then lets you pick a different LLM.",
+			"providerSwitch": "Switch LLM while running",
+			"providerSwitchDesc": "Hot override: pauses the task after the current step finishes, then resumes it with a different LLM. For steps that haven't started, use the per-phase LLM selectors above instead.",
 			"providerSwitchPaused": "Task is paused",
 			"providerSwitchPausedDesc": "Choose a provider and model, then resume the task.",
 			"pauseToSwitch": "Pause and switch LLM",
+			"pauseToSwitchShort": "Pause & switch",
+			"providerSwitchInfoAria": "About switching the LLM",
 			"pauseToSwitchTooltip": "The task finishes the current step, then stops. You can then pick a provider and model and resume.",
+			"pauseUnavailableTooltip": "Hot switching is only available while the task is running. For steps that haven't started, pick the LLM directly in each phase's selectors above.",
 			"pauseRequestedTitle": "Pause requested",
 			"pauseRequestedDesc": "The task will stop once the current step finishes.",
 			"pauseFailed": "Failed to pause",
@@ -584,6 +653,13 @@
 			"approvePlan": "Approve Plan",
 			"stopped": "Stopped",
 			"qaIssues": "QA Issues"
+		},
+		"move": {
+			"trigger": "Move task to another column",
+			"label": "Move to",
+			"successTitle": "Task moved",
+			"successDescription": "Task moved to “{{status}}”.",
+			"worktreeBlocked": "Can't move: an active worktree exists for this task. Confirm worktree cleanup from the Kanban board."
 		},
 		"progress": {
 			"subtasks": "{{completed}}/{{total}} subtasks"

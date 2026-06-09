@@ -282,7 +282,14 @@ def get_tool_definitions(agent_type: str) -> list[dict[str, Any]]:
                 }
             ]
         )
-    elif agent_type == "planner":
+    elif agent_type in ("planner", "spec_writer"):
+        # The spec pipeline runs the planner.md prompt under agent_type
+        # "spec_writer" (see spec/pipeline/agent_runner.py). That prompt
+        # repeatedly instructs the agent to "use the Write tool" to create
+        # implementation_plan.json. Without exposing the "Write" tool here,
+        # non-Claude providers (Copilot, Windsurf, ...) only see write_file and
+        # never call the tool the prompt asks for, so the plan file is never
+        # written and the planning phase fails with "Did not create plan file".
         base_tools.extend(
             [
                 {

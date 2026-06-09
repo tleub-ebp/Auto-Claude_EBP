@@ -311,6 +311,7 @@ After completing your QA review, you MUST:
        "qa_session": {qa_session},
        "report_file": "qa_report.md",
        "tests_passed": {{"unit": "X/Y", "integration": "X/Y", "e2e": "X/Y"}},
+       "coverage": {{"measured": true, "unit": 100, "integration": 100, "e2e": null}},
        "verified_by": "qa_agent"
      }}
    }}

@@ -88,6 +88,10 @@ export interface TaskAPI {
 	getWorktreeDiff: (
 		taskId: string,
 	) => Promise<IPCResult<import("../../shared/types").WorktreeDiff>>;
+	getFileDiff: (
+		taskId: string,
+		filePath: string,
+	) => Promise<IPCResult<import("../../shared/types").WorktreeDiffFile>>;
 	mergeWorktree: (
 		taskId: string,
 		options?: { noCommit?: boolean },
@@ -362,6 +366,12 @@ export const createTaskAPI = (): TaskAPI => ({
 		taskId: string,
 	): Promise<IPCResult<import("../../shared/types").WorktreeDiff>> =>
 		ipcRenderer.invoke(IPC_CHANNELS.TASK_WORKTREE_DIFF, taskId),
+
+	getFileDiff: (
+		taskId: string,
+		filePath: string,
+	): Promise<IPCResult<import("../../shared/types").WorktreeDiffFile>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_FILE_DIFF, taskId, filePath),
 
 	mergeWorktree: (
 		taskId: string,

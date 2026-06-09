@@ -26,6 +26,7 @@ import {
 	DEFAULT_PHASE_MODELS,
 	DEFAULT_PHASE_THINKING,
 	getDefaultModelForProvider,
+	resolveCatalogModelValue,
 	THINKING_LEVELS,
 } from "../../shared/constants";
 import type { ThinkingLevel } from "../../shared/types";
@@ -145,9 +146,12 @@ export function AgentProfileSelector({
 	const currentPhaseThinking = phaseThinking || DEFAULT_PHASE_THINKING;
 
 	// When the active provider changes, migrate any phase model that is not
-	// available in the (live + static) catalog to the provider's flagship.
-	// Without this the Select trigger would render empty for stale values
-	// (e.g. "opus" left over from Anthropic when switching to OpenAI).
+	// available in the (live + static, deduplicated) catalog. A stored value
+	// is first resolved to its canonical catalog entry — so a legacy alias
+	// ("opus") or hidden dated snapshot maps onto the explicit versioned id
+	// ("claude-opus-4-6") instead of being bumped to the flagship. Only values
+	// with no canonical match at all (e.g. "opus" left over from Anthropic when
+	// switching to OpenAI) fall back to the provider's flagship.
 	// We wait until the live catalog has loaded so we don't migrate against
 	// the static fallback only to migrate again once the live list arrives.
 	useEffect(() => {
@@ -155,10 +159,6 @@ export function AgentProfileSelector({
 		if (liveCatalog.loading) return;
 		if (providerModels.length === 0) return;
 		const validValues = new Set(providerModels.map((m) => m.value));
-		const hasInvalid = (
-			Object.keys(currentPhaseModels) as Array<keyof PhaseModelConfig>
-		).some((phase) => !validValues.has(currentPhaseModels[phase]));
-		if (!hasInvalid) return;
 		const fallback =
 			providerModels.find(
 				(m) => (m as { tier?: string }).tier === "flagship",
@@ -166,20 +166,22 @@ export function AgentProfileSelector({
 			providerModels[0]?.value ||
 			getDefaultModelForProvider(activeProvider);
 		if (!fallback) return;
-		onPhaseModelsChange({
-			spec: validValues.has(currentPhaseModels.spec)
-				? currentPhaseModels.spec
-				: fallback,
-			planning: validValues.has(currentPhaseModels.planning)
-				? currentPhaseModels.planning
-				: fallback,
-			coding: validValues.has(currentPhaseModels.coding)
-				? currentPhaseModels.coding
-				: fallback,
-			qa: validValues.has(currentPhaseModels.qa)
-				? currentPhaseModels.qa
-				: fallback,
-		});
+		const resolvePhase = (value: string): string => {
+			if (validValues.has(value)) return value;
+			const canonical = resolveCatalogModelValue(value, providerModels);
+			return validValues.has(canonical) ? canonical : fallback;
+		};
+		const next: PhaseModelConfig = {
+			spec: resolvePhase(currentPhaseModels.spec),
+			planning: resolvePhase(currentPhaseModels.planning),
+			coding: resolvePhase(currentPhaseModels.coding),
+			qa: resolvePhase(currentPhaseModels.qa),
+		};
+		const changed = (
+			Object.keys(next) as Array<keyof PhaseModelConfig>
+		).some((phase) => next[phase] !== currentPhaseModels[phase]);
+		if (!changed) return;
+		onPhaseModelsChange(next);
 	}, [
 		activeProvider,
 		liveCatalog.loading,
@@ -196,6 +198,13 @@ export function AgentProfileSelector({
 		if (providerModels.length === 0) return;
 		const validValues = new Set(providerModels.map((m) => m.value));
 		if (validValues.has(model)) return;
+		// Prefer the canonical catalog id (alias/dated → explicit versioned id)
+		// before bumping to the flagship.
+		const canonical = resolveCatalogModelValue(model, providerModels);
+		if (canonical !== model && validValues.has(canonical)) {
+			onModelChange(canonical);
+			return;
+		}
 		const fallback =
 			providerModels.find(
 				(m) => (m as { tier?: string }).tier === "flagship",

@@ -30,7 +30,11 @@
 	"tabs": {
 		"chat": "Chat",
 		"events": "Événements",
+		"files": "Fichiers",
 		"timeline": "Chronologie"
+	},
+	"files": {
+		"empty": "Aucun fichier modifié pour l'instant"
 	},
 	"chat": {
 		"placeholder": "Écrivez un message à Claude...",

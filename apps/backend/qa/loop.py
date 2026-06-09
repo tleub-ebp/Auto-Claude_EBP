@@ -677,6 +677,96 @@ async def run_qa_validation_loop(
 
             # === End Architecture Enforcement Gate ===
 
+            # === Coverage Enforcement Gate ===
+            # After QA + architecture approve, enforce the minimum test coverage
+            # threshold (default 100% for unit + integration, e2e best-effort).
+            # Language-agnostic: validates the coverage numbers recorded by the
+            # QA reviewer in qa_signoff.coverage. Controlled by
+            # WORKPILOT_QA_MIN_COVERAGE (0 = disabled).
+            if status == "approved":
+                try:
+                    from .coverage_gate import (
+                        build_coverage_issues,
+                        mark_signoff_rejected,
+                        run_coverage_gate,
+                        write_coverage_fix_request,
+                    )
+
+                    coverage_report = run_coverage_gate(spec_dir)
+
+                    if not coverage_report["enabled"]:
+                        debug(
+                            "qa_loop",
+                            "Coverage enforcement gate disabled "
+                            "(WORKPILOT_QA_MIN_COVERAGE=0)",
+                        )
+                    elif coverage_report["warnings"]:
+                        for warning in coverage_report["warnings"]:
+                            debug_warning("qa_loop", f"Coverage: {warning}")
+
+                    if coverage_report["enabled"] and not coverage_report["passed"]:
+                        debug_warning(
+                            "qa_loop",
+                            "Coverage gate failed",
+                            min_coverage=coverage_report["min_coverage"],
+                            failures=len(coverage_report["failures"]),
+                        )
+                        print(
+                            "\n📊 Coverage enforcement: "
+                            f"{len(coverage_report['failures'])} requirement(s) "
+                            f"below {coverage_report['min_coverage']}% threshold"
+                        )
+
+                        emit_phase(
+                            ExecutionPhase.QA_FIXING,
+                            "Fixing insufficient test coverage",
+                        )
+
+                        coverage_issues = build_coverage_issues(coverage_report)
+                        task_event_emitter.emit(
+                            "QA_FAILED",
+                            {
+                                "iteration": qa_iteration,
+                                "issueCount": len(coverage_issues),
+                                "issues": [
+                                    i["description"] for i in coverage_issues[:5]
+                                ],
+                            },
+                        )
+
+                        # Write a coverage-specific fix request for the fixer agent
+                        write_coverage_fix_request(spec_dir, coverage_report)
+
+                        # Make the gate authoritative: persist rejected status so a
+                        # later loop invocation cannot short-circuit on a stale
+                        # "approved" qa_signoff written by the reviewer.
+                        mark_signoff_rejected(spec_dir, coverage_report)
+
+                        # Override status so the fixer loop handles it
+                        status = "rejected"
+                        record_iteration(
+                            spec_dir,
+                            qa_iteration,
+                            "rejected",
+                            coverage_issues,
+                            iteration_duration,
+                        )
+                        # Fall through to the rejected handler below
+
+                except ImportError:
+                    debug_warning(
+                        "qa_loop",
+                        "Coverage gate package not available, skipping",
+                    )
+                except Exception as e:
+                    # Coverage gate must not crash the QA pipeline.
+                    debug_warning(
+                        "qa_loop",
+                        f"Coverage gate error (non-blocking): {e}",
+                    )
+
+            # === End Coverage Enforcement Gate ===
+
             # Only proceed to final approval if architecture passed (status still "approved")
             if status == "approved":
                 emit_phase(ExecutionPhase.COMPLETE, "QA validation passed")

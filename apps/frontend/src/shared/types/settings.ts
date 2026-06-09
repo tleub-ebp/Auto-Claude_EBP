@@ -191,6 +191,15 @@ export interface PhaseThinkingConfig {
 	qa: ThinkingLevel;
 }
 
+// LLM provider configuration per phase
+// Each phase can target a different provider (anthropic, copilot, openai, …)
+export interface PhaseProviderConfig {
+	spec: string;
+	planning: string;
+	coding: string;
+	qa: string;
+}
+
 // Feature-specific model configuration (for non-pipeline features)
 export interface FeatureModelConfig {
 	insights: string; // Insights chat feature

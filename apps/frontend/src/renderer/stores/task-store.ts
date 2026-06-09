@@ -15,6 +15,7 @@ import type {
 } from "../../shared/types";
 import { debugLog, debugWarn } from "../../shared/utils/debug-logger";
 import { extractSubtaskFiles } from "../../shared/utils/subtask-files";
+import { isMeaningfulFeatureTitle } from "../../shared/utils/task-title";
 
 interface TaskState {
 	tasks: Task[];
@@ -512,7 +513,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
 				return {
 					...task,
-					title: plan.feature || task.title,
+					// Only adopt plan.feature when it's a real US/RsD title. The
+					// backend auto-fixer can set feature to the spec-folder slug
+					// ("001-…") or "Unnamed Feature"; blindly taking it here would
+					// regress the card to the worktree directory name on every plan
+					// update. task.title was already resolved by the main process
+					// (which also reads requirements.display_title), so keep it.
+					title: isMeaningfulFeatureTitle(plan.feature)
+						? plan.feature.trim()
+						: task.title,
 					subtasks,
 					// Keep existing status and reviewReason - XState manages these via TASK_STATUS_CHANGE
 					updatedAt: new Date(),

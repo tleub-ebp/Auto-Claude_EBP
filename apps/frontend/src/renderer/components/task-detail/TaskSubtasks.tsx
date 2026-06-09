@@ -165,6 +165,7 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 			<SubtaskFilesViewer
 				files={selectedSubtaskForFilesView.files || []}
 				subtaskTitle={selectedSubtaskForFilesView.title}
+				taskId={task.id}
 				onClose={() => setSelectedSubtaskForFilesView(null)}
 			/>
 		);

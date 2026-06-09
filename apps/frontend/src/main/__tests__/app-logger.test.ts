@@ -494,4 +494,13 @@ describe("Logger exports", () => {
 		expect(typeof appLog.debug).toBe("function");
 		expect(typeof appLog.log).toBe("function");
 	});
+
+	it("should disable the electron-log console transport to avoid duplicate console output", async () => {
+		// Console output is owned by frontendLog; leaving electron-log's console
+		// transport enabled duplicated every appLog line in the console.
+		await import("../app-logger");
+		const electronLog = await import("electron-log/main.js");
+
+		expect(electronLog.default.transports.console.level).toBe(false);
+	});
 });

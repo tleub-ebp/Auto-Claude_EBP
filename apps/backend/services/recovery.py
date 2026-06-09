@@ -468,6 +468,50 @@ class RecoveryManager:
 
         self._save_attempt_history(history)
 
+        # CRITICAL: also mark the subtask as "blocked" in implementation_plan.json.
+        # Recording the stuck status only in attempt_history.json left the subtask
+        # at status "pending" in the plan, which froze the whole build:
+        #   - count_subtasks() never counts it (progress % stays stuck), and
+        #   - get_next_subtask() keeps returning the SAME pending subtask, so the
+        #     coder retries it forever instead of advancing.
+        # "blocked" counts as done for progress/phase purposes and is skipped by
+        # get_next_subtask(), so the build moves on to the next subtask / QA while
+        # the stuck entry above still flags it for human intervention.
+        self._mark_subtask_blocked_in_plan(subtask_id, reason)
+
+    def _mark_subtask_blocked_in_plan(self, subtask_id: str, reason: str) -> None:
+        """Set a subtask's status to "blocked" in implementation_plan.json.
+
+        Best-effort: any I/O or JSON error is swallowed so recovery bookkeeping
+        never crashes the build loop.
+        """
+        plan_file = self.spec_dir / "implementation_plan.json"
+        if not plan_file.exists():
+            return
+
+        try:
+            with open(plan_file, encoding="utf-8") as f:
+                plan = json.load(f)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return
+
+        updated = False
+        for phase in plan.get("phases", []):
+            for subtask in phase.get("subtasks", phase.get("chunks", [])):
+                if subtask.get("id") == subtask_id:
+                    subtask["status"] = "blocked"
+                    subtask["blocked_reason"] = reason
+                    updated = True
+
+        if not updated:
+            return
+
+        try:
+            with open(plan_file, "w", encoding="utf-8") as f:
+                json.dump(plan, f, indent=2)
+        except OSError:
+            return
+
     def get_stuck_subtasks(self) -> list[dict]:
         """
         Get all subtasks marked as stuck.

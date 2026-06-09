@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -429,6 +430,24 @@ class WorktreeManager:
     # the worktree root or inject git ref-name metacharacters.
     _SPEC_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
+    @staticmethod
+    def _sanitize_spec_name(spec_name: str) -> str:
+        """Map an accented/Unicode spec name to its ASCII-only equivalent.
+
+        Why: legacy spec folders created before the slug fix retain accented
+        names on disk (e.g. "002-limitation-du-numéro-de-tva-…"). The worktree
+        path and git branch must be ASCII to satisfy the strict whitelist and
+        avoid git ref-name issues. We strip diacritics via NFKD decomposition
+        (é -> e) and drop any remaining non-ASCII codepoint. The result is then
+        validated by the caller against ``_SPEC_NAME_RE``, so this NEVER relaxes
+        the security checks: dangerous ASCII (path separators, "..", ref
+        metacharacters) is untouched here and still rejected downstream.
+        """
+        normalized = unicodedata.normalize("NFKD", spec_name)
+        return "".join(
+            ch for ch in normalized if not unicodedata.combining(ch) and ch.isascii()
+        )
+
     @classmethod
     def _validate_spec_name(cls, spec_name: str) -> str:
         """Validate spec_name to prevent path traversal and ref-name injection.
@@ -436,15 +455,20 @@ class WorktreeManager:
         Why: spec_name is interpolated into filesystem paths and git branch
         refs (workpilot/{spec_name}). An unvalidated value like "../../etc"
         or "foo/..bar" could escape the worktree root or break git plumbing.
+
+        Accented characters are transliterated to ASCII first so that legacy
+        spec folders (named before the slug fix) remain buildable; the
+        transliterated value must still satisfy the strict whitelist.
         """
         if not isinstance(spec_name, str) or not spec_name:
             raise ValueError("spec_name must be a non-empty string")
-        if not cls._SPEC_NAME_RE.fullmatch(spec_name):
+        sanitized = cls._sanitize_spec_name(spec_name)
+        if not cls._SPEC_NAME_RE.fullmatch(sanitized):
             raise ValueError(
                 f"Invalid spec_name {spec_name!r}: must match "
                 f"{cls._SPEC_NAME_RE.pattern}"
             )
-        return spec_name
+        return sanitized
 
     def get_worktree_path(self, spec_name: str) -> Path:
         """Get the worktree path for a spec (checks new and legacy locations)."""

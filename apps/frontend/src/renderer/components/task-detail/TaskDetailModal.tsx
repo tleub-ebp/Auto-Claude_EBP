@@ -21,13 +21,20 @@ import { TASK_STATUS_LABELS } from "../../../shared/constants";
 import type {
 	Task,
 	TaskMetadata,
+	TaskStatus,
 	WorktreeCreatePROptions,
 } from "../../../shared/types";
 import { useToast } from "../../hooks/use-toast";
-import { calculateProgress, cn, extractTextFromHtml } from "../../lib/utils";
+import {
+	calculateProgress,
+	cn,
+	extractTextFromHtml,
+	getDisplayProgress,
+} from "../../lib/utils";
 import { useProjectStore } from "../../stores/project-store";
 import {
 	deleteTask,
+	persistTaskStatus,
 	persistUpdateTask,
 	recoverStuckTask,
 	startTask,
@@ -65,10 +72,12 @@ import {
 	TooltipTrigger,
 } from "../ui/tooltip";
 import { useTaskDetail } from "./hooks/useTaskDetail";
+import { TaskStatusMoveBadge } from "./TaskStatusMoveBadge";
 import { TaskFiles } from "./TaskFiles";
 import { TaskLogs } from "./TaskLogs";
 import { TaskPauseControls } from "./TaskPauseControls";
 import { TaskPhaseBar } from "./TaskPhaseBar";
+import { translateActivityMessage } from "./translateActivityMessage";
 import { pauseTask, resumeTask } from "../../stores/task-store";
 import { TaskMetadata as TaskMetadataComponent } from "./TaskMetadata";
 import { TaskReview } from "./TaskReview";
@@ -148,39 +157,43 @@ const renderTaskStatusBadges = (
 		| "muted"
 		| null
 		| undefined,
+	onMove: (newStatus: TaskStatus) => void,
 ) => {
 	if (state.isStuck) {
 		return (
-			<Badge
+			<TaskStatusMoveBadge
+				task={task}
 				variant="warning"
-				className="text-xs flex items-center gap-1 animate-pulse"
-			>
-				<AlertTriangle className="h-3 w-3" />
-				Stuck
-			</Badge>
+				isRunning={state.isRunning}
+				onMove={onMove}
+				pulse
+				leadingIcon={<AlertTriangle className="h-3 w-3" />}
+				label={t("tasks:modal.badges.stuck")}
+			/>
 		);
 	}
 
 	if (state.isIncomplete) {
 		return (
-			<Badge variant="warning" className="text-xs flex items-center gap-1">
-				<AlertTriangle className="h-3 w-3" />
-				Incomplete
-			</Badge>
+			<TaskStatusMoveBadge
+				task={task}
+				variant="warning"
+				isRunning={state.isRunning}
+				onMove={onMove}
+				leadingIcon={<AlertTriangle className="h-3 w-3" />}
+				label={t("tasks:modal.badges.incomplete")}
+			/>
 		);
 	}
 
 	return (
 		<>
-			<Badge
+			<TaskStatusMoveBadge
+				task={task}
 				variant={getStatusBadgeVariant(task.status, state.isStuck)}
-				className={cn(
-					"text-xs",
-					task.status === "in_progress" && !state.isStuck && "status-running",
-				)}
-			>
-				{t(TASK_STATUS_LABELS[task.status])}
-			</Badge>
+				isRunning={state.isRunning}
+				onMove={onMove}
+			/>
 			{task.status === "human_review" && task.reviewReason && (
 				<Badge
 					variant={getReviewReasonBadgeVariant(task.reviewReason)}
@@ -448,6 +461,7 @@ function TaskDetailModalContent({
 	readonly hasNext?: boolean;
 }) {
 	const { t } = useTranslation(["tasks"]);
+	const { toast } = useToast();
 	const state = useTaskDetail({ task });
 	const { maximized, toggle: toggleMaximized } = useDialogMaximize(
 		"workpilot:task-detail-maximized",
@@ -462,6 +476,17 @@ function TaskDetailModalContent({
 	).length;
 	const totalSubtasks = task.subtasks.length;
 
+	// Pendant une exécution active, l'avancement par sous-tâches terminées ne se
+	// met à jour qu'au passage d'une sous-tâche à « completed », ce qui donne
+	// l'impression d'un pourcentage figé. On privilégie donc la progression
+	// temps réel calculée côté backend (overallProgress, pondérée par phase),
+	// avec repli sur l'avancement par sous-tâches.
+	const headerProgressPercent = getDisplayProgress(
+		progressPercent,
+		task.executionProgress?.overallProgress,
+		!!state.hasActiveExecution,
+	);
+
 	// Activité en cours affichée dans la barre de phase : on privilégie le
 	// sous-tâche actuellement traité, avec repli sur les informations de
 	// progression d'exécution (message de phase, ex: « Creating implementation
@@ -469,7 +494,7 @@ function TaskDetailModalContent({
 	const currentPhaseActivity =
 		task.subtasks.find((s) => s.status === "in_progress")?.title ??
 		task.executionProgress?.currentSubtask ??
-		task.executionProgress?.message ??
+		translateActivityMessage(t, task.executionProgress?.message) ??
 		null;
 
 	// Extract handlers using custom hook
@@ -630,6 +655,32 @@ function TaskDetailModalContent({
 		} finally {
 			state.setIsCreatingPR(false);
 		}
+	};
+
+	/**
+	 * Déplace la tâche vers une autre colonne depuis le header de la modale.
+	 * Réutilise la même persistance que le Kanban ; un échec (worktree, IO) est
+	 * remonté via un toast plutôt que de bloquer la popin.
+	 */
+	const handleMoveStatus = async (newStatus: TaskStatus) => {
+		if (newStatus === task.status) return;
+		const result = await persistTaskStatus(task.id, newStatus);
+		if (result.success) {
+			toast({
+				title: t("tasks:modal.move.successTitle"),
+				description: t("tasks:modal.move.successDescription", {
+					status: t(TASK_STATUS_LABELS[newStatus]),
+				}),
+			});
+			return;
+		}
+		toast({
+			title: t("common:errors.operationFailed"),
+			description: result.worktreeExists
+				? t("tasks:modal.move.worktreeBlocked")
+				: result.error || t("common:errors.unknownError"),
+			variant: "destructive",
+		});
 	};
 
 	// Helper function to get status badge variant
@@ -817,6 +868,7 @@ function TaskDetailModalContent({
 												state,
 												t,
 												getStatusBadgeVariant,
+												handleMoveStatus,
 											)}
 											{/* Compact progress indicator */}
 											{totalSubtasks > 0 && (
@@ -932,14 +984,14 @@ function TaskDetailModalContent({
 
 							{/* Progress bar - only show when running or has progress */}
 							{(state.isRunning || completedSubtasks > 0) &&
-								totalSubtasks > 0 && (
+								(totalSubtasks > 0 || state.hasActiveExecution) && (
 									<div className="mt-3 flex items-center gap-3">
 										<Progress
-											value={progressPercent}
+											value={headerProgressPercent}
 											className="h-1.5 flex-1"
 										/>
 										<span className="text-xs text-muted-foreground tabular-nums w-10 text-right">
-											{progressPercent}%
+											{headerProgressPercent}%
 										</span>
 									</div>
 								)}

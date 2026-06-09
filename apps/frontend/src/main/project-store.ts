@@ -32,6 +32,7 @@ import type {
 } from "../shared/types";
 import { stripAcceptanceCriteriaSection } from "../shared/utils/acceptance-criteria";
 import { extractSubtaskFiles } from "../shared/utils/subtask-files";
+import { isMeaningfulFeatureTitle } from "../shared/utils/task-title";
 import { stripHtml } from "./ipc-handlers/shared/sanitize";
 import { getAutoBuildPath, isInitialized } from "./project-initializer";
 import { ensureAbsolutePath } from "./utils/path-helpers";
@@ -1077,8 +1078,18 @@ export class ProjectStore {
 
 		// Get title from plan. The spec-folder name (dirName) is a clean,
 		// slugified fallback we hold onto in case richer sources turn out to be
-		// HTML garbage (see below).
-		let title = plan?.feature || plan?.title || dirName;
+		// HTML garbage (see below). A plan.feature that is itself a spec-folder
+		// slug or the "Unnamed Feature" placeholder (both written by the backend
+		// auto-fixer when no real feature exists) is NOT a usable title: we treat
+		// it like a missing feature so we fall through to spec.md / the readable
+		// folder name instead of surfacing the worktree directory name.
+		const planFeature = plan?.feature || plan?.title;
+		const featureIsMeaningful = isMeaningfulFeatureTitle(planFeature);
+		// Tracks whether the title we end up with is merely a readable form of the
+		// spec-folder name (the worktree directory). We must never persist such a
+		// fallback as the durable display_title (see backfill below).
+		let usedFolderFallback = !featureIsMeaningful;
+		let title = featureIsMeaningful ? planFeature : dirName;
 
 		// If it looks like a spec ID, try to extract title from spec file
 		const looksLikeSpecId = /^\d{3}-/.test(title);
@@ -1086,7 +1097,22 @@ export class ProjectStore {
 			looksLikeSpecId &&
 			existsSync(path.join(specPath, AUTO_BUILD_PATHS.SPEC_FILE))
 		) {
-			title = this.extractTitleFromSpec(specPath) || title;
+			const specTitle = this.extractTitleFromSpec(specPath);
+			// Anciens imports Azure DevOps (US/RsD) sans requirements.display_title :
+			// le générateur de spec a recopié la description de la tâche comme titre
+			// H1 (« # Specification: N° de version… », « # Specification: Description :… »).
+			// Ce H1 n'est jamais un vrai titre — on le détecte en comparant au
+			// task_description, et on retombe sur le nom de dossier (slugifié depuis
+			// le vrai titre Azure). L'hydratation à l'ouverture restaurera ensuite le
+			// System.Title exact (accents inclus).
+			if (specTitle && this.titleLooksLikeDescription(specTitle, specPath)) {
+				title = this.titleFromDirName(dirName);
+				usedFolderFallback = true;
+			} else if (specTitle) {
+				title = specTitle;
+				usedFolderFallback = false;
+			}
+			// else: no usable H1 — keep the folder-name fallback (flag already set).
 		}
 
 		// Les titres issus d'imports (US/RsD Azure DevOps) peuvent contenir du
@@ -1100,13 +1126,116 @@ export class ProjectStore {
 		// un fragment de balise.
 		if (title.includes("<")) {
 			const plain = stripHtml(title).replace(/\s+/g, " ").trim();
-			title = plain.length >= 3 ? plain : dirName;
+			if (plain.length >= 3) {
+				title = plain;
+			} else {
+				title = dirName;
+				usedFolderFallback = true;
+			}
 		}
+
+		// Filet de sécurité : si après tout ça le titre est encore un identifiant
+		// de spec brut (spec.md absent), on le rend lisible via le nom de dossier.
+		if (/^\d{3}-/.test(title)) {
+			title = this.titleFromDirName(dirName);
+			usedFolderFallback = true;
+		}
+
 		if (title.length > 200) {
 			title = `${title.slice(0, 200)}…`;
 		}
 
+		// Durabilité : on vient de résoudre un vrai titre US/RsD (plan.feature ou
+		// H1 de spec.md) mais requirements.json n'a pas de display_title. On l'y
+		// persiste pour que les scans suivants le servent en priorité — sinon, un
+		// scan qui tombe sur implementation_plan.json en cours d'écriture
+		// (plan === null) retomberait sur le nom de dossier slugifié, d'où le titre
+		// qui « s'inspire du dossier du worktree » par intermittence.
+		if (!usedFolderFallback && isMeaningfulFeatureTitle(title)) {
+			this.persistDisplayTitle(specPath, title);
+		}
+
 		return title;
+	}
+
+	/**
+	 * Persist a resolved US/RsD title as requirements.display_title so later
+	 * scans serve it with top priority and never regress to the slugified
+	 * spec-folder name.
+	 *
+	 * Best-effort and idempotent: it only writes when requirements.json exists
+	 * and has no display_title yet (once set, extractTitle returns early and
+	 * never reaches here again), so it runs at most once per legacy task and
+	 * cannot loop with the file watcher. Never creates requirements.json.
+	 */
+	private persistDisplayTitle(specPath: string, title: string): void {
+		const requirementsPath = path.join(specPath, AUTO_BUILD_PATHS.REQUIREMENTS);
+		if (!existsSync(requirementsPath)) {
+			return;
+		}
+
+		try {
+			const requirements = JSON.parse(readFileSync(requirementsPath, "utf-8"));
+			if (
+				typeof requirements.display_title === "string" &&
+				requirements.display_title.trim().length > 0
+			) {
+				return;
+			}
+			requirements.display_title = title;
+			writeFileSync(
+				requirementsPath,
+				JSON.stringify(requirements, null, 2),
+				"utf-8",
+			);
+		} catch {
+			// Non-fatal: durable persistence is an optimization, not correctness.
+		}
+	}
+
+	/**
+	 * Derive a human-readable title from a spec-folder name.
+	 *
+	 * Strips the "NNN-" spec-number prefix, turns hyphens into spaces, collapses
+	 * whitespace, drops a dangling trailing hyphen, and capitalizes the first
+	 * letter. Used as an offline fallback when no clean title source
+	 * (requirements.display_title or a real spec.md H1) is available.
+	 */
+	private titleFromDirName(dirName: string): string {
+		const cleaned = dirName
+			.replace(/^\d+-/, "")
+			.replace(/-+/g, " ")
+			.replace(/\s+/g, " ")
+			.trim();
+		if (!cleaned) return dirName;
+		return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+	}
+
+	/**
+	 * Detect whether a spec.md H1 title is in fact the task description.
+	 *
+	 * Legacy Azure DevOps imports (before requirements.display_title existed)
+	 * had their spec H1 generated from the raw work-item description, e.g.
+	 * "# Specification: N° de versionConditions de reproduction :…". Such a
+	 * title is never a real feature name. We detect it by normalizing both the
+	 * candidate title and the persisted task_description (lowercasing and
+	 * stripping every non-alphanumeric character, including the spaces/newlines
+	 * the generator collapsed) and checking whether the description begins with
+	 * the title. Genuine app-authored specs have a concise H1 distinct from
+	 * their long description, so this stays false for them.
+	 */
+	private titleLooksLikeDescription(title: string, specPath: string): string {
+		const description = this.getRequirementsDescription(specPath);
+		if (!description) return "";
+
+		const normalize = (value: string) =>
+			value.toLowerCase().replace(/[^a-z0-9]/gi, "");
+		const normalizedTitle = normalize(title);
+		const normalizedDescription = normalize(description);
+		if (normalizedTitle.length < 8) return "";
+
+		const probe = normalizedTitle.slice(0, 25);
+		return normalizedDescription.startsWith(probe) ? title : "";
 	}
 
 	/**

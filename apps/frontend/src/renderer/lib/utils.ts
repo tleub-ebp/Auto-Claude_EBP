@@ -20,6 +20,30 @@ export function calculateProgress(subtasks: { status: string }[]): number {
 }
 
 /**
+ * Détermine le pourcentage d'avancement à afficher dans l'en-tête d'une tâche.
+ *
+ * Pendant une exécution active, l'avancement par sous-tâches terminées ne bouge
+ * qu'au passage d'une sous-tâche à « completed », ce qui fige visuellement la
+ * barre. On privilégie alors la progression temps réel pondérée par phase
+ * (overallProgress) émise par le backend, avec repli sur l'avancement par
+ * sous-tâches. Le max évite toute régression visuelle si overallProgress n'a pas
+ * encore été reçu.
+ *
+ * @param subtaskProgress Pourcentage calculé depuis les sous-tâches (0-100)
+ * @param overallProgress Progression temps réel du backend (0-100), optionnelle
+ * @param hasActiveExecution Indique si une phase d'exécution est en cours
+ * @returns Pourcentage à afficher (0-100)
+ */
+export function getDisplayProgress(
+	subtaskProgress: number,
+	overallProgress: number | undefined,
+	hasActiveExecution: boolean,
+): number {
+	if (!hasActiveExecution) return subtaskProgress;
+	return Math.max(overallProgress ?? 0, subtaskProgress);
+}
+
+/**
  * Format a date as a relative time string
  * @param date Date to format
  * @returns Relative time string (e.g., "2 hours ago")

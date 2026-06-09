@@ -85,6 +85,18 @@ WINDSURF_MODEL = _WINDSURF_ENTRY.model_id if _WINDSURF_ENTRY else "swe-1.6"
 _COPILOT_ENTRY = get_default("copilot")
 COPILOT_MODEL = _COPILOT_ENTRY.model_id if _COPILOT_ENTRY else "claude-sonnet-4.6"
 
+_OPENAI_ENTRY = get_default("openai")
+OPENAI_MODEL = _OPENAI_ENTRY.model_id if _OPENAI_ENTRY else "gpt-5.5"
+
+_MISTRAL_ENTRY = get_default("mistral")
+MISTRAL_MODEL = _MISTRAL_ENTRY.model_id if _MISTRAL_ENTRY else "mistral-large-3"
+
+_DEEPSEEK_ENTRY = get_default("deepseek")
+DEEPSEEK_MODEL = _DEEPSEEK_ENTRY.model_id if _DEEPSEEK_ENTRY else "deepseek-v3"
+
+_GROK_ENTRY = get_default("grok")
+GROK_MODEL = _GROK_ENTRY.model_id if _GROK_ENTRY else "grok-4.3"
+
 PROVIDER_DEFAULT_MODELS: dict[str, dict[str, str]] = {
     # Anthropic / Claude — use Claude shorthands (resolved by resolve_model_id)
     "anthropic": {
@@ -101,10 +113,10 @@ PROVIDER_DEFAULT_MODELS: dict[str, dict[str, str]] = {
     },
     # OpenAI
     "openai": {
-        "spec": "gpt-4o",
-        "planning": "gpt-4o",
-        "coding": "gpt-4o",
-        "qa": "gpt-4o",
+        "spec": OPENAI_MODEL,
+        "planning": OPENAI_MODEL,
+        "coding": OPENAI_MODEL,
+        "qa": OPENAI_MODEL,
     },
     # GitHub Copilot
     "copilot": {
@@ -122,24 +134,24 @@ PROVIDER_DEFAULT_MODELS: dict[str, dict[str, str]] = {
     },
     # Mistral AI
     "mistral": {
-        "spec": "mistral-large-2",
-        "planning": "mistral-large-2",
-        "coding": "mistral-large-2",
-        "qa": "mistral-large-2",
+        "spec": MISTRAL_MODEL,
+        "planning": MISTRAL_MODEL,
+        "coding": MISTRAL_MODEL,
+        "qa": MISTRAL_MODEL,
     },
     # DeepSeek
     "deepseek": {
-        "spec": "deepseek-v3",
-        "planning": "deepseek-v3",
-        "coding": "deepseek-v3",
-        "qa": "deepseek-v3",
+        "spec": DEEPSEEK_MODEL,
+        "planning": DEEPSEEK_MODEL,
+        "coding": DEEPSEEK_MODEL,
+        "qa": DEEPSEEK_MODEL,
     },
     # Grok (xAI)
     "grok": {
-        "spec": "grok-2",
-        "planning": "grok-2",
-        "coding": "grok-2",
-        "qa": "grok-2",
+        "spec": GROK_MODEL,
+        "planning": GROK_MODEL,
+        "coding": GROK_MODEL,
+        "qa": GROK_MODEL,
     },
     # Meta (LLaMA)
     "meta": {
@@ -193,6 +205,13 @@ class PhaseThinkingConfig(TypedDict, total=False):
     qa: str
 
 
+class PhaseProviderConfig(TypedDict, total=False):
+    spec: str
+    planning: str
+    coding: str
+    qa: str
+
+
 class TaskMetadataConfig(TypedDict, total=False):
     """Structure of model-related fields in task_metadata.json"""
 
@@ -200,6 +219,7 @@ class TaskMetadataConfig(TypedDict, total=False):
     isAutoProfile: bool
     phaseModels: PhaseModelConfig
     phaseThinking: PhaseThinkingConfig
+    phaseProviders: PhaseProviderConfig
     model: str
     thinkingLevel: str
 
@@ -287,22 +307,39 @@ def load_task_metadata(spec_dir: Path) -> TaskMetadataConfig | None:
         return None
 
 
+def _metadata_phase_provider(
+    metadata: TaskMetadataConfig | None, phase: Phase | None
+) -> str | None:
+    """Return the per-phase provider from metadata.phaseProviders, if any."""
+    if not metadata or phase is None:
+        return None
+    phase_providers = metadata.get("phaseProviders")
+    if phase_providers:
+        provider = phase_providers.get(phase)
+        if provider:
+            return provider
+    return None
+
+
 def get_phase_provider(
     spec_dir: Path,
     cli_provider: str | None = None,
+    phase: Phase | None = None,
 ) -> str | None:
     """
     Get the LLM provider configured for this task.
 
     Priority:
     1. CLI argument (if provided)
-    2. Provider from task_metadata.json
-    3. Provider selected via IPC (from frontend UI)
-    4. None (let downstream code use its default)
+    2. Per-phase provider from task_metadata.json (phaseProviders[phase])
+    3. Task-wide provider from task_metadata.json
+    4. Provider selected via IPC (from frontend UI)
+    5. None (let downstream code use its default)
 
     Args:
         spec_dir: Path to the spec directory
         cli_provider: Provider from CLI argument (optional)
+        phase: Execution phase (spec, planning, coding, qa) for per-phase lookup
 
     Returns:
         Provider string (e.g. 'anthropic', 'openai', 'ollama') or None
@@ -311,6 +348,12 @@ def get_phase_provider(
         return cli_provider
 
     metadata = load_task_metadata(spec_dir)
+
+    # Per-phase provider takes precedence over the task-wide provider.
+    phase_provider = _metadata_phase_provider(metadata, phase)
+    if phase_provider:
+        return phase_provider
+
     if metadata and metadata.get("provider"):
         return metadata["provider"]
 
@@ -385,7 +428,11 @@ def _resolve_auto_profile_model(
         return None
 
     phase_models = metadata["phaseModels"]
-    provider = cli_provider or metadata.get("provider")
+    provider = (
+        cli_provider
+        or _metadata_phase_provider(metadata, phase)
+        or metadata.get("provider")
+    )
     model = phase_models.get(phase, DEFAULT_PHASE_MODELS[phase])
     return _resolve_provider_model(model, provider)
 
@@ -419,7 +466,11 @@ def _resolve_complexity_routing(
             return None
 
         model = routing.phase_models.get(phase, DEFAULT_PHASE_MODELS[phase])
-        provider = cli_provider or (metadata.get("provider") if metadata else None)
+        provider = (
+            cli_provider
+            or _metadata_phase_provider(metadata, phase)
+            or (metadata.get("provider") if metadata else None)
+        )
         return _resolve_provider_model(model, provider)
     except ImportError:
         return None
@@ -433,10 +484,12 @@ def _resolve_provider_default(
 ) -> str | None:
     """Resolve model from provider-specific defaults."""
     provider = cli_provider
+    if not provider:
+        provider = _metadata_phase_provider(metadata, phase)
     if not provider and metadata:
         provider = metadata.get("provider")
     if not provider:
-        provider = get_phase_provider(spec_dir)
+        provider = get_phase_provider(spec_dir, phase=phase)
 
     if provider and provider in PROVIDER_DEFAULT_MODELS:
         provider_models = PROVIDER_DEFAULT_MODELS[provider]
