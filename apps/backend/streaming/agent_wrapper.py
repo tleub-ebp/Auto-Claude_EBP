@@ -73,13 +73,20 @@ class StreamingAgentWrapper:
 
         # On reconnect, go straight back to the address that worked before.
         # Otherwise probe multiple URLs in case of IPv4/IPv6 issues.
+        # Server mode: the run manager injects WORKPILOT_WS_TOKEN into the
+        # agent's environment; the WS server requires it on the handshake.
+        import os
+
+        ws_token = os.environ.get("WORKPILOT_WS_TOKEN", "")
+        token_suffix = f"?token={ws_token}" if ws_token else ""
+
         if self._connected_url:
             urls_to_try = [self._connected_url]
         else:
             urls_to_try = [
-                f"ws://{self._ws_host}:{self._ws_port}/stream/{self.session_id}",
-                f"ws://127.0.0.1:{self._ws_port}/stream/{self.session_id}",
-                f"ws://[::1]:{self._ws_port}/stream/{self.session_id}",
+                f"ws://{self._ws_host}:{self._ws_port}/stream/{self.session_id}{token_suffix}",
+                f"ws://127.0.0.1:{self._ws_port}/stream/{self.session_id}{token_suffix}",
+                f"ws://[::1]:{self._ws_port}/stream/{self.session_id}{token_suffix}",
             ]
 
         for url in urls_to_try:

@@ -14,12 +14,21 @@ import {
 	getSpecsDir,
 	IPC_CHANNELS,
 } from "../../../shared/constants";
-import type { IPCResult, Task, TaskMetadata } from "../../../shared/types";
+import type {
+	IPCResult,
+	PlanConflictReport,
+	SpecInterviewQuestion,
+	Task,
+	TaskMetadata,
+} from "../../../shared/types";
 import { slugifySpecTitle } from "../../../shared/utils/spec-slug";
 import type { AgentManager } from "../../agent";
+import { getAppLanguage } from "../../app-language";
 import { projectStore } from "../../project-store";
+import { specInterviewService } from "../../spec-interview-service";
 import { taskStateManager } from "../../task-state-manager";
 import { titleGenerator } from "../../title-generator";
+import { computePlanConflicts } from "../../utils/plan-conflicts";
 import { findAllSpecPaths, isValidTaskId } from "../../utils/spec-path-helpers";
 import { cleanupWorktree } from "../../utils/worktree-cleanup";
 import { findTaskWorktree, isPathWithinBase } from "../../worktree-paths";
@@ -530,6 +539,168 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 			}
 
 			return { success: true };
+		},
+	);
+
+	/**
+	 * Fully reset a task back to backlog.
+	 *
+	 * Used when the planned subtasks are not satisfying: the task keeps its
+	 * spec (spec.md, task_metadata.json, attachments) but loses everything
+	 * produced by the pipeline:
+	 * 1. Worktree (auto-committed then deleted, branch removed, PR closed)
+	 * 2. Plan + subtasks (implementation_plan.json), QA report, progress and
+	 *    conversation/halt artifacts — in every spec location (main + worktrees)
+	 * 3. XState actor state (so the next start is a fresh PLANNING_STARTED)
+	 *
+	 * Refuses to reset a running task: the caller must stop it first.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_RESET,
+		async (_, taskId: string): Promise<IPCResult<Task>> => {
+			const { rm } = await import("node:fs/promises");
+
+			const { task, project } = findTaskAndProject(taskId);
+			if (!task || !project) {
+				return { success: false, error: "Task or project not found" };
+			}
+
+			if (agentManager.isRunning(taskId)) {
+				return {
+					success: false,
+					error: "Cannot reset a running task. Stop the task first.",
+				};
+			}
+
+			const warnings: string[] = [];
+
+			// 1. Remove the worktree (same robust path as TASK_DELETE)
+			const worktreePath = findTaskWorktree(project.path, task.specId);
+			if (worktreePath) {
+				const cleanupResult = await cleanupWorktree({
+					worktreePath,
+					projectPath: project.path,
+					specId: task.specId,
+					commitMessage: "Auto-save before task reset",
+					logPrefix: "[TASK_RESET]",
+					deleteBranch: true,
+					prUrl: task.prUrl ?? task.metadata?.prUrl,
+				});
+				if (!cleanupResult.success) {
+					// Without the worktree gone the reset would leave a stale build —
+					// surface the failure instead of pretending the task is clean.
+					return {
+						success: false,
+						error: `Worktree cleanup failed: ${cleanupResult.warnings.join("; ")}`,
+					};
+				}
+				warnings.push(...cleanupResult.warnings);
+			}
+
+			// 2. Delete pipeline artifacts in every spec location, keeping the
+			// spec itself (spec.md, task_metadata.json, images...)
+			const runtimeArtifacts = [
+				AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
+				AUTO_BUILD_PATHS.QA_REPORT,
+				AUTO_BUILD_PATHS.BUILD_PROGRESS,
+				"conversation.jsonl",
+				"conversation_log.jsonl",
+				"PROMPT_TOO_LONG_HALT",
+				"RESUME_WITH_PROVIDER",
+				"qa_fix_request.md",
+				"memory",
+			];
+			const specsBaseDir = getSpecsDir(project.autoBuildPath);
+			const specPaths = findAllSpecPaths(
+				project.path,
+				specsBaseDir,
+				task.specId,
+			);
+			for (const specDir of specPaths) {
+				for (const artifact of runtimeArtifacts) {
+					const target = path.join(specDir, artifact);
+					if (!existsSync(target)) continue;
+					try {
+						await rm(target, { recursive: true, force: true });
+					} catch (error) {
+						const errorMsg =
+							error instanceof Error ? error.message : "Unknown error";
+						warnings.push(`${target}: ${errorMsg}`);
+					}
+				}
+			}
+
+			// 3. Drop the XState actor so the next start is a clean planning run
+			taskStateManager.clearTask(taskId);
+			projectStore.invalidateTasksCache(project.id);
+
+			if (warnings.length > 0) {
+				console.warn(`[TASK_RESET] Warnings for ${taskId}:`, warnings);
+			}
+
+			const resetTask: Task = {
+				...task,
+				status: "backlog",
+				reviewReason: undefined,
+				subtasks: [],
+				qaReport: undefined,
+				executionProgress: undefined,
+				updatedAt: new Date(),
+			};
+			console.warn(`[TASK_RESET] Task ${taskId} reset to backlog`);
+			return { success: true, data: resetTask };
+		},
+	);
+
+	/**
+	 * Plan-time conflict detection: compare the files this task's plan touches
+	 * with the plans/diffs of every other active task in the same project, so
+	 * parallel worktrees on the same files raise an alert at plan review
+	 * instead of a merge conflict at the end.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_CHECK_PLAN_CONFLICTS,
+		async (_, taskId: string): Promise<IPCResult<PlanConflictReport>> => {
+			const { task, project } = findTaskAndProject(taskId);
+			if (!task || !project) {
+				return { success: false, error: "Task not found" };
+			}
+			const allTasks = projectStore.getTasks(project.id);
+			return { success: true, data: computePlanConflicts(task, allTasks) };
+		},
+	);
+
+	/**
+	 * Spec interview: generate 3-5 clarifying questions about the task
+	 * description before planning starts. The renderer collects the answers
+	 * and appends them to the description (TASK_UPDATE), so the planner works
+	 * from a richer spec. Long call (one-shot LLM subprocess, up to ~90s).
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_SPEC_INTERVIEW,
+		async (_, taskId: string): Promise<IPCResult<SpecInterviewQuestion[]>> => {
+			const { task } = findTaskAndProject(taskId);
+			if (!task) {
+				return { success: false, error: "Task not found" };
+			}
+
+			const spec = [task.title, task.description].filter(Boolean).join("\n\n");
+			if (!spec.trim()) {
+				return { success: false, error: "Task has no description to analyze" };
+			}
+
+			const questions = await specInterviewService.generateQuestions(
+				spec,
+				getAppLanguage(),
+			);
+			if (!questions) {
+				return {
+					success: false,
+					error:
+						"Could not generate interview questions. Check your LLM credentials and try again.",
+				};
+			}
+			return { success: true, data: questions };
 		},
 	);
 

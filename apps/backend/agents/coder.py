@@ -21,6 +21,7 @@ from agents.feature_wiring import (
     suggest_routed_model,
 )
 from core.client import create_agent_client
+from core.llm_optimization import should_inline_file_context
 from core.task_event import TaskEventEmitter
 from core.workflow_logger import workflow_logger
 from qa.criteria import save_implementation_plan
@@ -1250,10 +1251,27 @@ async def run_autonomous_agent(
                 recovery_hints=recovery_hints,
             )
 
-            # Load and append relevant file context
-            context = load_subtask_context(spec_dir, project_dir, next_subtask)
-            if context.get("patterns") or context.get("files_to_modify"):
-                prompt += "\n\n" + format_context_for_prompt(context)
+            # Load and append relevant file context — only when the
+            # (provider, effort) pair benefits from inlining. Claude agents
+            # and high-effort runs re-read files via tools anyway, so inline
+            # content there is duplicated input paid on every turn.
+            # Provider resolved WITHOUT side effects (get_phase_provider) —
+            # _get_active_provider would consume the RESUME_WITH_PROVIDER
+            # marker before create_agent_client gets to read it.
+            inline_provider = phase_provider or get_phase_provider(
+                spec_dir, phase=current_phase
+            )
+            if should_inline_file_context(inline_provider, phase_thinking_budget):
+                context = load_subtask_context(spec_dir, project_dir, next_subtask)
+                if context.get("patterns") or context.get("files_to_modify"):
+                    prompt += "\n\n" + format_context_for_prompt(context)
+            else:
+                print(
+                    muted(
+                        "File context inlining skipped (agent reads files via "
+                        "tools — saves duplicated prompt tokens)"
+                    )
+                )
 
             # Retrieve and append Graphiti memory context (if enabled)
             graphiti_context = await get_graphiti_context(

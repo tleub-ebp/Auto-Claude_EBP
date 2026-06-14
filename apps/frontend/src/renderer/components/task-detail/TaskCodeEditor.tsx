@@ -13,9 +13,8 @@ import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Subtask } from "../../../shared/types";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { CodeEditor } from "../ui/code-editor";
 import { ScrollArea } from "../ui/scroll-area";
-import { Textarea } from "../ui/textarea";
 import {
 	Tooltip,
 	TooltipContent,
@@ -280,12 +279,13 @@ export function TaskCodeEditor({
 								</Button>
 							</div>
 						</div>
-						<div className="flex-1 flex flex-col">
-							<Textarea
+						<div className="flex-1 flex flex-col min-h-0">
+							<CodeEditor
 								value={currentFileContent}
-								onChange={(e) => handleContentChange(e.target.value)}
+								onChange={handleContentChange}
+								filename={selectedFile}
 								placeholder="File content..."
-								className="flex-1 rounded-none border-0 font-mono text-xs resize-none"
+								className="flex-1 min-h-0 rounded-none border-0"
 							/>
 						</div>
 					</>

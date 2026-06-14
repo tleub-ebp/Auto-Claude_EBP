@@ -147,6 +147,20 @@ def _is_retryable_worktree_add_error(stderr: str) -> bool:
     return any(term in text for term in _WORKTREE_ADD_TRANSIENT_TERMS)
 
 
+# Windows NTSTATUS exit codes meaning the git process FAILED TO START (not a
+# git error): the loaded GitHub runner couldn't initialize the child process.
+# These conditions persist for tens of seconds, so the normal lock-retry
+# schedule (~7.5s total) times out before the runner recovers — they get a
+# slower, longer backoff schedule instead.
+_WINDOWS_SPAWN_FAILURE_EXIT_CODES = frozenset(
+    {
+        3221225794,  # 0xC0000142 STATUS_DLL_INIT_FAILED
+        3221225786,  # 0xC000013A STATUS_CONTROL_C_EXIT (host tearing processes down)
+        3221225781,  # 0xC0000135 STATUS_DLL_NOT_FOUND
+    }
+)
+
+
 def _with_retry(
     operation: Callable[[], tuple[bool, T | None, str]],
     max_retries: int = 3,
@@ -906,28 +920,44 @@ class WorktreeManager:
         add_args: list[str],
         worktree_path: Path,
         created_branch: str | None,
-        max_attempts: int = 3,
+        max_attempts: int = 7,
     ) -> subprocess.CompletedProcess:
         """Run ``git worktree add``, retrying transient (often Windows) failures.
 
-        ``git worktree add`` intermittently fails on Windows with a momentary
-        filesystem lock (and, on CI, an empty stderr). Between attempts any
-        partially-created worktree directory and branch are removed so the retry
-        starts from a clean slate. Returns the final ``CompletedProcess`` -- the
-        success, or the last failure for the caller to report.
+        Two transient failure classes, with different retry schedules:
+
+        - Momentary filesystem locks (antivirus/indexer during checkout, often
+          an empty stderr on CI): short exponential backoff — the lock clears
+          in well under a second.
+        - Windows process-spawn failures (STATUS_DLL_INIT_FAILED 0xC0000142
+          etc. on loaded GitHub runners): the runner-wide condition persists
+          for tens of seconds, so these get a slower schedule capped at 15s —
+          the previous ~7.5s total window expired before the runner recovered
+          and the test failed after all attempts.
+
+        Between attempts any partially-created worktree directory and branch
+        are removed so the retry starts from a clean slate. Returns the final
+        ``CompletedProcess`` -- the success, or the last failure for the caller
+        to report.
         """
         result = self._run_git(add_args)
         for attempt in range(1, max_attempts):
             if result.returncode == 0:
                 return result
-            if not _is_retryable_worktree_add_error(result.stderr):
+            is_spawn_failure = result.returncode in _WINDOWS_SPAWN_FAILURE_EXIT_CODES
+            if not (
+                is_spawn_failure or _is_retryable_worktree_add_error(result.stderr)
+            ):
                 return result
             print(
                 f"Worktree add failed (attempt {attempt}/{max_attempts}, "
                 f"git exit {result.returncode}); cleaning up and retrying..."
             )
             self._cleanup_partial_worktree(worktree_path, created_branch)
-            time.sleep(0.5 * attempt)
+            if is_spawn_failure:
+                time.sleep(min(2.0 * (2 ** (attempt - 1)), 15.0))
+            else:
+                time.sleep(min(0.5 * (2 ** (attempt - 1)), 5.0))
             result = self._run_git(add_args)
         return result
 

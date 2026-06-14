@@ -5,14 +5,32 @@
 import type { Subtask, SubtaskStatus } from "./types";
 
 /**
+ * Subtask statuses that count as "done" for progress purposes.
+ *
+ * Mirrors the backend `core/progress.py::count_subtasks`, which treats both
+ * "completed" and "blocked" as done: a blocked subtask (e.g. an e2e test that
+ * must be run manually) can't be processed by the agent, so it must not hold the
+ * build back nor make a finished build look incomplete (e.g. 2/3 at 67%).
+ */
+export const DONE_SUBTASK_STATUSES: ReadonlySet<string> = new Set([
+	"completed",
+	"blocked",
+]);
+
+/** True when a subtask is "done" (completed or blocked). */
+export function isSubtaskDone(status: string): boolean {
+	return DONE_SUBTASK_STATUSES.has(status);
+}
+
+/**
  * Calculate progress percentage from subtasks
  * @param subtasks Array of subtasks with status
  * @returns Progress percentage (0-100)
  */
 export function calculateProgress(subtasks: { status: string }[]): number {
 	if (subtasks.length === 0) return 0;
-	const completed = subtasks.filter((c) => c.status === "completed").length;
-	return Math.round((completed / subtasks.length) * 100);
+	const done = subtasks.filter((c) => isSubtaskDone(c.status)).length;
+	return Math.round((done / subtasks.length) * 100);
 }
 
 /**
@@ -27,6 +45,7 @@ export function countSubtasksByStatus(
 		pending: subtasks.filter((c) => c.status === "pending").length,
 		in_progress: subtasks.filter((c) => c.status === "in_progress").length,
 		completed: subtasks.filter((c) => c.status === "completed").length,
+		blocked: subtasks.filter((c) => c.status === "blocked").length,
 		failed: subtasks.filter((c) => c.status === "failed").length,
 	};
 }
@@ -41,15 +60,15 @@ export function determineOverallStatus(
 ): "not_started" | "in_progress" | "completed" | "failed" {
 	if (subtasks.length === 0) return "not_started";
 
-	const hasCompleted = subtasks.some((c) => c.status === "completed");
+	const hasDone = subtasks.some((c) => isSubtaskDone(c.status));
 	const hasFailed = subtasks.some((c) => c.status === "failed");
 	const hasInProgress = subtasks.some((c) => c.status === "in_progress");
-	const allCompleted = subtasks.every((c) => c.status === "completed");
+	const allDone = subtasks.every((c) => isSubtaskDone(c.status));
 	const allPending = subtasks.every((c) => c.status === "pending");
 
-	if (allCompleted) return "completed";
+	if (allDone) return "completed";
 	if (hasFailed) return "failed";
-	if (hasInProgress || hasCompleted) return "in_progress";
+	if (hasInProgress || hasDone) return "in_progress";
 	if (allPending) return "not_started";
 
 	return "in_progress";

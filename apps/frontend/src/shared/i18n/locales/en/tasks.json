@@ -59,7 +59,17 @@
 		"recovering": "Recovering...",
 		"needsRecovery": "Needs Recovery",
 		"needsResume": "Needs Resume",
-		"tdd": "TDD"
+		"tdd": "TDD",
+		"pipeline": "Pipeline",
+		"repairBuild": "Repair build",
+		"buildFailed": "Red build",
+		"openInTracker": "Open in {{tracker}}",
+		"currentPhase": "Current phase",
+		"compactedPhases": "{{count}} phases",
+		"sessionCompactionHint": "{{count}} execution phases — click to see the compacted summary",
+		"sessionCompaction": "Session Compaction",
+		"criticalPhases": "Key steps",
+		"lastError": "Last error"
 	},
 	"warnings": {
 		"stuck": {
@@ -124,6 +134,7 @@
 		"in_progress": "In Progress",
 		"ai_review": "AI Review",
 		"human_review": "Human Review",
+		"build_failed": "Red Build",
 		"done": "Done",
 		"pr_created": "PR Created",
 		"error": "Error"
@@ -133,6 +144,8 @@
 		"emptyBacklogHint": "Add a task to get started",
 		"emptyQueue": "Queue is empty",
 		"emptyQueueHint": "Tasks will wait here when parallel task limit is reached",
+		"emptyBuildFailed": "No red builds",
+		"emptyBuildFailedHint": "Tasks land here when their CI/CD pipeline fails — the agent repairs them automatically",
 		"emptyInProgress": "Nothing running",
 		"emptyInProgressHint": "Start a task from Planning",
 		"emptyAiReview": "No tasks in review",
@@ -197,6 +210,39 @@
 		"expandAll": "Expand all columns",
 		"azureDevOpsNotConnected": "Azure DevOps not connected — click to configure",
 		"jiraNotConnected": "Jira not connected — click to configure",
+		"filter": {
+			"button": "Filter",
+			"title": "Filters",
+			"clear": "Reset",
+			"clearSearch": "Clear search",
+			"searchPlaceholder": "Search tasks…",
+			"sourceLabel": "Source",
+			"categoryLabel": "Category",
+			"priorityLabel": "Priority",
+			"sources": {
+				"azure-devops": "Azure DevOps",
+				"jira": "Jira",
+				"linear": "Linear",
+				"github": "GitHub",
+				"gitlab": "GitLab",
+				"ideation": "Ideation",
+				"roadmap": "Roadmap",
+				"insights": "Insights",
+				"manual": "Manual"
+			}
+		},
+		"sort": {
+			"title": "Sort by",
+			"ascending": "Ascending",
+			"descending": "Descending",
+			"fields": {
+				"manual": "Manual order",
+				"priority": "Priority",
+				"created": "Created date",
+				"updated": "Last updated",
+				"title": "Title"
+			}
+		},
 		"quickCommand": {
 			"placeholder": "Quick command (e.g. /review, /help)",
 			"buttonLabel": "Run command",
@@ -290,6 +336,10 @@
 		"openInIDE": "Open in IDE"
 	},
 	"visualProof": {
+		"apiSmoke": {
+			"title": "API smoke —",
+			"summary": "{{passed}}/{{total}} endpoints OK"
+		},
 		"tab": "Visual proofs",
 		"title": "PR visual proof",
 		"emptyTitle": "No visual proof for this task",
@@ -499,8 +549,64 @@
 			}
 		}
 	},
+	"testGen": {
+		"title": "Tests for changed files",
+		"description": "Generates tests suited to each file type, written into the worktree and shipped with the PR.",
+		"generate_one": "Generate ({{count}})",
+		"generate_other": "Generate ({{count}})",
+		"strategy": {
+			"unit": "Unit",
+			"api": "API",
+			"e2e-web": "Web E2E",
+			"desktop-ui": "Desktop UI"
+		},
+		"written": "Written",
+		"failed": "Failed",
+		"emptyResult": "The generator produced no tests.",
+		"doneTitle": "Tests generated",
+		"doneDescription_one": "{{count}} test file written into the worktree.",
+		"doneDescription_other": "{{count}} test files written into the worktree."
+	},
+	"interview": {
+		"banner": "Clarify the spec before starting: the agent asks you 3-5 targeted questions.",
+		"openButton": "Spec interview",
+		"title": "Spec interview",
+		"description": "The agent analyzed the specification and asks the questions whose answers would change the implementation. Answer the ones you find useful — answers are appended to the spec.",
+		"generating": "Analyzing the spec and generating questions… (up to 1 min)",
+		"generationFailed": "Could not generate questions. Check your LLM credentials and try again.",
+		"retry": "Retry",
+		"answerPlaceholder": "Your answer (leave empty to skip this question)",
+		"useSuggestion": "Use suggestion",
+		"answeredCount": "{{answered}}/{{total}} answered",
+		"addToSpec": "Add to spec",
+		"addAndStart": "Add and start",
+		"sectionTitle": "Clarifications (interview)",
+		"savedTitle": "Spec enriched",
+		"savedDescription_one": "{{count}} answer added to the specification.",
+		"savedDescription_other": "{{count}} answers added to the specification.",
+		"saveErrorTitle": "Failed to save clarifications"
+	},
+	"reset": {
+		"button": "Reset task",
+		"confirmTitle": "Fully reset this task?",
+		"confirmDescription": "The plan, subtasks, worktree and all execution artifacts will be deleted (uncommitted work is auto-saved in git history). The spec is kept and the task goes back to the backlog. This action cannot be undone.",
+		"confirm": "Reset everything",
+		"cancel": "Cancel",
+		"resetting": "Resetting…",
+		"successTitle": "Task reset",
+		"successDescription": "The task is back in the backlog with its spec intact.",
+		"errorTitle": "Reset failed",
+		"errorDescription": "Could not reset the task. Check the logs for details."
+	},
 	"subtasks": {
 		"untitled": "Untitled subtask",
+		"completedCount": "{{completed}} of {{total}} completed",
+		"blockedCount_one": "{{count}} blocked",
+		"blockedCount_other": "{{count}} blocked",
+		"failedCount_one": "{{count}} failed",
+		"failedCount_other": "{{count}} failed",
+		"blockedReason": "Blocked: {{reason}}",
+		"blockedGeneric": "Blocked — needs manual attention",
 		"filesViewer": {
 			"filesModified_one": "{{count}} file modified",
 			"filesModified_other": "{{count}} files modified",
@@ -513,6 +619,10 @@
 			"viewDiff": "View changes",
 			"hideDiff": "Hide changes",
 			"noDiff": "No recorded changes for this file",
+			"viewMode": {
+				"unified": "Unified view",
+				"split": "Side-by-side view"
+			},
 			"stats": {
 				"files": "Files",
 				"folders": "Folders",
@@ -630,10 +740,18 @@
 			"providerSwitchInfoAria": "About switching the LLM",
 			"pauseToSwitchTooltip": "The task finishes the current step, then stops. You can then pick a provider and model and resume.",
 			"pauseUnavailableTooltip": "Hot switching is only available while the task is running. For steps that haven't started, pick the LLM directly in each phase's selectors above.",
-			"pauseRequestedTitle": "Pause requested",
-			"pauseRequestedDesc": "The task will stop once the current step finishes.",
+			"pauseRequestedTitle": "Task paused",
+			"pauseRequestedDesc": "Execution stopped immediately. Resume anytime to continue from the last checkpoint.",
 			"pauseFailed": "Failed to pause",
-			"pausingInProgress": "Pausing… finishing the current step",
+			"pausingInProgress": "Pausing…",
+			"pauseTask": "Pause",
+			"pausingShort": "Pausing…",
+			"pauseTooltip": "Pauses the task immediately — resumable anytime",
+			"resumeTooltip": "Resume execution from the pause checkpoint",
+			"stopTooltip": "Stops the task completely (in-progress work is not resumed)",
+			"resumeRequestedTitle": "Resuming task",
+			"resumeRequestedDesc": "The task picks up right where it left off.",
+			"resumeFailed": "Failed to resume",
 			"loadingProviders": "Loading providers…",
 			"noConfiguredProviders": "No provider configured. Add an API key in Settings.",
 			"chooseProvider": "Provider",
@@ -711,7 +829,12 @@
 			"approving": "Approving...",
 			"rejecting": "Rejecting...",
 			"rejectionReason": "Reason for changes (optional)",
-			"rejectionPlaceholder": "Describe what needs to be changed in the plan..."
+			"rejectionPlaceholder": "Describe what needs to be changed in the plan...",
+			"conflictsChecking": "Checking for file overlaps with parallel tasks...",
+			"conflictsNone": "No file overlap with other active tasks",
+			"conflictsTitle": "Potential conflicts with parallel tasks",
+			"conflictsDescription": "{{count}} file(s) in this plan are also touched by other active tasks. Merging both worktrees will likely conflict — consider finishing one task first or re-scoping the plan.",
+			"conflictsMoreFiles": "+{{count}} more file(s)"
 		}
 	}
 }

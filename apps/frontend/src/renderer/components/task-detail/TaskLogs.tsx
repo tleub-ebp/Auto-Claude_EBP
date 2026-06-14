@@ -38,6 +38,7 @@ import { useSettingsStore } from "../../stores/settings-store";
 import { THINKING_LEVELS } from "../../../shared/constants/models";
 import {
 	buildModelMetadataUpdate,
+	buildModelSelectOptions,
 	buildProviderMetadataUpdate,
 	buildThinkingMetadataUpdate,
 	LOG_PHASE_TO_CONFIG_PHASE,
@@ -461,23 +462,23 @@ export function TaskLogs({
 			    qui se déploient en pilule au survol pour révéler leur libellé. Le
 			    bouton « haut » apparaît dès qu'on s'éloigne du sommet, le bouton
 			    « bas » tant qu'on n'a pas atteint la fin des logs. */}
-			<div className="pointer-events-none absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2">
+			<div className="pointer-events-none absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center">
 				<button
 					type="button"
 					onClick={scrollToTop}
 					aria-label={t("tasks:logs.scrollToTop")}
 					title={t("tasks:logs.scrollToTopHint")}
 					className={cn(
-						"group flex items-center",
-						"rounded-full border border-border/60 bg-background/80 p-2.5",
+						"group flex items-center overflow-hidden",
+						"rounded-full border border-border/60 bg-background/80",
 						"text-muted-foreground shadow-lg shadow-black/20 backdrop-blur-md",
 						"transition-all duration-300 ease-out",
 						"hover:border-primary/50 hover:bg-background/90 hover:text-foreground",
 						"hover:shadow-primary/20",
 						"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
 						showScrollTop && isHoveringLogs
-							? "pointer-events-auto translate-y-0 scale-100 opacity-100"
-							: "pointer-events-none translate-y-3 scale-90 opacity-0",
+							? "pointer-events-auto mx-1 max-w-none p-2.5 translate-y-0 scale-100 opacity-100"
+							: "pointer-events-none mx-0 max-w-0 border-transparent p-0 translate-y-3 scale-90 opacity-0",
 					)}
 				>
 					<ArrowUp className="h-4 w-4 shrink-0 transition-transform duration-300 group-hover:-translate-y-0.5" />
@@ -492,16 +493,16 @@ export function TaskLogs({
 					aria-label={t("tasks:logs.scrollToBottom")}
 					title={t("tasks:logs.scrollToBottomHint")}
 					className={cn(
-						"group flex items-center",
-						"rounded-full border border-border/60 bg-background/80 p-2.5",
+						"group flex items-center overflow-hidden",
+						"rounded-full border border-border/60 bg-background/80",
 						"text-muted-foreground shadow-lg shadow-black/20 backdrop-blur-md",
 						"transition-all duration-300 ease-out",
 						"hover:border-primary/50 hover:bg-background/90 hover:text-foreground",
 						"hover:shadow-primary/20",
 						"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
 						showScrollBottom && isHoveringLogs
-							? "pointer-events-auto translate-y-0 scale-100 opacity-100"
-							: "pointer-events-none translate-y-3 scale-90 opacity-0",
+							? "pointer-events-auto mx-1 max-w-none p-2.5 translate-y-0 scale-100 opacity-100"
+							: "pointer-events-none mx-0 max-w-0 border-transparent p-0 translate-y-3 scale-90 opacity-0",
 					)}
 				>
 					<ArrowDown className="h-4 w-4 shrink-0 transition-transform duration-300 group-hover:translate-y-0.5" />
@@ -573,18 +574,20 @@ function PhaseLogSection({
 	}, [providers, phaseConfig?.provider]);
 
 	// Model options: catalog entries, augmented with the current model value so
-	// it remains selectable even if the live catalog hasn't loaded it.
-	const modelOptions = useMemo(() => {
-		const list = catalogModels.map((m) => ({ value: m.value, label: m.label }));
-		const current = phaseConfig?.modelValue;
-		if (current && !list.some((m) => m.value === current)) {
-			list.unshift({
-				value: current,
-				label: MODEL_SHORT_LABELS[current] || current,
-			});
-		}
-		return list;
-	}, [catalogModels, phaseConfig?.modelValue]);
+	// it remains selectable even if the live catalog hasn't loaded it. The
+	// dedupe-check compares by canonical identity (not raw `value`) so a model
+	// persisted under an alternate spelling (e.g. dotted "claude-opus-4.8" left
+	// over from another provider) collapses onto its single canonical catalog
+	// entry instead of appearing twice.
+	const { options: modelOptions, value: modelSelectValue } = useMemo(
+		() =>
+			buildModelSelectOptions(
+				catalogModels,
+				phaseConfig?.modelValue,
+				MODEL_SHORT_LABELS,
+			),
+		[catalogModels, phaseConfig?.modelValue],
+	);
 
 	// Memoize sorted entries to avoid re-calculating on every render
 	// Entries are naturally in chronological order (oldest first from append())
@@ -743,7 +746,7 @@ function PhaseLogSection({
 							{/* Model selector */}
 							{onModelChange ? (
 								<Select
-									value={phaseConfig.modelValue}
+									value={modelSelectValue}
 									onValueChange={(value) => onModelChange(phase, value)}
 									disabled={isSavingPhase}
 								>

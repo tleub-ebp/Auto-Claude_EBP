@@ -41,9 +41,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Pin ruff version to match local environment
+      # Keep in sync with the dev venv (pre-commit hook runs `python -m ruff`
+      # from it) — version drift here means "passes locally, fails in CI".
       - name: Install ruff
-        run: pip install ruff==0.15.0
+        run: pip install ruff==0.15.7
 
       - name: Run ruff check
         run: ruff check apps/backend/ --output-format=github
@@ -59,11 +60,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Pin version to match package.json for consistent behavior
+      # MUST match @biomejs/biome in apps/frontend/package.json — version
+      # drift here means "passes locally, fails in CI" (e.g. 2.3.11 flagged
+      # useHookAtTopLevel cases that 2.4.10 accepts).
       - name: Setup Biome
         uses: biomejs/setup-biome@v2
         with:
-          version: 2.3.11
+          version: 2.4.10
 
       - name: Run Biome
         working-directory: apps/frontend

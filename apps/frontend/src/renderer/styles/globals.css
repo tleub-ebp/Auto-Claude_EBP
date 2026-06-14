@@ -105,6 +105,9 @@
 /* CSS variables for light mode (secondary consideration per design system) */
 :root {
   /* Light Mode - Warm off-white tones */
+  /* Native widgets (unstyled scrollbars, form controls) must follow the mode,
+   * otherwise Chromium falls back to light-scheme rendering on dark themes. */
+  color-scheme: light;
   --background: #F2F2ED;
   --foreground: #0B0B0F;
 
@@ -163,6 +166,7 @@
 
 /* Dark Mode - Oscura Midnight (Default/Primary theme per design system) */
 .dark {
+  color-scheme: dark;
   /* Near-black backgrounds - OLED optimized */
   --background: #0B0B0F;
   --foreground: #E6E6E6;
@@ -1094,10 +1098,13 @@ body {
   background-color: #1A1A1F;
 }
 
-/* Custom scrollbar - following design system */
+/* Custom scrollbar - following design system.
+ * Discreet rounded "capsule": the thumb is inset via a transparent border with
+ * background-clip: padding-box so it reads as a themed pill, not a flat gray
+ * bar. 10px matches the app's ScrollArea component for a consistent look. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 
 /* Scroll anchoring - prevent scroll position jumps during DOM updates
@@ -1120,23 +1127,71 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--muted-foreground);
-  opacity: 0.3;
+  /* `opacity` is ignored on scrollbar parts — encode alpha in the color.
+   * Derive from --muted-foreground so the thumb follows every theme
+   * (light/dark and each data-theme palette) instead of a hardcoded gray. */
+  background-color: color-mix(in srgb, var(--muted-foreground) 35%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
   border-radius: var(--radius-full);
-  transition: background 0.2s;
+  transition: background-color 0.2s;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  opacity: 0.5;
+  background-color: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
 }
 
-.dark ::-webkit-scrollbar-thumb {
-  background: rgba(134, 143, 151, 0.3);
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(134, 143, 151, 0.5);
+/* Diff viewer scrollbars — discreet, theme-matched, revealed on hover.
+ *
+ * The unified/split diff wraps each line in its own `overflow-x` container, so
+ * an always-on native scrollbar per cell reads as noisy gray clutter. Keep the
+ * track invisible and the thumb transparent at rest, then surface a thin rounded
+ * thumb only while the diff (or the thumb itself) is hovered. Scoped to
+ * `.diff-viewer` so every diff in the app (subtask files, PR files, diff dialog)
+ * gets the same treatment, plus a reusable `.themed-scrollbar` opt-in class.
+ * The thumb color matches the app's dark scrollbar (var(--muted-foreground)). */
+.themed-scrollbar::-webkit-scrollbar,
+.diff-viewer ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
+
+.themed-scrollbar::-webkit-scrollbar-track,
+.diff-viewer ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb,
+.diff-viewer ::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius-full);
+  transition: background-color 0.15s ease;
+}
+
+.themed-scrollbar:hover::-webkit-scrollbar-thumb,
+.diff-viewer:hover ::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted-foreground) 40%, transparent);
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb:hover,
+.diff-viewer ::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
+}
+
+.themed-scrollbar::-webkit-scrollbar-corner,
+.diff-viewer ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* No `scrollbar-width` / `scrollbar-color` fallback here: on Chromium >= 121
+ * (Electron) setting either one DISABLES all ::-webkit-scrollbar-* styling on
+ * the element, which replaced the rules above with the native scrollbar. */
 
 /* Electron window dragging area */
 .electron-drag {

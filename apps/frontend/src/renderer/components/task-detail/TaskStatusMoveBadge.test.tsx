@@ -1,7 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { Task } from "../../../shared/types";
+import { TooltipProvider } from "../ui/tooltip";
 import { TaskStatusMoveBadge } from "./TaskStatusMoveBadge";
 
 // Mock i18n : renvoie la clé (ou le 2e argument en fallback) afin que les
@@ -16,9 +18,15 @@ function makeTask(status: Task["status"]): Task {
 	return { id: "task-1", status } as unknown as Task;
 }
 
+// Le badge utilise un Tooltip Radix qui exige un TooltipProvider ancêtre
+// (fourni par la modale en production).
+function renderBadge(ui: ReactElement) {
+	return render(<TooltipProvider>{ui}</TooltipProvider>);
+}
+
 describe("TaskStatusMoveBadge", () => {
 	it("affiche le libellé de la colonne courante et le déclencheur de déplacement", () => {
-		render(
+		renderBadge(
 			<TaskStatusMoveBadge
 				task={makeTask("in_progress")}
 				variant="info"
@@ -36,7 +44,7 @@ describe("TaskStatusMoveBadge", () => {
 	});
 
 	it("utilise le libellé personnalisé pour les états spéciaux (Bloqué)", () => {
-		render(
+		renderBadge(
 			<TaskStatusMoveBadge
 				task={makeTask("in_progress")}
 				variant="warning"

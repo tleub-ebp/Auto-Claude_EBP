@@ -227,6 +227,30 @@ class TaskMetadataConfig(TypedDict, total=False):
 Phase = Literal["spec", "planning", "coding", "qa"]
 
 
+# Dotted Claude model ids are the Copilot/Windsurf spelling (e.g.
+# "claude-opus-4.8", "claude-sonnet-4.6"). The Anthropic API only accepts the
+# dash-separated form ("claude-opus-4-8"), so a dotted id left in
+# task_metadata.json after switching a task back from Copilot to Anthropic is
+# rejected with "model ... may not exist". This regex matches the dotted version
+# separator on a Claude id so it can be rewritten to the native dashed form.
+_DOTTED_CLAUDE_VERSION_RE = re.compile(r"^(claude-(?:opus|sonnet|haiku)-\d+)\.(\d+)")
+
+
+def normalize_anthropic_model_id(model: str) -> str:
+    """Rewrite a dotted Claude model id to its Anthropic-native dashed form.
+
+    ``"claude-opus-4.8"`` → ``"claude-opus-4-8"``;
+    ``"claude-sonnet-4.6"`` → ``"claude-sonnet-4-6"``.
+
+    Ids that don't match the dotted Claude pattern (including non-Claude models
+    and already-dashed ids) are returned unchanged. Only call this when the model
+    is destined for Anthropic — Copilot/Windsurf keep the dotted spelling.
+    """
+    if not model:
+        return model
+    return _DOTTED_CLAUDE_VERSION_RE.sub(r"\1-\2", model)
+
+
 def resolve_model_id(model: str) -> str:
     """
     Resolve a model shorthand (haiku, sonnet, opus) to a full model ID.
@@ -261,6 +285,25 @@ def resolve_model_id(model: str) -> str:
 
     # Already a full model ID or unknown shorthand
     return model
+
+
+# Reverse of THINKING_BUDGET_MAP, to label a thinking budget (tokens) back as
+# its effort level (none/low/medium/high/ultrathink) for display/tracing.
+_BUDGET_TO_THINKING_LEVEL: dict[int | None, str] = {
+    budget: level for level, budget in THINKING_BUDGET_MAP.items()
+}
+
+
+def thinking_level_from_budget(budget: int | None) -> str:
+    """Map a thinking budget (tokens) back to its effort level name.
+
+    Inverse of ``get_thinking_budget`` / ``THINKING_BUDGET_MAP``. Unknown budgets
+    (custom token counts) are rendered as ``"<n> tokens"`` so the trace still
+    carries the information.
+    """
+    if budget in _BUDGET_TO_THINKING_LEVEL:
+        return _BUDGET_TO_THINKING_LEVEL[budget]
+    return f"{budget} tokens"
 
 
 def get_thinking_budget(thinking_level: str) -> int | None:
@@ -385,9 +428,11 @@ def _resolve_provider_model(model: str, provider: str | None) -> str:
     Returns:
         Full model ID ready for the API
     """
-    # Anthropic/Claude shorthands need resolution
+    # Anthropic/Claude shorthands need resolution. Also normalize any dotted
+    # Copilot-style Claude id (e.g. "claude-opus-4.8") to the dashed Anthropic
+    # form before it reaches the API, which rejects the dotted spelling.
     if not provider or provider in ("anthropic", "claude"):
-        return resolve_model_id(model)
+        return resolve_model_id(normalize_anthropic_model_id(model))
 
     # For non-Anthropic providers, check if it's a Claude shorthand
     # (could happen if user switched providers but metadata still has "sonnet")
@@ -403,7 +448,11 @@ def _resolve_provider_model(model: str, provider: str | None) -> str:
     # This happens when a task was started with Anthropic and its task_metadata.json
     # still contains the old versioned model after the provider was switched.
     # Fall back to the provider's default model instead of sending an invalid ID.
-    if re.match(r"^claude-(opus|sonnet|haiku)-\d+-\d", model):
+    # The « Mythos-class » family (claude-fable-5, claude-mythos-5) has a single
+    # version group and is matched by a second pattern.
+    if re.match(r"^claude-(opus|sonnet|haiku)-\d+-\d", model) or re.match(
+        r"^claude-(fable|mythos)-\d", model
+    ):
         provider_defaults = PROVIDER_DEFAULT_MODELS.get(provider, {})
         fallback = provider_defaults.get("spec") or provider_defaults.get("coding")
         if fallback:
@@ -569,8 +618,9 @@ def get_phase_thinking(
 
     Priority:
     1. CLI argument (if provided)
-    2. Phase-specific config from task_metadata.json (if auto profile)
-    3. Single thinking level from task_metadata.json (if not auto profile)
+    2. Per-phase thinking from task_metadata.json (phaseThinking[phase]) whenever
+       present — regardless of isAutoProfile
+    3. Single thinking level from task_metadata.json
     4. Default phase configuration
 
     Args:
@@ -589,12 +639,17 @@ def get_phase_thinking(
     metadata = load_task_metadata(spec_dir)
 
     if metadata:
-        # Check for auto profile with phase-specific config
-        if metadata.get("isAutoProfile") and metadata.get("phaseThinking"):
-            phase_thinking = metadata["phaseThinking"]
-            return phase_thinking.get(phase, DEFAULT_PHASE_THINKING[phase])
+        # Per-phase thinking wins whenever the phase is present — regardless of
+        # isAutoProfile. This mirrors the frontend selector, whose `getPhaseConfig`
+        # reads `metadata.phaseThinking[phase]` unconditionally. A single-model
+        # resume (RESUME_WITH_PROVIDER sets isAutoProfile=false to force its chosen
+        # model) must keep honouring the per-phase effort the user still sees;
+        # otherwise the UI shows e.g. "Low" while the run uses the "high" default.
+        phase_thinking = metadata.get("phaseThinking") or {}
+        if phase_thinking.get(phase):
+            return phase_thinking[phase]
 
-        # Non-auto profile: use single thinking level
+        # Otherwise honour a single thinking level if one was set.
         if metadata.get("thinkingLevel"):
             return metadata["thinkingLevel"]
 

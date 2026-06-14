@@ -38,6 +38,7 @@ import type {
 import type { AgentManager } from "../../agent";
 import { getAppLanguage } from "../../app-language";
 import { appLog } from "../../app-logger";
+import { learningLoopService } from "../../learning-loop-service";
 import {
 	type ClaudeProfileManager,
 	initializeClaudeProfileManager,
@@ -77,6 +78,50 @@ function requiresClaudeAuth(): boolean {
 		selectedProvider === "claude" ||
 		selectedProvider === "anthropic"
 	);
+}
+
+/**
+ * Feed the learning loop with a human review verdict, inferred from a kanban
+ * status transition. Fire-and-forget — never blocks the status change.
+ *
+ * - Approved: a reviewed task moves forward to done/pr_created.
+ * - Rejected: a task in human_review is sent back to an earlier column
+ *   (the reviewer wants rework).
+ */
+function recordReviewVerdictForLearning(
+	previousStatus: TaskStatus,
+	newStatus: TaskStatus,
+	project: Project,
+	task: Task,
+): void {
+	try {
+		const movingForwardToDone =
+			(newStatus === "done" || newStatus === "pr_created") &&
+			(previousStatus === "human_review" || previousStatus === "ai_review");
+
+		const sentBackFromReview =
+			previousStatus === "human_review" &&
+			(newStatus === "backlog" ||
+				newStatus === "queue" ||
+				newStatus === "in_progress");
+
+		if (movingForwardToDone) {
+			learningLoopService.recordTaskOutcome(
+				project.path,
+				task.specId,
+				"approved",
+			);
+		} else if (sentBackFromReview) {
+			learningLoopService.recordTaskOutcome(
+				project.path,
+				task.specId,
+				"rejected",
+				"Human reviewer sent the task back for rework.",
+			);
+		}
+	} catch (err) {
+		console.warn("[TASK_UPDATE_STATUS] Learning outcome recording failed:", err);
+	}
 }
 
 /**
@@ -815,13 +860,37 @@ export function registerTaskExecutionHandlers(
 	 * Stop a task
 	 */
 	ipcMain.on(IPC_CHANNELS.TASK_STOP, (_, taskId: string) => {
-		agentManager.killTask(taskId);
+		// haltTask (not killTask) also unregisters the task from the
+		// OperationRegistry so a proactive profile-swap can't resurrect it after
+		// the user stopped it.
+		agentManager.haltTask(taskId);
 		fileWatcher.unwatch(taskId);
 
 		// Find task and project to emit USER_STOPPED with plan context
 		const { task, project } = findTaskAndProject(taskId);
 
 		if (!task || !project) return;
+
+		// Clear any cooperative-pause flag so a stopped task isn't left looking
+		// "paused" after it transitions out (e.g. to human_review).
+		try {
+			const planPaths = getPlanPaths(getSpecPaths(task, project), project);
+			for (const planFile of planPaths.all) {
+				if (!existsSync(planFile)) continue;
+				const plan = JSON.parse(readFileSync(planFile, "utf-8"));
+				if (plan.paused?.enabled) {
+					plan.paused = {
+						...plan.paused,
+						enabled: false,
+						paused_at: null,
+						paused_subtask_id: null,
+					};
+					writeFileSync(planFile, JSON.stringify(plan, null, 2));
+				}
+			}
+		} catch (err) {
+			appLog.warn(`[TASK_STOP] Could not clear pause flag for ${taskId}:`, err);
+		}
 
 		let hasPlan = false;
 		try {
@@ -1482,6 +1551,24 @@ print(json.dumps(result))
 			const specDir = path.join(project.path, specsBaseDir, task.specId);
 			const planPath = getPlanPath(project, task);
 
+			// Validate status transition - 'ai_review' relaunches the QA validation,
+			// which needs a spec and an implementation plan to validate against.
+			// Validated BEFORE persisting: otherwise the task would be stored as
+			// ai_review with no process and immediately flagged as stuck.
+			if (status === "ai_review" && !agentManager.isRunning(taskId)) {
+				const specFileForQa = path.join(specDir, AUTO_BUILD_PATHS.SPEC_FILE);
+				if (!existsSync(specFileForQa) || task.subtasks.length === 0) {
+					console.warn(
+						`[TASK_UPDATE_STATUS] Blocked attempt to set status 'ai_review' for task ${taskId}. No spec or implementation plan to validate.`,
+					);
+					return {
+						success: false,
+						error:
+							"Cannot start AI review - the task has no spec or implementation plan yet. The task must be implemented before QA validation.",
+					};
+				}
+			}
+
 			try {
 				const handledByMachine = taskStateManager.handleManualStatusChange(
 					taskId,
@@ -1505,6 +1592,10 @@ print(json.dumps(result))
 					}
 				}
 
+				// Feed the learning loop with the human verdict on a reviewed task.
+				// `task.status` is still the pre-change status here.
+				recordReviewVerdictForLearning(task.status, status, project, task);
+
 				// Auto-stop task when status changes AWAY from 'in_progress' and process IS running
 				// This handles the case where user drags a running task back to Planning/backlog
 				if (status !== "in_progress" && agentManager.isRunning(taskId)) {
@@ -1513,6 +1604,98 @@ print(json.dumps(result))
 						taskId,
 					);
 					agentManager.killTask(taskId);
+				}
+
+				// Auto-start QA validation when status changes to 'ai_review' and no
+				// process is running. Without this, moving a task to "AI Review" only
+				// persists the status while the renderer's stuck-detection expects a
+				// live process — the task would show as "needs recovery" after 60s.
+				// (killTask above removes process tracking synchronously, so a task
+				// dragged straight from in_progress lands here with isRunning false.)
+				if (status === "ai_review" && !agentManager.isRunning(taskId)) {
+					const mainWindow = getMainWindow();
+
+					// Check git status before auto-starting
+					const gitStatusCheckForQa = checkGitStatus(project.path);
+					if (!gitStatusCheckForQa.isGitRepo || !gitStatusCheckForQa.hasCommits) {
+						console.warn(
+							"[TASK_UPDATE_STATUS] Git check failed, cannot start QA validation",
+						);
+						if (mainWindow) {
+							mainWindow.webContents.send(
+								IPC_CHANNELS.TASK_ERROR,
+								taskId,
+								gitStatusCheckForQa.error ||
+									"Git repository with commits required to run tasks.",
+							);
+						}
+						return {
+							success: false,
+							error: gitStatusCheckForQa.error || "Git repository required",
+						};
+					}
+
+					// Check authentication before auto-starting
+					const initResultForQa = await ensureProfileManagerInitialized();
+					if (!initResultForQa.success) {
+						if (mainWindow) {
+							mainWindow.webContents.send(
+								IPC_CHANNELS.TASK_ERROR,
+								taskId,
+								initResultForQa.error,
+							);
+						}
+						return { success: false, error: initResultForQa.error };
+					}
+					if (
+						requiresClaudeAuth() &&
+						!initResultForQa.profileManager.hasValidAuth()
+					) {
+						console.warn(
+							"[TASK_UPDATE_STATUS] No valid authentication for active profile",
+						);
+						if (mainWindow) {
+							mainWindow.webContents.send(
+								IPC_CHANNELS.TASK_ERROR,
+								taskId,
+								"Claude authentication required. Please go to Settings > Claude Profiles and authenticate your account, or set an OAuth token.",
+							);
+						}
+						return { success: false, error: "Claude authentication required" };
+					}
+
+					console.warn(
+						"[TASK_UPDATE_STATUS] Starting QA validation for:",
+						task.specId,
+					);
+
+					// Start file watcher for this task
+					fileWatcher.watch(taskId, specDir);
+
+					// Synchronise le provider avec le projet (permet le switch de provider entre deux runs)
+					const prevProviderForQa = syncTaskProvider(task, project, specDir);
+					if (prevProviderForQa) {
+						console.warn(
+							`[TASK_UPDATE_STATUS] Provider switched: ${prevProviderForQa} -> ${task.metadata?.provider}`,
+						);
+					}
+
+					await agentManager.startQAProcess(
+						taskId,
+						project.path,
+						task.specId,
+						project.id,
+					);
+
+					// Notify renderer about status change
+					if (mainWindow) {
+						mainWindow.webContents.send(
+							IPC_CHANNELS.TASK_STATUS_CHANGE,
+							taskId,
+							"ai_review",
+							project.id,
+						);
+					}
 				}
 
 				// Auto-start task when status changes to 'in_progress' and no process is running
@@ -2835,10 +3018,21 @@ print(json.dumps(result))
 				// UI uses that to switch the controls into the paused state.
 				projectStore.invalidateTasksCache(project.id);
 
+				// Immediate pause: stop the running subprocess NOW rather than waiting
+				// for the backend to reach the next cooperative checkpoint (end of the
+				// current step). haltTask marks the spawn as killed (its exit handler
+				// returns early WITHOUT emitting "exit" — no PROCESS_EXITED/USER_STOPPED,
+				// so the card keeps its current column) AND unregisters the task from the
+				// OperationRegistry so the proactive profile-swap / usage monitor can't
+				// resurrect the paused process when a token limit is hit. The paused flag
+				// written above drives the UI and a clean resume (the in-flight step
+				// re-runs, re-registering the task).
+				const wasRunning = agentManager.haltTask(taskId);
+
 				appLog.info(
-					`[TASK_PAUSE] Pause requested for task ${taskId} at subtask ` +
-						`${subtaskId || "none"} (${written} plan cop[y/ies]). The backend ` +
-						`finishes the current step, then stops.`,
+					`[TASK_PAUSE] Task ${taskId} paused immediately at subtask ` +
+						`${subtaskId || "none"} (${written} plan cop[y/ies]); ` +
+						`subprocess ${wasRunning ? "killed" : "was not running"}.`,
 				);
 
 				return {

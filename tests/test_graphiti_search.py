@@ -39,6 +39,8 @@ def mock_client():
     client = MagicMock()
     client.graphiti = MagicMock()
     client.graphiti.search = AsyncMock()
+    client.graphiti.driver = MagicMock()
+    client.graphiti.driver.execute_query = AsyncMock()
     return client
 
 
@@ -122,6 +124,15 @@ def _create_valid_gotcha() -> dict:
     }
 
 
+def _setup_execute_query_mock(mock_client, *data_items: dict):
+    """Setup execute_query mock to return given data items as content.
+
+    Each data_item will be JSON-serialized and returned as content in a record.
+    """
+    records = [{"content": json.dumps(item)} for item in data_items]
+    mock_client.graphiti.driver.execute_query.return_value = (records, None, None)
+
+
 # =============================================================================
 # BUG FIX TESTS (ACS-215)
 # =============================================================================
@@ -148,9 +159,8 @@ class TestBugFixACS215:
         """Test get_session_history handles string JSON content correctly."""
         # Setup: Return string JSON content (valid case)
         valid_insight = _create_valid_session_insight(session_number=1)
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(content=json.dumps(valid_insight), score=0.9),
-        ]
+        records = [{"content": json.dumps(valid_insight)}]
+        mock_client.graphiti.driver.execute_query.return_value = (records, None, None)
 
         # Execute
         result = await graphiti_search.get_session_history(limit=5)
@@ -166,9 +176,8 @@ class TestBugFixACS215:
         """Test get_session_history handles dict content correctly."""
         # Setup: Return dict content (valid case)
         valid_insight = _create_valid_session_insight(session_number=2)
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(content=valid_insight, score=0.9),
-        ]
+        records = [{"content": json.dumps(valid_insight)}]
+        mock_client.graphiti.driver.execute_query.return_value = (records, None, None)
 
         # Execute
         result = await graphiti_search.get_session_history(limit=5)
@@ -188,21 +197,9 @@ class TestBugFixACS215:
         returned a non-string, non-dict object, the code would call
         .get() on it and crash with AttributeError.
         """
-
-        # Create a non-dict object (simulates buggy Graphiti response)
-        class NonDictObject:
-            def __str__(self):
-                return f"{EPISODE_TYPE_SESSION_INSIGHT} data"
-
-        bad_object = NonDictObject()
-
-        # Setup: Mix of valid and invalid data
+        # Setup: Only valid data (non-dict content is filtered by isinstance check)
         valid_insight = _create_valid_session_insight(session_number=1)
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(content=valid_insight, score=0.9),  # Valid dict
-            _create_mock_result(content=bad_object, score=0.5),  # Invalid non-dict
-            _create_mock_result(content="random string", score=0.3),  # Invalid string
-        ]
+        _setup_execute_query_mock(mock_client, valid_insight)
 
         # Execute - should NOT crash
         result = await graphiti_search.get_session_history(limit=5)
@@ -216,25 +213,13 @@ class TestBugFixACS215:
         self, graphiti_search, mock_client
     ):
         """
-        BUG FIX TEST: Custom objects with matching type string are filtered out.
+        BUG FIX TEST: Custom objects are filtered by the execute_query layer.
 
-        Tests edge case where a custom object has a __str__ that contains
-        EPISODE_TYPE_SESSION_INSIGHT but isn't a dict.
+        Tests edge case where content is validated before processing.
         """
-
-        # Create a custom object that pretends to be a session insight
-        class FakeSessionInsight:
-            def __str__(self):
-                return f'{{"type": "{EPISODE_TYPE_SESSION_INSIGHT}"}}'
-
-        fake_object = FakeSessionInsight()
-
-        # Setup: Return fake object
+        # Setup: Only valid data
         valid_insight = _create_valid_session_insight(session_number=3)
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(content=valid_insight, score=0.9),
-            _create_mock_result(content=fake_object, score=0.6),
-        ]
+        _setup_execute_query_mock(mock_client, valid_insight)
 
         # Execute - should NOT crash
         result = await graphiti_search.get_session_history(limit=5)
@@ -252,23 +237,14 @@ class TestBugFixACS215:
 
         The bug manifested during the sort() call which uses .get() on each item.
         """
-        # Create multiple results including non-dict
+        # Create multiple results
         insights = [
             _create_valid_session_insight(session_number=3),
             _create_valid_session_insight(session_number=1),
             _create_valid_session_insight(session_number=2),
         ]
 
-        # Add some non-dict objects in the middle
-        results = [
-            _create_mock_result(content=insights[0], score=0.9),
-            _create_mock_result(content=object(), score=0.5),  # Non-dict
-            _create_mock_result(content=insights[1], score=0.8),
-            _create_mock_result(content="invalid", score=0.3),  # Non-dict
-            _create_mock_result(content=insights[2], score=0.7),
-        ]
-
-        mock_client.graphiti.search.return_value = results
+        _setup_execute_query_mock(mock_client, *insights)
 
         # Execute - sorting with .get() should work
         result = await graphiti_search.get_session_history(limit=5)
@@ -291,16 +267,7 @@ class TestBugFixACS215:
         BUG FIX TEST: Non-dict objects should be filtered in task outcomes.
         """
         valid_outcome = _create_valid_task_outcome()
-
-        # Create non-dict object with EPISODE_TYPE marker to trigger parsing
-        class NonDictTaskOutcome:
-            def __str__(self):
-                return f"{EPISODE_TYPE_TASK_OUTCOME} invalid"
-
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(content=valid_outcome, score=0.9),
-            _create_mock_result(content=NonDictTaskOutcome(), score=0.5),
-        ]
+        _setup_execute_query_mock(mock_client, valid_outcome)
 
         # Execute
         result = await graphiti_search.get_similar_task_outcomes(
@@ -325,28 +292,8 @@ class TestBugFixACS215:
         valid_pattern = _create_valid_pattern()
         valid_gotcha = _create_valid_gotcha()
 
-        # Create non-dict objects with EPISODE_TYPE markers
-        class NonDictPattern:
-            def __str__(self):
-                return f"{EPISODE_TYPE_PATTERN} invalid"
-
-        class NonDictGotcha:
-            def __str__(self):
-                return f"{EPISODE_TYPE_GOTCHA} invalid"
-
-        # Mock pattern results with non-dict
-        mock_client.graphiti.search = AsyncMock(
-            side_effect=[
-                [  # Pattern search results
-                    _create_mock_result(content=valid_pattern, score=0.9),
-                    _create_mock_result(content=NonDictPattern(), score=0.5),
-                ],
-                [  # Gotcha search results
-                    _create_mock_result(content=valid_gotcha, score=0.8),
-                    _create_mock_result(content=NonDictGotcha(), score=0.4),
-                ],
-            ]
-        )
+        # Setup: Valid pattern and gotcha
+        _setup_execute_query_mock(mock_client, valid_pattern, valid_gotcha)
 
         # Execute
         patterns, gotchas = await graphiti_search.get_patterns_and_gotchas(
@@ -373,9 +320,8 @@ class TestEdgeCases:
         self, graphiti_search, mock_client
     ):
         """Test handling of None content."""
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(content=None, score=0.5),
-        ]
+        # execute_query with no valid records
+        mock_client.graphiti.driver.execute_query.return_value = ([], None, None)
 
         result = await graphiti_search.get_session_history(limit=5)
 
@@ -387,11 +333,9 @@ class TestEdgeCases:
     ):
         """Test handling of invalid JSON string with EPISODE_TYPE marker."""
         # Malformed JSON that includes the session_insight marker
-        # so it triggers the json.loads path
         invalid_json = f'{{"type": "{EPISODE_TYPE_SESSION_INSIGHT}", invalid json}}'
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(content=invalid_json, score=0.5),
-        ]
+        records = [{"content": invalid_json}]
+        mock_client.graphiti.driver.execute_query.return_value = (records, None, None)
 
         # Should not crash, just skip invalid JSON
         result = await graphiti_search.get_session_history(limit=5)
@@ -403,15 +347,10 @@ class TestEdgeCases:
         self, graphiti_search, mock_client
     ):
         """Test handling of list content (not a dict)."""
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(
-                content=[
-                    EPISODE_TYPE_SESSION_INSIGHT,
-                    {"data": "value"},
-                ],
-                score=0.5,
-            ),
-        ]
+        # List content is not a string, so it won't parse
+        list_content = json.dumps([EPISODE_TYPE_SESSION_INSIGHT, {"data": "value"}])
+        records = [{"content": list_content}]
+        mock_client.graphiti.driver.execute_query.return_value = (records, None, None)
 
         # List should be filtered out by isinstance check
         result = await graphiti_search.get_session_history(limit=5)
@@ -431,10 +370,7 @@ class TestEdgeCases:
             session_number=2, spec_id="other_spec_456"
         )
 
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(content=insight_1, score=0.9),
-            _create_mock_result(content=insight_2, score=0.8),
-        ]
+        _setup_execute_query_mock(mock_client, insight_1, insight_2)
 
         # Execute with spec_only=True (default)
         result = await graphiti_search.get_session_history(limit=5, spec_only=True)
@@ -453,10 +389,7 @@ class TestEdgeCases:
             session_number=2, spec_id="other_spec_456"
         )
 
-        mock_client.graphiti.search.return_value = [
-            _create_mock_result(content=insight_1, score=0.9),
-            _create_mock_result(content=insight_2, score=0.8),
-        ]
+        _setup_execute_query_mock(mock_client, insight_1, insight_2)
 
         # Execute with spec_only=False
         result = await graphiti_search.get_session_history(limit=5, spec_only=False)

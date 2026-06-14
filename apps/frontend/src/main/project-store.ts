@@ -30,6 +30,7 @@ import type {
 	TaskMetadata,
 	TaskStatus,
 } from "../shared/types";
+import { isSubtaskDone } from "../shared/progress";
 import { stripAcceptanceCriteriaSection } from "../shared/utils/acceptance-criteria";
 import { extractSubtaskFiles } from "../shared/utils/subtask-files";
 import { isMeaningfulFeatureTitle } from "../shared/utils/task-title";
@@ -1046,6 +1047,7 @@ export class ProjectStore {
 					description: subtask.description,
 					status: subtask.status,
 					files: extractSubtaskFiles(subtask),
+					blockedReason: subtask.blocked_reason,
 				}));
 			}) || []
 		);
@@ -1315,8 +1317,10 @@ export class ProjectStore {
 			return { status: finalStatus, reviewReason: finalReviewReason };
 		}
 
-		const completedCount = subtasks.filter(
-			(s) => s.status === "completed",
+		// Count completed OR blocked as done (matches the backend): a build with a
+		// blocked subtask (e.g. a manual e2e test) is still fully handled.
+		const completedCount = subtasks.filter((s) =>
+			isSubtaskDone(s.status),
 		).length;
 		const allCompleted = completedCount === subtasks.length;
 
@@ -1415,6 +1419,7 @@ export class ProjectStore {
 			error: "error",
 			queue: "queue",
 			queued: "queue",
+			build_failed: "build_failed",
 		};
 
 		const storedStatus = statusMap[plan.status] || "backlog";

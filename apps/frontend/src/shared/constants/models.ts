@@ -26,6 +26,12 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 	// ---- Anthropic (Claude) ----
 	anthropic: [
 		{
+			value: "claude-fable-5",
+			label: "Claude Fable 5",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
 			value: "claude-opus-4-8",
 			label: "Claude Opus 4.8",
 			tier: "flagship",
@@ -365,6 +371,12 @@ export const PROVIDER_MODELS_MAP: Record<string, ProviderModel[]> = {
 			supportsThinking: true,
 		},
 		{
+			value: "anthropic.claude-fable-5",
+			label: "Claude Fable 5 (Bedrock)",
+			tier: "flagship",
+			supportsThinking: true,
+		},
+		{
 			value: "anthropic.claude-opus-4-7-v1",
 			label: "Claude Opus 4.7 (Bedrock)",
 			tier: "flagship",
@@ -548,9 +560,16 @@ export function getDefaultModelForProvider(provider: string): string {
  * nom du modèle (`-\d+-\d`), ce qui distingue la forme Anthropic (tirets) de la
  * forme Copilot (point). Ce comportement reflète celui du backend
  * (`phase_config._resolve_provider_model`).
+ *
+ * Les modèles « Mythos-class » natifs Anthropic (`claude-fable-5`,
+ * `claude-mythos-5`) n'ont qu'un seul groupe de version et sont détectés via un
+ * second motif dédié (`-\d` au lieu de `-\d+-\d`).
  */
 export function isAnthropicNativeVersionedModelId(model: string): boolean {
-	return /^claude-(opus|sonnet|haiku)-\d+-\d/.test(model);
+	return (
+		/^claude-(opus|sonnet|haiku)-\d+-\d/.test(model) ||
+		/^claude-(fable|mythos)-\d/.test(model)
+	);
 }
 
 // ============================================

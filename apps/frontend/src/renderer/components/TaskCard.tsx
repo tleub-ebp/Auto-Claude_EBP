@@ -3,6 +3,7 @@ import {
 	AlertTriangle,
 	Archive,
 	Bug,
+	CheckCircle2,
 	Clock,
 	FileCode,
 	FileText,
@@ -22,11 +23,14 @@ import {
 	Target,
 	Wrench,
 	X,
+	XCircle,
 	type Zap,
 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useFormatRelativeTime } from "@/hooks/useFormatRelativeTime";
+import AzureDevOpsLogo from "../assets/logos/azure-devops.svg";
+import JiraLogo from "../assets/logos/jira.svg";
 import {
 	EXECUTION_PHASE_BADGE_COLORS,
 	EXECUTION_PHASE_LABELS,
@@ -66,11 +70,13 @@ import {
 	useTaskStore,
 } from "../stores/task-store";
 import { PhaseProgressIndicator } from "./PhaseProgressIndicator";
+import { SessionCompactionBadge } from "./SessionCompactionBadge";
 import { StreamingSessionButton } from "./streaming/StreamingSessionButton";
 import { SyncFromBranchDialog } from "./task-detail/task-review/SyncFromBranchDialog";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
+import { FormulaBadge } from "./formula-lab/FormulaBadge";
 import { Checkbox } from "./ui/checkbox";
 import {
 	DropdownMenu,
@@ -115,6 +121,150 @@ interface TaskCardProps {
 	// Optional app preview handler for done, human_review, and ai_review tasks
 	onPreviewApp?: () => void;
 }
+
+/**
+ * Live Azure DevOps pipeline badge for the kanban card.
+ * Reads the latest build pushed by the main-process poller; clicking the
+ * badge opens the build in the browser. When the build is red, a small
+ * repair action lets the user (re)launch the agent fix loop manually.
+ */
+const PipelineBadge: React.FC<{ task: Task; t: TFunction }> = ({ task, t }) => {
+	const pipeline = useTaskStore((s) => s.pipelineStatuses[task.id]);
+	const [isFixing, setIsFixing] = useState(false);
+
+	if (!pipeline || pipeline.state === "none") return null;
+
+	const openBuild = (e: React.MouseEvent) => {
+		e.stopPropagation();
+		if (pipeline.webUrl) {
+			// biome-ignore lint/suspicious/noExplicitAny: electronAPI shape is dynamic
+			(globalThis as any).electronAPI?.openExternal?.(pipeline.webUrl);
+		}
+	};
+
+	const handleFix = async (e: React.MouseEvent) => {
+		e.stopPropagation();
+		setIsFixing(true);
+		try {
+			await globalThis.electronAPI.fixRedBuild(task.id);
+		} finally {
+			setIsFixing(false);
+		}
+	};
+
+	const label = pipeline.buildNumber ?? pipeline.definitionName ?? "CI";
+	let icon: React.ReactNode;
+	let badgeClass: string;
+	switch (pipeline.state) {
+		case "succeeded":
+			icon = <CheckCircle2 className="h-2.5 w-2.5" />;
+			badgeClass = "bg-success/10 text-success border-success/30";
+			break;
+		case "failed":
+			icon = <XCircle className="h-2.5 w-2.5" />;
+			badgeClass = "bg-destructive/10 text-destructive border-destructive/30";
+			break;
+		case "partiallySucceeded":
+			icon = <AlertTriangle className="h-2.5 w-2.5" />;
+			badgeClass = "bg-warning/10 text-warning border-warning/30";
+			break;
+		case "canceled":
+			icon = <XCircle className="h-2.5 w-2.5" />;
+			badgeClass = "bg-muted text-muted-foreground border-border";
+			break;
+		default: // queued | running
+			icon = <Loader2 className="h-2.5 w-2.5 animate-spin" />;
+			badgeClass = "bg-info/10 text-info border-info/30";
+			break;
+	}
+
+	return (
+		<div className="mt-2 flex flex-wrap items-center gap-1">
+			<Badge
+				variant="outline"
+				className={cn(
+					"text-[10px] px-1.5 py-0.5 flex items-center gap-1",
+					pipeline.webUrl && "cursor-pointer hover:opacity-80",
+					badgeClass,
+				)}
+				onClick={openBuild}
+				title={`${pipeline.providerLabel ?? t("labels.pipeline")} — ${pipeline.definitionName ?? ""} ${label}`}
+			>
+				{icon}
+				{t("labels.pipeline")} {label}
+			</Badge>
+			{pipeline.state === "failed" && (
+				<Button
+					size="sm"
+					variant="outline"
+					className="h-5 px-1.5 text-[10px] text-destructive border-destructive/30 hover:bg-destructive/10"
+					onClick={handleFix}
+					disabled={isFixing || pipeline.autoFixInProgress}
+				>
+					{isFixing || pipeline.autoFixInProgress ? (
+						<Loader2 className="h-2.5 w-2.5 animate-spin mr-1" />
+					) : (
+						<Wrench className="h-2.5 w-2.5 mr-1" />
+					)}
+					{t("labels.repairBuild")}
+				</Button>
+			)}
+		</div>
+	);
+};
+
+/**
+ * Tracker reference badge — shows the originating work-item number for tasks
+ * imported from Azure DevOps or Jira (the "US number" the user asked for).
+ * Clicking the badge opens the work item in the external tracker.
+ */
+const TrackerBadge: React.FC<{ task: Task; t: TFunction }> = ({ task, t }) => {
+	const m = task.metadata;
+
+	let logo: string;
+	let alt: string;
+	let identifier: string;
+	let url: string | undefined;
+
+	if (m?.azureDevOpsIdentifier) {
+		logo = AzureDevOpsLogo;
+		alt = "Azure DevOps";
+		// Azure work-item ids are bare numbers — prefix with # for readability.
+		identifier = `#${m.azureDevOpsIdentifier}`;
+		url = m.azureDevOpsUrl;
+	} else if (m?.jiraIdentifier) {
+		logo = JiraLogo;
+		alt = "Jira";
+		// Jira keys already read like "PROJ-123".
+		identifier = m.jiraIdentifier;
+		url = m.jiraUrl;
+	} else {
+		return null;
+	}
+
+	const open = (e: React.MouseEvent) => {
+		e.stopPropagation();
+		if (url) {
+			// biome-ignore lint/suspicious/noExplicitAny: electronAPI shape is dynamic
+			(globalThis as any).electronAPI?.openExternal?.(url);
+		}
+	};
+
+	return (
+		<Badge
+			variant="outline"
+			className={cn(
+				"text-[10px] px-1.5 py-0.5 flex w-fit items-center gap-1 bg-muted/40 text-muted-foreground border-border font-mono",
+				url && "cursor-pointer hover:bg-muted hover:text-foreground",
+			)}
+			onClick={url ? open : undefined}
+			title={t("labels.openInTracker", { tracker: alt })}
+		>
+			<img src={logo} alt={alt} className="h-3 w-3" />
+			{identifier}
+		</Badge>
+	);
+};
 
 // Metadata badges component - extracted to reduce complexity
 interface MetadataBadgesProps {
@@ -352,6 +502,8 @@ interface ActionButtonsProps {
 	onPreviewApp?: () => void;
 	handleRecover: (e: React.MouseEvent) => void;
 	handleStartStop: (e: React.MouseEvent) => void;
+	handlePause: (e: React.MouseEvent) => void;
+	handleResume: (e: React.MouseEvent) => void;
 	handleViewPR: (e: React.MouseEvent) => void;
 	handleArchive: (e: React.MouseEvent) => void;
 	statusMenuItems: React.ReactNode;
@@ -370,12 +522,30 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
 	onPreviewApp,
 	handleRecover,
 	handleStartStop,
+	handlePause,
+	handleResume,
 	handleViewPR,
 	handleArchive,
 	// biome-ignore lint/correctness/noUnusedFunctionParameters: parameter kept for API compatibility
 	statusMenuItems,
 	t,
 }) => {
+	// A cooperatively-paused task (flag on disk) shows Reprendre instead of Pause.
+	const isPaused = task.metadata?.paused?.enabled === true;
+	// Compact Pause / Reprendre toggle reused by the active-task branches below.
+	const pauseResumeButton = (
+		<Button
+			variant="outline"
+			size="sm"
+			className="h-7 w-7 p-0"
+			onClick={isPaused ? handleResume : handlePause}
+			title={isPaused ? t("actions.resume") : t("actions.pause")}
+			aria-label={isPaused ? t("actions.resume") : t("actions.pause")}
+		>
+			{isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+		</Button>
+	);
+
 	if (isStuck) {
 		return (
 			<Button
@@ -525,7 +695,9 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
 		);
 	}
 
-	// Preview button for ai_review tasks (inspect rendering during AI validation)
+	// ai_review tasks: QA is actively running, so offer Pause / Reprendre /
+	// Arrêter (and the preview button) right on the card — the user can pause the
+	// AI review at any moment without opening the modal.
 	if (task.status === "ai_review") {
 		return (
 			<div className="flex gap-1">
@@ -543,6 +715,16 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
 						<Monitor className="h-3 w-3" />
 					</Button>
 				)}
+				{pauseResumeButton}
+				<Button
+					variant="destructive"
+					size="sm"
+					className="h-7 px-2.5"
+					onClick={handleStartStop}
+				>
+					<Square className="mr-1.5 h-3 w-3" />
+					{t("actions.stop")}
+				</Button>
 			</div>
 		);
 	}
@@ -560,6 +742,8 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
 						projectPath={currentProject.path}
 					/>
 				)}
+				{/* Pause / Reprendre — only meaningful while the task is running. */}
+				{(isRunning || isPaused) && pauseResumeButton}
 				<Button
 					variant={isRunning ? "destructive" : "default"}
 					size="sm"
@@ -605,6 +789,8 @@ const getStatusBadgeVariant = (
 			return "warning";
 		case "human_review":
 			return "purple";
+		case "build_failed":
+			return "destructive";
 		case "done":
 			return "success";
 		default:
@@ -643,6 +829,8 @@ const getStatusLabel = (status: string, t?: any): string => {
 			return t("labels.aiReview");
 		case "human_review":
 			return t("labels.needsReview");
+		case "build_failed":
+			return t("labels.buildFailed");
 		case "done":
 			return t("status.complete");
 		default:
@@ -906,7 +1094,9 @@ export const TaskCard = memo(function TaskCard({
 
 	const handleStartStop = (e: React.MouseEvent) => {
 		e.stopPropagation();
-		if (isRunning && !isStuck) {
+		// Stop covers any actively-executing task — in_progress AND ai_review
+		// (QA running) — so the card's Stop works during the AI review too.
+		if ((isRunning || task.status === "ai_review") && !isStuck) {
 			stopTask(task.id);
 		} else {
 			startTask(task.id);
@@ -1070,9 +1260,12 @@ export const TaskCard = memo(function TaskCard({
 					)}
 
 					<div className={cn("flex-1 min-w-0", !isSelectable && "w-full")}>
+						{/* Tracker reference (Azure DevOps / Jira work-item number) */}
+						<TrackerBadge task={task} t={t} />
+
 						{/* Title - full width, no wrapper */}
 						<h3
-							className="font-semibold text-sm text-foreground line-clamp-2 leading-snug"
+							className="mt-1 font-semibold text-sm text-foreground line-clamp-2 leading-snug"
 							title={displayTitle}
 						>
 							{displayTitle}
@@ -1096,12 +1289,16 @@ export const TaskCard = memo(function TaskCard({
 							t={t}
 						/>
 
+						{/* Azure DevOps pipeline badge (CI/CD loop) */}
+						<PipelineBadge task={task} t={t} />
+
+
 						{/* Progress section - Phase-aware with animations */}
 						{(task.subtasks.length > 0 ||
 							hasActiveExecution ||
 							isRunning ||
 							isStuck) && (
-							<div className="mt-3">
+							<div className="mt-3 space-y-2">
 								<PhaseProgressIndicator
 									phase={executionPhase}
 									subtasks={task.subtasks}
@@ -1114,6 +1311,8 @@ export const TaskCard = memo(function TaskCard({
 										task.subtasks.length > 0 ? handlePlanClick : undefined
 									}
 								/>
+								{/* Compaction affordance for long-running tasks (10+ phases) */}
+								<SessionCompactionBadge task={task} />
 							</div>
 						)}
 
@@ -1122,6 +1321,10 @@ export const TaskCard = memo(function TaskCard({
 							<div className="flex items-center gap-1.5 text-xs text-muted-foreground">
 								<Clock className="h-3 w-3" />
 								<span>{relativeTime}</span>
+								<FormulaBadge
+									task={task}
+									projectPath={currentProject?.path}
+								/>
 							</div>
 
 							<div className="flex items-center gap-1.5">
@@ -1136,6 +1339,8 @@ export const TaskCard = memo(function TaskCard({
 									onPreviewApp={onPreviewApp}
 									handleRecover={handleRecover}
 									handleStartStop={handleStartStop}
+									handlePause={handlePause}
+									handleResume={handleResume}
 									handleViewPR={handleViewPR}
 									handleArchive={handleArchive}
 									statusMenuItems={statusMenuItems}

@@ -25,6 +25,7 @@ import {
 } from "../../ui/alert-dialog";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
+import { CodeEditor } from "../../ui/code-editor";
 import { DiffViewer } from "../../ui/diff-viewer";
 import { Input } from "../../ui/input";
 import {
@@ -553,11 +554,12 @@ export function DiffViewDialog({
 							{t("taskReview:diff.loading")}
 						</div>
 					) : (
-						<textarea
+						<CodeEditor
 							value={editContent}
-							onChange={(e) => setEditContent(e.target.value)}
-							className="flex-1 p-3 font-mono text-sm bg-muted border rounded resize-none"
-							spellCheck={false}
+							onChange={setEditContent}
+							filename={editingFile.path}
+							className="flex-1 min-h-0"
+							autoFocus
 						/>
 					)}
 				</div>
@@ -594,11 +596,11 @@ export function DiffViewDialog({
 						<label className="text-sm font-medium">
 							{t("taskReview:diff.fileContent")}
 						</label>
-						<textarea
+						<CodeEditor
 							value={newFileContent}
-							onChange={(e) => setNewFileContent(e.target.value)}
-							className="flex-1 p-3 font-mono text-sm bg-muted border rounded resize-none"
-							spellCheck={false}
+							onChange={setNewFileContent}
+							filename={newFilePath || undefined}
+							className="flex-1 min-h-0"
 						/>
 					</div>
 				</div>

@@ -19,6 +19,14 @@ from pathlib import Path
 
 from core.dotnet_tools import generate_dotnet_env_section
 
+# Stack-aware automatic test planning (API contract / WinForms UI / web E2E
+# tests derived from the touched files + installed libraries). Optional: the
+# prompt builder must keep working if the module is unavailable.
+try:
+    from test_generation.stack_aware import build_auto_test_instructions
+except ImportError:  # pragma: no cover - packaging edge case
+    build_auto_test_instructions = None
+
 # Worktree path patterns for detection
 # Matches paths like: .workpilot/worktrees/tasks/{spec-name}/
 WORKTREE_PATH_PATTERNS = [
@@ -336,6 +344,23 @@ You MUST use a DIFFERENT approach than previous attempts.
         for f in patterns_from:
             sections.append(f"- `{f}`")
         sections.append("")
+
+    # Stack-aware automated tests: tell the agent which kinds of tests the
+    # touched files call for (API contract / WinForms UI / web E2E / unit),
+    # using only the test libraries actually installed in the project.
+    if (
+        build_auto_test_instructions is not None
+        and os.environ.get("AUTO_TEST_GENERATION", "").lower() != "false"
+    ):
+        try:
+            auto_tests = build_auto_test_instructions(
+                project_dir, [*files_to_modify, *files_to_create]
+            )
+        except Exception:
+            auto_tests = None
+        if auto_tests:
+            sections.append(auto_tests)
+            sections.append("")
 
     # Verification
     sections.append("## Verification\n")

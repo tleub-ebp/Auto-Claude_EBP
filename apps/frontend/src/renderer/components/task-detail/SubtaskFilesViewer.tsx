@@ -1,6 +1,8 @@
 import {
+	AlignJustify,
 	ChevronDown,
 	Code2,
+	Columns2,
 	File,
 	FileCode,
 	FileJson,
@@ -17,7 +19,7 @@ import type { WorktreeDiffFile } from "../../../shared/types";
 import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { DiffViewer } from "../ui/diff-viewer";
+import { DiffViewer, type DiffViewMode } from "../ui/diff-viewer";
 import { ScrollArea } from "../ui/scroll-area";
 
 interface SubtaskFilesViewerProps {
@@ -157,6 +159,7 @@ interface FileTreeItemProps {
 	openDiffs: Record<string, boolean>;
 	lazyDiffs: Record<string, WorktreeDiffFile>;
 	loadingPaths: Record<string, boolean>;
+	viewMode: DiffViewMode;
 	onToggle: (path: string) => void;
 	onToggleDiff: (node: FileTreeNode) => void;
 	t: (key: string, options?: Record<string, unknown>) => string;
@@ -169,6 +172,7 @@ function FileTreeItem({
 	openDiffs,
 	lazyDiffs,
 	loadingPaths,
+	viewMode,
 	onToggle,
 	onToggleDiff,
 	t,
@@ -276,9 +280,12 @@ function FileTreeItem({
 							{t("subtasks.filesViewer.loading")}
 						</div>
 					) : hasPatch ? (
-						<ScrollArea className="max-h-72">
-							<DiffViewer patch={diff?.patch} />
-						</ScrollArea>
+						// Full diff, GitHub-style: the whole panel scrolls vertically
+						// (outer ScrollArea), each diff only scrolls horizontally for
+						// long lines. No vertical cap so nothing is clipped.
+						<div className="overflow-x-auto themed-scrollbar">
+							<DiffViewer patch={diff?.patch} viewMode={viewMode} />
+						</div>
 					) : (
 						<div className="px-3 py-4 text-center text-xs text-muted-foreground">
 							{t("subtasks.filesViewer.noDiff")}
@@ -298,6 +305,7 @@ function FileTreeItem({
 							openDiffs={openDiffs}
 							lazyDiffs={lazyDiffs}
 							loadingPaths={loadingPaths}
+							viewMode={viewMode}
 							onToggle={onToggle}
 							onToggleDiff={onToggleDiff}
 							t={t}
@@ -309,6 +317,16 @@ function FileTreeItem({
 	);
 }
 
+/** Persist the unified/split choice so it sticks across files and sessions. */
+const VIEW_MODE_STORAGE_KEY = "workpilot.subtaskDiff.viewMode";
+
+function readStoredViewMode(): DiffViewMode {
+	if (typeof window === "undefined") return "unified";
+	return window.localStorage.getItem(VIEW_MODE_STORAGE_KEY) === "split"
+		? "split"
+		: "unified";
+}
+
 export function SubtaskFilesViewer({
 	files,
 	subtaskTitle,
@@ -316,6 +334,7 @@ export function SubtaskFilesViewer({
 	onClose,
 }: SubtaskFilesViewerProps) {
 	const { t } = useTranslation(["tasks"]);
+	const [viewMode, setViewMode] = useState<DiffViewMode>(readStoredViewMode);
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const [openDiffs, setOpenDiffs] = useState<Record<string, boolean>>({});
 	const [diffByPath, setDiffByPath] = useState<Map<string, WorktreeDiffFile>>(
@@ -388,6 +407,15 @@ export function SubtaskFilesViewer({
 	const handleToggle = (path: string) => {
 		setExpanded((prev) => ({ ...prev, [path]: !prev[path] }));
 	};
+
+	const handleViewModeChange = useCallback((mode: DiffViewMode) => {
+		setViewMode(mode);
+		try {
+			window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+		} catch {
+			/* localStorage indisponible (quota / mode privé) : choix non persisté */
+		}
+	}, []);
 
 	const fetchFileDiff = useCallback(
 		(node: FileTreeNode) => {
@@ -505,7 +533,7 @@ export function SubtaskFilesViewer({
 
 				{/* Actions */}
 				{fileCount > 0 && (
-					<div className="flex gap-2">
+					<div className="flex items-center gap-2">
 						<Button
 							variant="outline"
 							size="sm"
@@ -524,6 +552,38 @@ export function SubtaskFilesViewer({
 							<ChevronDown className="h-3 w-3 mr-1 rotate-180" />
 							{t("subtasks.filesViewer.collapseAll")}
 						</Button>
+
+						{/* Unified / side-by-side toggle (GitHub-style) */}
+						<div className="flex items-center rounded-md border border-border bg-background p-0.5 flex-shrink-0">
+							<button
+								type="button"
+								onClick={() => handleViewModeChange("unified")}
+								aria-pressed={viewMode === "unified"}
+								title={t("subtasks.filesViewer.viewMode.unified")}
+								className={cn(
+									"flex items-center justify-center h-6 w-7 rounded transition-colors",
+									viewMode === "unified"
+										? "bg-secondary text-foreground"
+										: "text-muted-foreground hover:text-foreground",
+								)}
+							>
+								<AlignJustify className="h-3.5 w-3.5" />
+							</button>
+							<button
+								type="button"
+								onClick={() => handleViewModeChange("split")}
+								aria-pressed={viewMode === "split"}
+								title={t("subtasks.filesViewer.viewMode.split")}
+								className={cn(
+									"flex items-center justify-center h-6 w-7 rounded transition-colors",
+									viewMode === "split"
+										? "bg-secondary text-foreground"
+										: "text-muted-foreground hover:text-foreground",
+								)}
+							>
+								<Columns2 className="h-3.5 w-3.5" />
+							</button>
+						</div>
 					</div>
 				)}
 			</div>
@@ -565,6 +625,7 @@ export function SubtaskFilesViewer({
 								openDiffs={openDiffs}
 								lazyDiffs={lazyDiffs}
 								loadingPaths={loadingPaths}
+								viewMode={viewMode}
 								onToggle={handleToggle}
 								onToggleDiff={handleToggleDiff}
 								t={t}

@@ -407,6 +407,49 @@ class TestWorktreeAddRetry:
         assert info.branch == "workpilot/test-spec"
         assert (info.path / "README.md").exists()
 
+    def test_spawn_failure_exit_code_is_retried_with_slow_backoff(
+        self, temp_git_repo: Path, monkeypatch
+    ):
+        """STATUS_DLL_INIT_FAILED (0xC0000142) is retried even with stderr text.
+
+        On loaded GitHub Windows runners git can die before producing output
+        (exit 3221225794). The condition is runner-wide and persists longer
+        than a file lock, so the retry must (a) trigger on the exit code alone
+        and (b) use the slower backoff schedule.
+        """
+        import core.worktree as worktree_module
+
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+
+        real_run_git = manager._run_git
+        calls = {"add": 0}
+        sleeps: list[float] = []
+
+        def flaky_run_git(args, *a, **kw):
+            if len(args) >= 2 and args[0] == "worktree" and args[1] == "add":
+                calls["add"] += 1
+                if calls["add"] <= 2:
+                    # Spawn failure: non-empty stderr that does NOT match the
+                    # lock-message list — only the exit code marks it transient.
+                    return subprocess.CompletedProcess(
+                        args=args,
+                        returncode=3221225794,
+                        stdout="",
+                        stderr="(spawn diagnostics)",
+                    )
+            return real_run_git(args, *a, **kw)
+
+        monkeypatch.setattr(manager, "_run_git", flaky_run_git)
+        monkeypatch.setattr(worktree_module.time, "sleep", lambda s: sleeps.append(s))
+
+        info = manager.create_worktree("test-spec")
+
+        assert calls["add"] >= 3, "spawn failure should have been retried"
+        assert info.path.exists()
+        # Slow schedule: 2.0 * 2**(attempt-1), not the 0.5-based lock schedule.
+        assert sleeps[:2] == [2.0, 4.0]
+
     def test_create_worktree_reports_output_on_persistent_failure(
         self, temp_git_repo: Path, monkeypatch
     ):
@@ -467,7 +510,9 @@ class TestWorktreeRemoval:
         )
         assert branch_name not in result.stdout
 
-    def test_remove_worktree_with_uncommitted_changes_raises_error(self, temp_git_repo: Path):
+    def test_remove_worktree_with_uncommitted_changes_raises_error(
+        self, temp_git_repo: Path
+    ):
         """Removing worktree with uncommitted changes raises RuntimeError."""
         manager = WorktreeManager(temp_git_repo)
         manager.setup()
@@ -1162,22 +1207,17 @@ class TestWorktreeCleanup:
         manager.setup()
 
         # No warning with few worktrees
-        warning = manager.get_worktree_count_warning(warning_threshold=10)
+        warning = manager.get_worktree_count_warning(warning_threshold=3)
         assert warning is None
 
-        # Create 11 worktrees to trigger warning
-        for i in range(11):
-            info = manager.create_worktree(f"test-spec-{i}")
-            test_file = info.path / "test.txt"
-            test_file.write_text("test")
-            subprocess.run(["git", "add", "."], cwd=info.path, capture_output=True)
-            subprocess.run(
-                ["git", "commit", "-m", "test commit"],
-                cwd=info.path,
-                capture_output=True,
-            )
+        # The warning only depends on the worktree COUNT (list_all_worktrees),
+        # so use a low threshold instead of creating 11 real worktrees: each
+        # create_worktree spawns several git processes, and spawning dozens in
+        # a tight loop intermittently fails on Windows CI (0xC0000142).
+        for i in range(3):
+            manager.create_worktree(f"test-spec-{i}")
 
-        warning = manager.get_worktree_count_warning(warning_threshold=10)
+        warning = manager.get_worktree_count_warning(warning_threshold=3)
         assert warning is not None
         assert "WARNING" in warning
 
@@ -1186,19 +1226,14 @@ class TestWorktreeCleanup:
         manager = WorktreeManager(temp_git_repo)
         manager.setup()
 
-        # Create 21 worktrees to trigger critical warning
-        for i in range(21):
-            info = manager.create_worktree(f"test-spec-{i}")
-            test_file = info.path / "test.txt"
-            test_file.write_text("test")
-            subprocess.run(["git", "add", "."], cwd=info.path, capture_output=True)
-            subprocess.run(
-                ["git", "commit", "-m", "test commit"],
-                cwd=info.path,
-                capture_output=True,
-            )
+        # Same as the warning test: only the count matters, so keep the number
+        # of real worktrees (and git process spawns) low for Windows CI.
+        for i in range(4):
+            manager.create_worktree(f"test-spec-{i}")
 
-        warning = manager.get_worktree_count_warning(critical_threshold=20)
+        warning = manager.get_worktree_count_warning(
+            warning_threshold=3, critical_threshold=4
+        )
         assert warning is not None
         assert "CRITICAL" in warning
 
@@ -1233,9 +1268,7 @@ class TestEmptyPRGuard:
 
         assert ahead == 1
 
-    def test_count_commits_ahead_unknown_target_returns_none(
-        self, temp_git_repo: Path
-    ):
+    def test_count_commits_ahead_unknown_target_returns_none(self, temp_git_repo: Path):
         """Une cible inconnue (ni locale ni distante) renvoie None pour
         permettre au caller de décider quoi faire."""
         manager = WorktreeManager(temp_git_repo)
@@ -1361,5 +1394,3 @@ class TestApplyDiscardList:
         diff_files = self._diff_files_against_base(manager, "corr-spec")
         assert "secret.txt" not in diff_files
         assert "wanted.txt" in diff_files
-
-

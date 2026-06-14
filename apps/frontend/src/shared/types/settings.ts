@@ -306,6 +306,7 @@ export interface AppSettings {
 	memoryEmbeddingProvider?: GraphitiEmbeddingProvider;
 	memoryOllamaEmbeddingModel?: string;
 	memoryOllamaEmbeddingDim?: number;
+	memoryOllamaLlmModel?: string;
 	memoryVoyageApiKey?: string;
 	memoryVoyageEmbeddingModel?: string;
 	memoryAzureApiKey?: string;

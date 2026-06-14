@@ -3,6 +3,8 @@ import {
 	DEFAULT_AGENT_PROFILES,
 	DEFAULT_PHASE_MODELS,
 	DEFAULT_PHASE_THINKING,
+	getCanonicalModelKey,
+	resolveCatalogModelValue,
 } from "../constants/models";
 import type {
 	AppSettings,
@@ -199,4 +201,55 @@ export function buildProviderMetadataUpdate(
 	const base = basePhaseProviders(metadata, defaults);
 	const configPhase = LOG_PHASE_TO_CONFIG_PHASE[logPhase];
 	return { phaseProviders: { ...base, [configPhase]: provider } };
+}
+
+interface ModelSelectOption {
+	value: string;
+	label: string;
+}
+
+/**
+ * Construit les options du sélecteur de modèle d'une phase à partir du catalogue
+ * (déjà dédupliqué) et de la valeur actuellement persistée.
+ *
+ * Le catalogue Anthropic est la **source de vérité unique** : il n'expose qu'une
+ * entrée par version (ex. `claude-opus-4-8`). La valeur persistée peut toutefois
+ * être écrite différemment pour la même version — notation pointée héritée d'un
+ * autre fournisseur (`claude-opus-4.8`), alias court (`opus`) ou snapshot daté.
+ * Une comparaison brute par `value` ne reconnaîtrait pas cette équivalence et
+ * injecterait un doublon (« claude-opus-4.8 » à côté de « Claude Opus 4.8 »).
+ *
+ * On compare donc par identité canonique ({@link getCanonicalModelKey}) :
+ *  - si la version est déjà dans le catalogue, on ne ré-injecte rien et on pointe
+ *    le `<Select>` sur l'entrée canonique du catalogue ({@link resolveCatalogModelValue}),
+ *    de sorte que l'étiquette correcte s'affiche sans doublon ;
+ *  - sinon (modèle réellement absent, ex. autre fournisseur), on conserve le
+ *    filet de sécurité : la valeur courante reste sélectionnable.
+ */
+export function buildModelSelectOptions(
+	catalog: readonly ModelSelectOption[],
+	currentValue: string | undefined,
+	shortLabels: Record<string, string> = {},
+): { options: ModelSelectOption[]; value: string } {
+	const options: ModelSelectOption[] = catalog.map((m) => ({
+		value: m.value,
+		label: m.label,
+	}));
+	const current = currentValue ?? "";
+	if (!current) return { options, value: current };
+
+	const currentKey = getCanonicalModelKey(current);
+	const inCatalog = options.some(
+		(m) => getCanonicalModelKey(m.value) === currentKey,
+	);
+
+	if (!inCatalog) {
+		// Modèle non couvert par le catalogue : le rendre sélectionnable tel quel.
+		options.unshift({ value: current, label: shortLabels[current] || current });
+		return { options, value: current };
+	}
+
+	// Même version déjà présente : on aligne la sélection sur l'entrée du
+	// catalogue pour éviter un second élément au libellé brut.
+	return { options, value: resolveCatalogModelValue(current, options) };
 }

@@ -12,7 +12,6 @@ import {
 	Pencil,
 	Play,
 	RotateCcw,
-	Square,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -31,6 +30,7 @@ import {
 	extractTextFromHtml,
 	getDisplayProgress,
 } from "../../lib/utils";
+import { isSubtaskDone } from "../../../shared/progress";
 import { useProjectStore } from "../../stores/project-store";
 import {
 	deleteTask,
@@ -76,9 +76,11 @@ import { TaskStatusMoveBadge } from "./TaskStatusMoveBadge";
 import { TaskFiles } from "./TaskFiles";
 import { TaskLogs } from "./TaskLogs";
 import { TaskPauseControls } from "./TaskPauseControls";
+import { TaskRunControls } from "./TaskRunControls";
 import { TaskPhaseBar } from "./TaskPhaseBar";
 import { translateActivityMessage } from "./translateActivityMessage";
-import { pauseTask, resumeTask } from "../../stores/task-store";
+import { pauseTask } from "../../stores/task-store";
+import { SpecInterviewBanner } from "./SpecInterviewDialog";
 import { TaskMetadata as TaskMetadataComponent } from "./TaskMetadata";
 import { TaskReview } from "./TaskReview";
 import { TaskSubtasks } from "./TaskSubtasks";
@@ -282,7 +284,12 @@ function useTaskDetailHandlers(
 	const activeProject = useProjectStore((s) => s.getActiveProject());
 
 	const handleStartStop = async () => {
-		if (state.isRunning && !state.isStuck) {
+		// Stop applies to any actively-executing task — in_progress AND ai_review
+		// (QA review/fixing) — so the user can interrupt the QA phase too.
+		if (
+			(state.isRunning || task.status === "ai_review") &&
+			!state.isStuck
+		) {
 			stopTask(task.id);
 			return;
 		}
@@ -471,8 +478,10 @@ function TaskDetailModalContent({
 	const taskProject = allProjects.find((p) => p.id === task.projectId);
 	const showFilesTab = isFilesTabEnabled();
 	const progressPercent = calculateProgress(task.subtasks);
-	const completedSubtasks = task.subtasks.filter(
-		(s) => s.status === "completed",
+	// "Done" = completed or blocked (a blocked subtask, e.g. a manual e2e test,
+	// is handled by the build and counts toward completion — matches the backend).
+	const completedSubtasks = task.subtasks.filter((s) =>
+		isSubtaskDone(s.status),
 	).length;
 	const totalSubtasks = task.subtasks.length;
 
@@ -481,10 +490,16 @@ function TaskDetailModalContent({
 	// l'impression d'un pourcentage figé. On privilégie donc la progression
 	// temps réel calculée côté backend (overallProgress, pondérée par phase),
 	// avec repli sur l'avancement par sous-tâches.
+	//
+	// Dès qu'il y a des sous-tâches, leur avancement reflète le travail réel : on
+	// l'affiche tel quel (2/3 → 67%) plutôt que la progression pondérée par phase
+	// qui gonflerait à ~94% en QA. Sans sous-tâches (spec/planning), repli sur la
+	// progression de phase.
 	const headerProgressPercent = getDisplayProgress(
 		progressPercent,
 		task.executionProgress?.overallProgress,
 		!!state.hasActiveExecution,
+		totalSubtasks > 0,
 	);
 
 	// Activité en cours affichée dans la barre de phase : on privilégie le
@@ -747,8 +762,14 @@ function TaskDetailModalContent({
 		if (
 			task.status === "backlog" ||
 			task.status === "queue" ||
-			task.status === "in_progress"
+			task.status === "in_progress" ||
+			task.status === "ai_review"
 		) {
+			// Actively executing = in_progress OR ai_review (QA running). Both get
+			// the first-class Pause / Reprendre / Arrêter control so the user can
+			// pause at any moment, including during the AI review.
+			const isActivelyRunning =
+				state.isRunning || task.status === "ai_review";
 			return (
 				<div className="flex items-center gap-2">
 					{/* Watch Live button - show when project path is available */}
@@ -759,22 +780,22 @@ function TaskDetailModalContent({
 						/>
 					)}
 
-					<Button
-						variant={state.isRunning ? "destructive" : "default"}
-						onClick={handleStartStop}
-					>
-						{state.isRunning ? (
-							<>
-								<Square className="mr-2 h-4 w-4" />
-								{t("tasks:modal.actions.stopTask")}
-							</>
-						) : (
-							<>
-								<Play className="mr-2 h-4 w-4" />
-								{t("tasks:modal.actions.startTask")}
-							</>
-						)}
-					</Button>
+					{isActivelyRunning ? (
+						// Running (or cooperatively paused): first-class Pause /
+						// Reprendre / Arrêter instead of stop-only. Pausing keeps the
+						// task in its current kanban column and lets the user resume.
+						<TaskRunControls
+							task={task}
+							isPaused={state.isPaused}
+							pauseProcessAlive={state.pauseProcessAlive}
+							onStop={handleStartStop}
+						/>
+					) : (
+						<Button variant="default" onClick={handleStartStop}>
+							<Play className="mr-2 h-4 w-4" />
+							{t("tasks:modal.actions.startTask")}
+						</Button>
+					)}
 				</div>
 			);
 		}
@@ -1068,6 +1089,9 @@ function TaskDetailModalContent({
 								>
 									<ScrollArea className="h-full">
 										<div className="p-5 space-y-5 overflow-x-hidden max-w-full">
+											{/* Spec interview - clarify the spec before planning */}
+											<SpecInterviewBanner task={task} />
+
 											{/* Metadata */}
 											<TaskMetadataComponent task={task} />
 
@@ -1191,23 +1215,18 @@ function TaskDetailModalContent({
 
 						{/* Footer */}
 						<div className="border-t border-border shrink-0">
-							{/* Pause/Resume Controls - shown at bottom when paused or running */}
-							{(task.metadata?.paused?.enabled || (state.isRunning && !state.isStuck)) && (
+							{/* Advanced resume panel — only once the task is paused. Quick
+							    pause/reprise/stop now lives in the action bar
+							    (TaskRunControls); this panel adds the "resume with a
+							    different provider/model" flow on top. */}
+							{task.metadata?.paused?.enabled && (
 								<div className="px-5 py-3 border-b border-border">
 									<TaskPauseControls
 										task={task}
 										isPaused={task.metadata?.paused?.enabled}
-										isRunning={
-											task.metadata?.paused?.enabled
-												? state.pauseProcessAlive !== false
-												: state.isRunning
-										}
+										isRunning={state.pauseProcessAlive !== false}
 										onPause={async (subtaskId) => {
 											await pauseTask(task.id, subtaskId);
-										}}
-										onResumeSameProvider={async () => {
-											await resumeTask(task.id);
-											await handleStartStop();
 										}}
 									/>
 								</div>

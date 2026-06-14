@@ -41,6 +41,17 @@ from typing import Any
 
 from apps.backend.models_registry import get_pricing
 
+# Common token-optimization trunk shared by every generic (OpenAI-style)
+# multi-turn loop: head+tail tool-result truncation and over-budget history
+# compaction. The module is importable under both package layouts.
+try:
+    from core.llm_optimization import compact_messages, truncate_tool_result
+except ImportError:  # pragma: no cover - alternate package layout
+    from apps.backend.core.llm_optimization import (
+        compact_messages,
+        truncate_tool_result,
+    )
+
 logger = logging.getLogger(__name__)
 
 
@@ -1713,13 +1724,23 @@ class CopilotAgentClient(AgentClient):
                     ],
                 )
 
-                # Add tool result for next API call
+                # Add tool result for next API call (head+tail truncation —
+                # build/test verdicts sit at the END of the output)
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tool_id,
-                        "content": result_text[:10000],  # Truncate large results
+                        "content": truncate_tool_result(result_text),
                     }
+                )
+
+            # Elide stale tool results once the conversation exceeds the char
+            # budget (no-op below budget, preserving the cacheable prefix).
+            compacted = compact_messages(messages)
+            if compacted:
+                logger.info(
+                    f"[CopilotAgentClient] History compaction: elided {compacted} "
+                    "stale tool result(s)"
                 )
 
             # Continue loop — next turn sends updated messages with tool results
@@ -1880,6 +1901,8 @@ class OpenAIAgentClient(AgentClient):
         max_turns: int = 50,
         project_dir: str | None = None,
         agent_type: str = "coder",
+        reasoning_effort: str | None = None,
+        prompt_cache_key: str | None = None,
     ):
         import os as _os
 
@@ -1888,6 +1911,12 @@ class OpenAIAgentClient(AgentClient):
         self.max_turns = max_turns
         self._project_dir = project_dir
         self._agent_type = agent_type
+        # Token optimizations (provider-specific layer on the common trunk):
+        # reasoning_effort maps the Kanban thinking level to OpenAI reasoning
+        # models; prompt_cache_key routes same-task sessions to the same
+        # automatic-prompt-cache shard. Both omitted from payload when None.
+        self._reasoning_effort = reasoning_effort
+        self._prompt_cache_key = prompt_cache_key
         self._api_key: str = _os.environ.get("OPENAI_API_KEY", "")
         self._api_base = "https://api.openai.com/v1/chat/completions"
         self._pending_query: str | None = None
@@ -2021,6 +2050,11 @@ class OpenAIAgentClient(AgentClient):
             if tools:
                 payload["tools"] = tools
                 payload["tool_choice"] = "auto"
+            # Provider-specific token optimizations (omitted when None):
+            if self._reasoning_effort:
+                payload["reasoning_effort"] = self._reasoning_effort
+            if self._prompt_cache_key:
+                payload["prompt_cache_key"] = self._prompt_cache_key
 
             logger.info(
                 f"[OpenAIAgentClient] Turn {turn + 1}/{self.max_turns}: "
@@ -2180,8 +2214,18 @@ class OpenAIAgentClient(AgentClient):
                     {
                         "role": "tool",
                         "tool_call_id": tool_id,
-                        "content": result_text[:10000],
+                        "content": truncate_tool_result(result_text),
                     }
+                )
+
+            # Elide stale tool results once the conversation exceeds the char
+            # budget (no-op below budget, preserving OpenAI's automatic
+            # prefix cache for normal-sized sessions).
+            compacted = compact_messages(messages)
+            if compacted:
+                logger.info(
+                    f"[OpenAIAgentClient] History compaction: elided {compacted} "
+                    "stale tool result(s)"
                 )
 
         logger.warning(
@@ -3063,12 +3107,10 @@ class WindsurfAgentClient(AgentClient):
                     ],
                 )
 
-                # Format result for next gRPC message
+                # Format result for next gRPC message (head+tail truncation —
+                # build/test verdicts sit at the END of the output)
                 status = "error" if is_error else "success"
-                # Truncate large results to avoid overwhelming the context
-                truncated = result_text[:8000]
-                if len(result_text) > 8000:
-                    truncated += f"\n... (truncated, {len(result_text)} chars total)"
+                truncated = truncate_tool_result(result_text, limit=8000)
                 result_parts.append(
                     f'<tool_result name="{tool_name}" status="{status}">\n'
                     f"{truncated}\n"
@@ -3078,6 +3120,16 @@ class WindsurfAgentClient(AgentClient):
             # Add tool results as a user message for the next turn
             results_message = "\n\n".join(result_parts)
             messages.append({"role": "user", "content": results_message})
+
+            # Elide stale tool results once the conversation exceeds the char
+            # budget (text-mode results are user messages starting with
+            # <tool_result — compact_messages handles both shapes).
+            compacted = compact_messages(messages)
+            if compacted:
+                logger.info(
+                    f"[WindsurfAgent] History compaction: elided {compacted} "
+                    "stale tool result(s)"
+                )
 
             # Continue loop — next turn sends updated conversation
 
@@ -3405,13 +3457,23 @@ class WindsurfAgentClient(AgentClient):
                     ],
                 )
 
-                # Add tool result to conversation for next API call
+                # Add tool result to conversation for next API call (head+tail
+                # truncation — build/test verdicts sit at the END of the output)
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tool_id,
-                        "content": result_text[:10000],  # Truncate large results
+                        "content": truncate_tool_result(result_text),
                     }
+                )
+
+            # Elide stale tool results once the conversation exceeds the char
+            # budget (no-op below budget, preserving the cacheable prefix).
+            compacted = compact_messages(messages)
+            if compacted:
+                logger.info(
+                    f"[WindsurfAgent] History compaction: elided {compacted} "
+                    "stale tool result(s)"
                 )
 
             # Continue loop — next turn will send updated messages with tool results

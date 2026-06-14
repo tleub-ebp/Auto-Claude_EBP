@@ -73,6 +73,27 @@ export interface TaskAPI {
 		model?: string,
 	) => Promise<IPCResult>;
 	resetTaskConversation: (taskId: string) => Promise<IPCResult>;
+	resetTask: (taskId: string) => Promise<IPCResult<Task>>;
+	generateSpecInterview: (
+		taskId: string,
+	) => Promise<IPCResult<import("../../shared/types").SpecInterviewQuestion[]>>;
+	checkPlanConflicts: (
+		taskId: string,
+	) => Promise<IPCResult<import("../../shared/types").PlanConflictReport>>;
+
+	// CI/CD pipeline loop (« Build rouge ») — provider-agnostic
+	getPipelineStatus: (
+		taskId: string,
+		options?: { refresh?: boolean },
+	) => Promise<
+		IPCResult<import("../../shared/types").TaskPipelineStatus | null>
+	>;
+	fixRedBuild: (taskId: string) => Promise<IPCResult>;
+	onPipelineStatus: (
+		callback: (
+			status: import("../../shared/types").TaskPipelineStatus,
+		) => void,
+	) => () => void;
 
 	// Image Operations
 	loadImageThumbnail: (
@@ -342,6 +363,49 @@ export const createTaskAPI = (): TaskAPI => ({
 
 	resetTaskConversation: (taskId: string): Promise<IPCResult> =>
 		ipcRenderer.invoke(IPC_CHANNELS.TASK_RESET_CONVERSATION, taskId),
+
+	resetTask: (taskId: string): Promise<IPCResult<Task>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_RESET, taskId),
+
+	generateSpecInterview: (
+		taskId: string,
+	): Promise<IPCResult<import("../../shared/types").SpecInterviewQuestion[]>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_SPEC_INTERVIEW, taskId),
+
+	checkPlanConflicts: (
+		taskId: string,
+	): Promise<IPCResult<import("../../shared/types").PlanConflictReport>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_CHECK_PLAN_CONFLICTS, taskId),
+
+	getPipelineStatus: (
+		taskId: string,
+		options?: { refresh?: boolean },
+	): Promise<
+		IPCResult<import("../../shared/types").TaskPipelineStatus | null>
+	> => ipcRenderer.invoke(IPC_CHANNELS.TASK_PIPELINE_STATUS_GET, taskId, options),
+
+	fixRedBuild: (taskId: string): Promise<IPCResult> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_PIPELINE_FIX, taskId),
+
+	onPipelineStatus: (
+		callback: (
+			status: import("../../shared/types").TaskPipelineStatus,
+		) => void,
+	): (() => void) => {
+		const handler = (
+			_event: Electron.IpcRendererEvent,
+			status: import("../../shared/types").TaskPipelineStatus,
+		): void => {
+			callback(status);
+		};
+		ipcRenderer.on(IPC_CHANNELS.TASK_PIPELINE_STATUS_EVENT, handler);
+		return () => {
+			ipcRenderer.removeListener(
+				IPC_CHANNELS.TASK_PIPELINE_STATUS_EVENT,
+				handler,
+			);
+		};
+	},
 
 	// Image Operations
 	loadImageThumbnail: (

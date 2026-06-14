@@ -38,6 +38,17 @@ class ModelEntry:
 # =============================================================================
 
 _ANTHROPIC_MODELS = [
+    # Claude Fable 5 — « Mythos-class » (GA 2026-06-09), au-dessus d'Opus 4.8.
+    ModelEntry(
+        "anthropic",
+        "claude-fable-5",
+        "Claude Fable 5",
+        "flagship",
+        supports_thinking=True,
+        price_input=10.0,
+        price_output=50.0,
+        is_default=False,
+    ),
     # Flagship
     ModelEntry(
         "anthropic",
@@ -786,6 +797,16 @@ _AWS_MODELS = [
         price_input=15.0,
         price_output=75.0,
         is_default=True,
+    ),
+    ModelEntry(
+        "aws",
+        "anthropic.claude-fable-5",
+        "Claude Fable 5 (Bedrock)",
+        "flagship",
+        supports_thinking=True,
+        price_input=10.0,
+        price_output=50.0,
+        is_default=False,
     ),
     ModelEntry(
         "aws",

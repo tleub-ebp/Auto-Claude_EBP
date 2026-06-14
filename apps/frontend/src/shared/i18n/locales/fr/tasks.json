@@ -59,7 +59,17 @@
 		"recovering": "Récupération...",
 		"needsRecovery": "Récupération requise",
 		"needsResume": "Reprise requise",
-		"tdd": "TDD"
+		"tdd": "TDD",
+		"pipeline": "Pipeline",
+		"repairBuild": "Réparer le build",
+		"buildFailed": "Build rouge",
+		"openInTracker": "Ouvrir dans {{tracker}}",
+		"currentPhase": "Phase actuelle",
+		"compactedPhases": "{{count}} phases",
+		"sessionCompactionHint": "{{count}} phases d'exécution — cliquez pour voir le résumé compacté",
+		"sessionCompaction": "Compaction de session",
+		"criticalPhases": "Étapes clés",
+		"lastError": "Dernière erreur"
 	},
 	"warnings": {
 		"stuck": {
@@ -124,6 +134,7 @@
 		"in_progress": "En cours",
 		"ai_review": "Révision IA",
 		"human_review": "Révision humaine",
+		"build_failed": "Build rouge",
 		"done": "Terminé",
 		"pr_created": "PR créée",
 		"error": "Erreur"
@@ -133,6 +144,8 @@
 		"emptyBacklogHint": "Ajoutez une tâche pour commencer",
 		"emptyQueue": "La file d'attente est vide",
 		"emptyQueueHint": "Les tâches attendront ici lorsque la limite de tâches parallèles sera atteinte",
+		"emptyBuildFailed": "Aucun build rouge",
+		"emptyBuildFailedHint": "Les tâches arrivent ici quand leur pipeline CI/CD échoue — l'agent les répare automatiquement",
 		"emptyInProgress": "Rien en cours",
 		"emptyInProgressHint": "Démarrez une tâche depuis le Backlog",
 		"emptyAiReview": "Aucune tâche en révision",
@@ -197,6 +210,39 @@
 		"expandAll": "Développer toutes les colonnes",
 		"azureDevOpsNotConnected": "Azure DevOps non connecté — cliquez pour configurer",
 		"jiraNotConnected": "Jira non connecté — cliquez pour configurer",
+		"filter": {
+			"button": "Filtrer",
+			"title": "Filtres",
+			"clear": "Réinitialiser",
+			"clearSearch": "Effacer la recherche",
+			"searchPlaceholder": "Rechercher une tâche…",
+			"sourceLabel": "Source",
+			"categoryLabel": "Catégorie",
+			"priorityLabel": "Priorité",
+			"sources": {
+				"azure-devops": "Azure DevOps",
+				"jira": "Jira",
+				"linear": "Linear",
+				"github": "GitHub",
+				"gitlab": "GitLab",
+				"ideation": "Idéation",
+				"roadmap": "Roadmap",
+				"insights": "Insights",
+				"manual": "Manuelle"
+			}
+		},
+		"sort": {
+			"title": "Trier par",
+			"ascending": "Ordre croissant",
+			"descending": "Ordre décroissant",
+			"fields": {
+				"manual": "Ordre manuel",
+				"priority": "Priorité",
+				"created": "Date de création",
+				"updated": "Dernière mise à jour",
+				"title": "Titre"
+			}
+		},
 		"quickCommand": {
 			"placeholder": "Commande rapide (ex. /review, /help)",
 			"buttonLabel": "Exécuter",
@@ -290,6 +336,10 @@
 		"openInIDE": "Ouvrir dans l'IDE"
 	},
 	"visualProof": {
+		"apiSmoke": {
+			"title": "Smoke API —",
+			"summary": "{{passed}}/{{total}} endpoints OK"
+		},
 		"tab": "Preuves visuelles",
 		"title": "Preuve visuelle de la PR",
 		"emptyTitle": "Aucune preuve visuelle pour cette tâche",
@@ -499,8 +549,64 @@
 			}
 		}
 	},
+	"testGen": {
+		"title": "Tests pour les fichiers modifiés",
+		"description": "Génère des tests adaptés à chaque type de fichier, écrits dans le worktree et livrés avec la PR.",
+		"generate_one": "Générer ({{count}})",
+		"generate_other": "Générer ({{count}})",
+		"strategy": {
+			"unit": "Unitaire",
+			"api": "API",
+			"e2e-web": "E2E web",
+			"desktop-ui": "UI desktop"
+		},
+		"written": "Écrit",
+		"failed": "Échec",
+		"emptyResult": "Le générateur n'a produit aucun test.",
+		"doneTitle": "Tests générés",
+		"doneDescription_one": "{{count}} fichier de test écrit dans le worktree.",
+		"doneDescription_other": "{{count}} fichiers de test écrits dans le worktree."
+	},
+	"interview": {
+		"banner": "Clarifiez la spec avant de lancer : l'agent vous pose 3-5 questions ciblées.",
+		"openButton": "Interview de spec",
+		"title": "Interview de spec",
+		"description": "L'agent a analysé la spécification et pose les questions dont les réponses changeraient l'implémentation. Répondez à celles qui vous semblent utiles — les réponses sont ajoutées à la spec.",
+		"generating": "Analyse de la spec et génération des questions… (jusqu'à 1 min)",
+		"generationFailed": "Impossible de générer les questions. Vérifiez vos identifiants LLM puis réessayez.",
+		"retry": "Réessayer",
+		"answerPlaceholder": "Votre réponse (laissez vide pour ignorer cette question)",
+		"useSuggestion": "Utiliser la suggestion",
+		"answeredCount": "{{answered}}/{{total}} réponses",
+		"addToSpec": "Ajouter à la spec",
+		"addAndStart": "Ajouter et lancer",
+		"sectionTitle": "Clarifications (interview)",
+		"savedTitle": "Spec enrichie",
+		"savedDescription_one": "{{count}} réponse ajoutée à la spécification.",
+		"savedDescription_other": "{{count}} réponses ajoutées à la spécification.",
+		"saveErrorTitle": "Échec de l'enregistrement des clarifications"
+	},
+	"reset": {
+		"button": "Réinitialiser la tâche",
+		"confirmTitle": "Réinitialiser complètement la tâche ?",
+		"confirmDescription": "Le plan, les sous-tâches, le worktree et tous les artefacts d'exécution seront supprimés (le travail non commité est sauvegardé dans l'historique git). La spécification est conservée et la tâche retourne dans le backlog. Cette action est irréversible.",
+		"confirm": "Tout réinitialiser",
+		"cancel": "Annuler",
+		"resetting": "Réinitialisation…",
+		"successTitle": "Tâche réinitialisée",
+		"successDescription": "La tâche est revenue dans le backlog avec sa spécification intacte.",
+		"errorTitle": "Échec de la réinitialisation",
+		"errorDescription": "Impossible de réinitialiser la tâche. Consultez les logs pour plus de détails."
+	},
 	"subtasks": {
 		"untitled": "Sous-tâche sans titre",
+		"completedCount": "{{completed}} sur {{total}} terminées",
+		"blockedCount_one": "{{count}} bloquée",
+		"blockedCount_other": "{{count}} bloquées",
+		"failedCount_one": "{{count}} échouée",
+		"failedCount_other": "{{count}} échouées",
+		"blockedReason": "Bloquée : {{reason}}",
+		"blockedGeneric": "Bloquée — intervention manuelle requise",
 		"filesViewer": {
 			"filesModified_one": "{{count}} fichier modifié",
 			"filesModified_other": "{{count}} fichiers modifiés",
@@ -513,6 +619,10 @@
 			"viewDiff": "Voir les modifications",
 			"hideDiff": "Masquer les modifications",
 			"noDiff": "Aucune modification enregistrée pour ce fichier",
+			"viewMode": {
+				"unified": "Vue unifiée",
+				"split": "Vue côte à côte"
+			},
 			"stats": {
 				"files": "Fichiers",
 				"folders": "Dossiers",
@@ -630,10 +740,18 @@
 			"providerSwitchInfoAria": "Détails du changement de LLM",
 			"pauseToSwitchTooltip": "La tâche termine l'étape en cours puis s'arrête. Vous pourrez alors choisir un provider et un modèle, puis reprendre.",
 			"pauseUnavailableTooltip": "Le changement à chaud n'est possible que pendant l'exécution. Pour les étapes non démarrées, choisissez le LLM directement dans les sélecteurs de chaque phase ci-dessus.",
-			"pauseRequestedTitle": "Pause demandée",
-			"pauseRequestedDesc": "La tâche s'arrêtera à la fin de l'étape en cours.",
+			"pauseRequestedTitle": "Tâche en pause",
+			"pauseRequestedDesc": "Exécution interrompue immédiatement. Reprenez quand vous voulez depuis le dernier point de contrôle.",
 			"pauseFailed": "Échec de la mise en pause",
-			"pausingInProgress": "Pause en cours… fin de l'étape en cours",
+			"pausingInProgress": "Pause en cours…",
+			"pauseTask": "Mettre en pause",
+			"pausingShort": "Pause en cours…",
+			"pauseTooltip": "Met la tâche en pause immédiatement — reprenable à tout moment",
+			"resumeTooltip": "Reprendre l'exécution depuis le point de pause",
+			"stopTooltip": "Arrête complètement la tâche (le travail en cours n'est pas repris)",
+			"resumeRequestedTitle": "Reprise de la tâche",
+			"resumeRequestedDesc": "La tâche repart là où elle s'était arrêtée.",
+			"resumeFailed": "Échec de la reprise",
 			"loadingProviders": "Chargement des providers…",
 			"noConfiguredProviders": "Aucun provider configuré. Ajoutez une clé API dans les Paramètres.",
 			"chooseProvider": "Provider",
@@ -711,7 +829,12 @@
 			"approving": "Approbation en cours...",
 			"rejecting": "Rejet en cours...",
 			"rejectionReason": "Raison des modifications (optionnel)",
-			"rejectionPlaceholder": "Décrivez ce qui doit être modifié dans le plan..."
+			"rejectionPlaceholder": "Décrivez ce qui doit être modifié dans le plan...",
+			"conflictsChecking": "Vérification des chevauchements de fichiers avec les tâches parallèles...",
+			"conflictsNone": "Aucun chevauchement de fichiers avec les autres tâches actives",
+			"conflictsTitle": "Conflits potentiels avec des tâches parallèles",
+			"conflictsDescription": "{{count}} fichier(s) de ce plan sont aussi modifiés par d'autres tâches actives. La fusion des deux worktrees provoquera probablement un conflit — terminez une tâche d'abord ou ajustez le plan.",
+			"conflictsMoreFiles": "+{{count}} autre(s) fichier(s)"
 		}
 	}
 }

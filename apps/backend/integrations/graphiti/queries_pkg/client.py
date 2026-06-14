@@ -234,11 +234,22 @@ class GraphitiClient:
                 )
                 return False
 
-            # Initialize Graphiti with the custom providers
+            # Initialize Graphiti with the custom providers. The cross-encoder
+            # must be passed explicitly for Ollama: graphiti-core's default
+            # reranker instantiates an OpenAI client and fails without
+            # OPENAI_API_KEY, which breaks fully local setups.
+            from graphiti_providers import create_cross_encoder
+
+            cross_encoder = create_cross_encoder(self.config, self._llm_client)
+            graphiti_kwargs = {}
+            if cross_encoder is not None:
+                graphiti_kwargs["cross_encoder"] = cross_encoder
+
             self._graphiti = Graphiti(
                 graph_driver=self._driver,
                 llm_client=self._llm_client,
                 embedder=self._embedder,
+                **graphiti_kwargs,
             )
 
             # Build indices (first time only)

@@ -93,6 +93,7 @@ export function mapStatusToPlanStatus(status: TaskStatus): string {
 			return "in_progress";
 		case "ai_review":
 		case "human_review":
+		case "build_failed":
 			return "review";
 		case "done":
 			return "completed";

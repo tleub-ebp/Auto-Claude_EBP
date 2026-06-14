@@ -22,4 +22,19 @@ describe("getDisplayProgress", () => {
 	it("gère overallProgress à 0 pendant l'exécution", () => {
 		expect(getDisplayProgress(0, 0, true)).toBe(0);
 	});
+
+	it("reflète le travail réel (sous-tâches) quand il y en a, sans gonfler", () => {
+		// Bug signalé : QA en boucle d'échec, overallProgress=94 (bande QA) mais
+		// seules 2/3 sous-tâches faites → on affiche 67%, le travail réel.
+		expect(getDisplayProgress(67, 94, true, true)).toBe(67);
+	});
+
+	it("affiche 100% quand toutes les sous-tâches sont faites", () => {
+		expect(getDisplayProgress(100, 94, true, true)).toBe(100);
+	});
+
+	it("retombe sur la progression de phase sans sous-tâches (planning)", () => {
+		// Pas encore de sous-tâches (création de spec) : la barre suit la phase.
+		expect(getDisplayProgress(0, 15, true, false)).toBe(15);
+	});
 });

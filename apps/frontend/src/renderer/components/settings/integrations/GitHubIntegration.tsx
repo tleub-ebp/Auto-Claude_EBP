@@ -189,12 +189,12 @@ export function GitHubIntegration({
 				}
 			} else {
 				debugLog("fetchBranches: Failed -", result.error || "No data returned");
-				setBranchesError(result.error || "Failed to load branches");
+				setBranchesError(result.error || t("projectSections.github.failedToLoadBranches"));
 			}
 		} catch (err) {
 			debugLog("fetchBranches: Exception:", err);
 			setBranchesError(
-				err instanceof Error ? err.message : "Failed to load branches",
+				err instanceof Error ? err.message : t("projectSections.github.failedToLoadBranches"),
 			);
 		} finally {
 			setIsLoadingBranches(false);
@@ -214,12 +214,12 @@ export function GitHubIntegration({
 				setRepos(result.data.repos);
 				debugLog("Loaded repos:", result.data.repos.length);
 			} else {
-				setReposError(result.error || "Failed to load repositories");
+				setReposError(result.error || t("projectSections.github.failedToLoadRepositories"));
 			}
 		} catch (err) {
 			debugLog("Error fetching repos:", err);
 			setReposError(
-				err instanceof Error ? err.message : "Failed to load repositories",
+				err instanceof Error ? err.message : t("projectSections.github.failedToLoadRepositories"),
 			);
 		} finally {
 			setIsLoadingRepos(false);
@@ -351,14 +351,14 @@ export function GitHubIntegration({
 						<div className="space-y-4">
 							<div className="flex items-center justify-between">
 								<Label className="text-sm font-medium text-foreground">
-									GitHub Authentication
+									{t("projectSections.github.githubAuthentication")}
 								</Label>
 								<Button
 									variant="ghost"
 									size="sm"
 									onClick={handleSwitchToManual}
 								>
-									Use Manual Token
+									{t("projectSections.github.useManualToken")}
 								</Button>
 							</div>
 							<GitHubOAuthFlow
@@ -374,7 +374,7 @@ export function GitHubIntegration({
 							<div className="space-y-2">
 								<div className="flex items-center justify-between">
 									<Label className="text-sm font-medium text-foreground">
-										Personal Access Token
+										{t("projectSections.github.patLabel")}
 									</Label>
 									<Button
 										variant="outline"
@@ -383,19 +383,20 @@ export function GitHubIntegration({
 										className="gap-2"
 									>
 										<KeyRound className="h-3 w-3" />
-										Use OAuth Instead
+										{t("projectSections.github.useOAuthInstead")}
 									</Button>
 								</div>
 								<p className="text-xs text-muted-foreground">
-									Create a token with{" "}
-									<code className="px-1 bg-muted rounded">repo</code> scope from{" "}
+									{t("projectSections.github.patHelpBefore")}{" "}
+									<code className="px-1 bg-muted rounded">repo</code>{" "}
+									{t("projectSections.github.patHelpAfter")}{" "}
 									<a
 										href="https://github.com/settings/tokens/new?scopes=repo&description=Auto-Build-UI"
 										target="_blank"
 										rel="noopener noreferrer"
 										className="text-info hover:underline"
 									>
-										GitHub Settings
+										{t("projectSections.github.githubSettingsLink")}
 									</a>
 								</p>
 								<PasswordInput
@@ -521,6 +522,7 @@ function RepositoryDropdown({
 	onRefresh,
 	onManualEntry,
 }: RepositoryDropdownProps) {
+	const { t } = useTranslation("settings");
 	const [isOpen, setIsOpen] = useState(false);
 	const [filter, setFilter] = useState("");
 
@@ -546,7 +548,7 @@ function RepositoryDropdown({
 		buttonContent = (
 			<span className="flex items-center gap-2 text-muted-foreground">
 				<Loader2 className="h-4 w-4 animate-spin" />
-				Loading repositories...
+				{t("projectSections.github.loadingRepositories")}
 			</span>
 		);
 	} else if (selectedRepo) {
@@ -558,7 +560,9 @@ function RepositoryDropdown({
 		);
 	} else {
 		buttonContent = (
-			<span className="text-muted-foreground">Select a repository...</span>
+			<span className="text-muted-foreground">
+				{t("projectSections.github.selectRepository")}
+			</span>
 		);
 	}
 
@@ -566,7 +570,7 @@ function RepositoryDropdown({
 		<div className="space-y-2">
 			<div className="flex items-center justify-between">
 				<Label className="text-sm font-medium text-foreground">
-					Repository
+					{t("projectSections.github.repository")}
 				</Label>
 				<div className="flex items-center gap-2">
 					<Button
@@ -586,7 +590,7 @@ function RepositoryDropdown({
 						onClick={onManualEntry}
 						className="h-7 text-xs"
 					>
-						Enter Manually
+						{t("projectSections.github.enterManually")}
 					</Button>
 				</div>
 			</div>
@@ -616,7 +620,7 @@ function RepositoryDropdown({
 						{/* Search filter */}
 						<div className="p-2 border-b border-border">
 							<Input
-								placeholder="Search repositories..."
+								placeholder={t("projectSections.github.searchRepositories")}
 								value={filter}
 								onChange={(e) => setFilter(e.target.value)}
 								className="h-8 text-sm"
@@ -629,8 +633,8 @@ function RepositoryDropdown({
 							{filteredRepos.length === 0 ? (
 								<div className="px-3 py-4 text-sm text-muted-foreground text-center">
 									{filter
-										? "No matching repositories"
-										: "No repositories found"}
+										? t("projectSections.github.noMatchingRepositories")
+										: t("projectSections.github.noRepositoriesFound")}
 								</div>
 							) : (
 								filteredRepos.map((repo) => (
@@ -671,7 +675,7 @@ function RepositoryDropdown({
 
 			{selectedRepo && (
 				<p className="text-xs text-muted-foreground">
-					Selected:{" "}
+					{t("projectSections.github.selectedLabel")}:{" "}
 					<code className="px-1 bg-muted rounded">{selectedRepo}</code>
 				</p>
 			)}
@@ -685,15 +689,20 @@ interface RepositoryInputProps {
 }
 
 function RepositoryInput({ value, onChange }: RepositoryInputProps) {
+	const { t } = useTranslation("settings");
+
 	return (
 		<div className="space-y-2">
-			<Label className="text-sm font-medium text-foreground">Repository</Label>
+			<Label className="text-sm font-medium text-foreground">
+				{t("projectSections.github.repository")}
+			</Label>
 			<p className="text-xs text-muted-foreground">
-				Format: <code className="px-1 bg-muted rounded">owner/repo</code> (e.g.,
-				facebook/react)
+				{t("projectSections.github.repositoryFormatPrefix")}{" "}
+				<code className="px-1 bg-muted rounded">owner/repo</code>{" "}
+				{t("projectSections.github.repositoryFormatExample")}
 			</p>
 			<Input
-				placeholder="owner/repository"
+				placeholder={t("projectSections.github.repositoryPlaceholder")}
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
 			/>
@@ -729,11 +738,11 @@ function ConnectionStatus({
 	let statusText: string;
 
 	if (isChecking) {
-		statusText = "Checking connection...";
+		statusText = t("projectSections.github.checkingConnection");
 	} else if (connectionStatus?.connected) {
-		statusText = "Connected to GitHub";
+		statusText = t("projectSections.github.connectedToGitHub");
 	} else {
-		statusText = "Not connected to GitHub";
+		statusText = t("projectSections.github.notConnectedToGitHub");
 	}
 
 	return (
@@ -746,7 +755,7 @@ function ConnectionStatus({
 					<p className="text-xs text-muted-foreground">{statusText}</p>
 					{connectionStatus?.repoFullName && (
 						<p className="text-xs text-muted-foreground mt-1">
-							Repository:{" "}
+							{t("projectSections.github.repository")}:{" "}
 							<span className="font-mono">{connectionStatus.repoFullName}</span>
 						</p>
 					)}

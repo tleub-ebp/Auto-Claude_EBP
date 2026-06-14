@@ -92,6 +92,12 @@ class ProviderRegistry:
             requires_cli=False,
             models=[
                 {
+                    "value": "claude-fable-5",
+                    "label": "Claude Fable 5",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
+                {
                     "value": "claude-opus-4-6",
                     "label": "Claude Opus 4.6",
                     "tier": "flagship",
@@ -358,6 +364,12 @@ class ProviderRegistry:
             requires_oauth=False,
             requires_cli=False,
             models=[
+                {
+                    "value": "anthropic.claude-fable-5",
+                    "label": "Claude Fable 5 (Bedrock)",
+                    "tier": "flagship",
+                    "supportsThinking": True,
+                },
                 {
                     "value": "anthropic.claude-opus-4-8-v1",
                     "label": "Claude Opus 4.8 (Bedrock)",

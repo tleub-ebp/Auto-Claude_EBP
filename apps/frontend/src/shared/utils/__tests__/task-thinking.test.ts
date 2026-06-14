@@ -12,6 +12,7 @@ import type {
 } from "../../types/settings";
 import {
 	buildModelMetadataUpdate,
+	buildModelSelectOptions,
 	buildProviderMetadataUpdate,
 	buildThinkingMetadataUpdate,
 	isPerPhaseThinkingTask,
@@ -247,5 +248,76 @@ describe("buildProviderMetadataUpdate", () => {
 		);
 		expect(update.phaseProviders?.coding).toBe("openai");
 		expect(update.phaseProviders?.spec).toBe("copilot");
+	});
+});
+
+describe("buildModelSelectOptions", () => {
+	// Catalogue Anthropic déjà dédupliqué (source de vérité unique, tirets).
+	const anthropicCatalog = [
+		{ value: "claude-opus-4-8", label: "Claude Opus 4.8" },
+		{ value: "claude-opus-4-7", label: "Claude Opus 4.7" },
+		{ value: "claude-opus-4-6", label: "Claude Opus 4.6" },
+		{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+	];
+
+	it("ne crée pas de doublon quand la valeur persistée est en notation pointée", () => {
+		// Reproduit le bug : modelValue = "claude-opus-4.8" (point) vs catalogue
+		// "claude-opus-4-8" (tirets) → la comparaison brute injectait un 2e item.
+		const { options, value } = buildModelSelectOptions(
+			anthropicCatalog,
+			"claude-opus-4.8",
+		);
+		// Aucune entrée supplémentaire : on reste sur le catalogue.
+		expect(options).toHaveLength(anthropicCatalog.length);
+		// Une seule entrée 4.8, avec le bon libellé (pas l'id brut).
+		const opus48 = options.filter(
+			(o) => o.value === "claude-opus-4-8" || o.value === "claude-opus-4.8",
+		);
+		expect(opus48).toHaveLength(1);
+		expect(opus48[0].label).toBe("Claude Opus 4.8");
+		// Le <Select> pointe sur l'entrée canonique du catalogue.
+		expect(value).toBe("claude-opus-4-8");
+	});
+
+	it("aligne un alias court persisté sur l'entrée du catalogue", () => {
+		const { options, value } = buildModelSelectOptions(anthropicCatalog, "opus");
+		expect(options).toHaveLength(anthropicCatalog.length);
+		// "opus" → claude-opus-4-6 (cf. MODEL_ID_MAP), déjà présent.
+		expect(value).toBe("claude-opus-4-6");
+		expect(options.some((o) => o.value === "opus")).toBe(false);
+	});
+
+	it("laisse la valeur inchangée si déjà au format catalogue", () => {
+		const { options, value } = buildModelSelectOptions(
+			anthropicCatalog,
+			"claude-opus-4-8",
+		);
+		expect(options).toHaveLength(anthropicCatalog.length);
+		expect(value).toBe("claude-opus-4-8");
+	});
+
+	it("injecte la valeur courante absente du catalogue (filet de sécurité)", () => {
+		const { options, value } = buildModelSelectOptions(
+			anthropicCatalog,
+			"gpt-5.5",
+			{ "gpt-5.5": "GPT-5.5" },
+		);
+		expect(options).toHaveLength(anthropicCatalog.length + 1);
+		expect(options[0]).toEqual({ value: "gpt-5.5", label: "GPT-5.5" });
+		expect(value).toBe("gpt-5.5");
+	});
+
+	it("utilise l'id brut comme libellé quand aucun libellé court n'est fourni", () => {
+		const { options } = buildModelSelectOptions(anthropicCatalog, "mystery-model");
+		expect(options[0]).toEqual({
+			value: "mystery-model",
+			label: "mystery-model",
+		});
+	});
+
+	it("retourne une valeur vide quand aucun modèle courant", () => {
+		const { options, value } = buildModelSelectOptions(anthropicCatalog, "");
+		expect(value).toBe("");
+		expect(options).toHaveLength(anthropicCatalog.length);
 	});
 });

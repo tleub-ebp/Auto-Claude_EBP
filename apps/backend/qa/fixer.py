@@ -230,6 +230,17 @@ async def run_qa_fixer_session(
         print("✓ Memory context loaded for QA fixer")
         debug_success("qa_fixer", "Graphiti memory context loaded for fixer")
 
+    # Learning Loop: inject patterns learned from previous builds (qa_fixing phase)
+    try:
+        from learning_loop.prompt_injection import get_learning_context
+
+        learning_context = get_learning_context(project_dir, "qa_fixing")
+        if learning_context:
+            prompt += "\n\n" + learning_context
+            debug_success("qa_fixer", "Learning loop patterns injected for fixer")
+    except Exception:
+        pass
+
     # Add session context - use full path so agent can find files
     prompt += f"\n\n---\n\n**Fix Session**: {fix_session}\n"
     prompt += f"**Spec Directory**: {spec_dir}\n"

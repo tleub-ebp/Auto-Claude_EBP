@@ -61,6 +61,10 @@ import AzureDevOpsLogo from "../assets/logos/azure-devops.svg";
 import JiraLogo from "../assets/logos/jira.svg";
 import { useViewState } from "../contexts/ViewStateContext";
 import { useToast } from "../hooks/use-toast";
+import {
+	compareTasksBySort,
+	taskMatchesFilters,
+} from "../lib/kanban-filter";
 import { cn } from "../lib/utils";
 import { openAppEmulatorDialog } from "../stores/app-emulator-store";
 import {
@@ -70,6 +74,7 @@ import {
 	MIN_COLUMN_WIDTH,
 	useKanbanSettingsStore,
 } from "../stores/kanban-settings-store";
+import { useKanbanFilterStore } from "../stores/kanban-filter-store";
 import {
 	useProjectEnvStore,
 } from "../stores/project-env-store";
@@ -91,7 +96,7 @@ import type { ImportableWorkItem } from "./azure-devops-import/ImportConfirmDial
 import { ImportConfirmDialog } from "./azure-devops-import/ImportConfirmDialog";
 import { BulkPRDialog } from "./BulkPRDialog";
 import { JiraSidePanel } from "./jira-import/JiraSidePanel";
-import { QuickCommandBar } from "./kanban/QuickCommandBar";
+import { KanbanToolbar } from "./kanban/KanbanToolbar";
 import { PRFilesModal } from "./PRFilesModal";
 import { QueueSettingsModal } from "./QueueSettingsModal";
 import { SortableTaskCard } from "./SortableTaskCard";
@@ -140,6 +145,9 @@ const VALID_BULK_TRANSITIONS: Record<
 	in_progress: ["queue", "ai_review"],
 	ai_review: ["in_progress", "human_review"],
 	human_review: ["ai_review", "done"],
+	// build_failed is CI-driven: tasks land there when the pipeline goes red;
+	// from there the user can only send them back to work manually.
+	build_failed: ["queue", "in_progress"],
 	done: [],
 };
 
@@ -328,6 +336,12 @@ const getEmptyStateContent = (
 				icon: <Eye className="h-6 w-6 text-muted-foreground/50" />,
 				message: t("kanban.emptyHumanReview"),
 				subtext: t("kanban.emptyHumanReviewHint"),
+			};
+		case "build_failed":
+			return {
+				icon: <CheckCircle2 className="h-6 w-6 text-success/50" />,
+				message: t("kanban.emptyBuildFailed"),
+				subtext: t("kanban.emptyBuildFailedHint"),
 			};
 		case "done":
 			return {
@@ -1065,6 +1079,21 @@ export function KanbanBoard({
 		: undefined;
 	const maxParallelTasks = project?.settings?.maxParallelTasks ?? 3;
 
+	// Kanban filter/sort state (search, source/category/priority filters, sort).
+	// Persisted per project in the kanban-filter-store.
+	const kanbanFilters = useKanbanFilterStore((state) => state.filters);
+	const kanbanSort = useKanbanFilterStore((state) => state.sort);
+	const loadKanbanFilters = useKanbanFilterStore(
+		(state) => state.loadForProject,
+	);
+
+	// Load the persisted filter/sort preferences whenever the active project changes.
+	useEffect(() => {
+		if (projectId) {
+			loadKanbanFilters(projectId);
+		}
+	}, [projectId, loadKanbanFilters]);
+
 	// Check Azure DevOps connection status when enabled or credentials change.
 	useEffect(() => {
 		if (
@@ -1219,11 +1248,13 @@ export function KanbanBoard({
 
 	// Filter tasks based on archive status
 	const filteredTasks = useMemo(() => {
-		if (showArchived) {
-			return tasks; // Show all tasks including archived
-		}
-		return tasks.filter((t) => !t.metadata?.archivedAt);
-	}, [tasks, showArchived]);
+		// Archive gate first, then the user-selected search/source/category/priority
+		// filters from the filter bar.
+		const base = showArchived
+			? tasks
+			: tasks.filter((t) => !t.metadata?.archivedAt);
+		return base.filter((t) => taskMatchesFilters(t, kanbanFilters));
+	}, [tasks, showArchived, kanbanFilters]);
 
 	// Calculate archived count for Done column button
 	const archivedCount = useMemo(
@@ -1254,6 +1285,7 @@ export function KanbanBoard({
 			in_progress: [],
 			ai_review: [],
 			human_review: [],
+			build_failed: [],
 			done: [],
 		};
 
@@ -1265,13 +1297,21 @@ export function KanbanBoard({
 			}
 		});
 
+		// When an explicit sort field is chosen from the filter bar, it takes
+		// precedence over the manual drag-and-drop order for every column.
+		const useExplicitSort = kanbanSort.field !== "manual";
+
 		// Sort tasks within each column
 		Object.keys(grouped).forEach((status) => {
 			const statusKey = status as (typeof TASK_STATUS_COLUMNS)[number];
 			const columnTasks = grouped[statusKey];
 			const columnOrder = taskOrder?.[statusKey];
 
-			if (columnOrder && columnOrder.length > 0) {
+			if (useExplicitSort) {
+				grouped[statusKey] = [...columnTasks].sort((a, b) =>
+					compareTasksBySort(a, b, kanbanSort),
+				);
+			} else if (columnOrder && columnOrder.length > 0) {
 				// Custom order exists: sort by order index
 				// 1. Create a set of current task IDs for fast lookup (filters stale IDs)
 				const currentTaskIds = new Set(columnTasks.map((t) => t.id));
@@ -1311,7 +1351,7 @@ export function KanbanBoard({
 		});
 
 		return grouped;
-	}, [filteredTasks, taskOrder]);
+	}, [filteredTasks, taskOrder, kanbanSort]);
 
 	// Prune stale IDs when tasks are deleted or filtered out
 	useEffect(() => {
@@ -2540,6 +2580,7 @@ export function KanbanBoard({
 			in_progress: [],
 			ai_review: [],
 			human_review: [],
+			build_failed: [],
 			done: [],
 			pr_created: [],
 			error: [],
@@ -2836,9 +2877,8 @@ export function KanbanBoard({
 							{t("tasks:kanban.expandAll")}
 						</Button>
 					)}
-					{/* Quick slash command bar — sends /<cmd> prompts to the SDK
-					    using .claude/commands/*.md from the active project. */}
-					<QuickCommandBar projectPath={project?.path} />
+					{/* Unified toolbar: search, filters, sort, and quick commands */}
+					<KanbanToolbar projectPath={project?.path} />
 				</div>
 				<div className="flex items-center gap-2">
 					{activeProjectId &&

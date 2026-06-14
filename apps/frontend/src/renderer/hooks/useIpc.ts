@@ -336,6 +336,14 @@ export function useIpcListeners(): void {
 			},
 		);
 
+		// CI pipeline status listener (kanban pipeline badge / « Build rouge »)
+		const cleanupPipelineStatus = window.electronAPI.onPipelineStatus(
+			(status: import("../../shared/types").TaskPipelineStatus) => {
+				if (!isTaskForCurrentProject(status.projectId)) return;
+				useTaskStore.getState().setPipelineStatus(status);
+			},
+		);
+
 		// Terminal rate limit listener
 		const showRateLimitModal = useRateLimitStore.getState().showRateLimitModal;
 		const cleanupRateLimit = window.electronAPI.onTerminalRateLimit(
@@ -396,6 +404,7 @@ export function useIpcListeners(): void {
 			cleanupLog();
 			cleanupStatus();
 			cleanupExecutionProgress();
+			cleanupPipelineStatus();
 			cleanupRoadmapProgress();
 			cleanupRoadmapComplete();
 			cleanupRoadmapError();

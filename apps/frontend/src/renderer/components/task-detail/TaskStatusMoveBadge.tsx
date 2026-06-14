@@ -17,6 +17,7 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * Couleur de la pastille par colonne cible (design-system tokens).
@@ -28,6 +29,7 @@ const STATUS_DOT_CLASS: Record<TaskStatusColumn, string> = {
 	in_progress: "bg-info",
 	ai_review: "bg-warning",
 	human_review: "bg-purple-400",
+	build_failed: "bg-destructive",
 	done: "bg-success",
 };
 
@@ -51,13 +53,13 @@ interface TaskStatusMoveBadgeProps {
 /**
  * Badge de statut interactif du header de la modale de détail.
  *
- * Affiche le statut courant et, au clic, propose de déplacer la tâche vers une
- * autre colonne du Kanban — équivalent du menu « Déplacer vers » des cartes,
- * mais intégré de façon discrète au badge existant (chevron + pastilles).
+ * Le badge EST le sélecteur de colonne : bordure permanente + chevron pour
+ * signaler qu'il est cliquable, surbrillance au survol et tooltip explicite.
+ * Au clic, il propose de déplacer la tâche vers une autre colonne du Kanban —
+ * équivalent du menu « Déplacer vers » des cartes, sans alourdir l'en-tête.
  *
  * Les états spéciaux (Bloqué / Incomplet) réutilisent ce même badge via les
- * props `label`/`leadingIcon`/`pulse`, pour rester déplaçables sans alourdir
- * l'en-tête de la popin.
+ * props `label`/`leadingIcon`/`pulse`, pour rester déplaçables.
  */
 export function TaskStatusMoveBadge({
 	task,
@@ -76,29 +78,37 @@ export function TaskStatusMoveBadge({
 
 	return (
 		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<button
-					type="button"
-					aria-label={t("tasks:modal.move.trigger")}
-					className="group rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-				>
-					<Badge
-						variant={variant}
-						className={cn(
-							"text-xs gap-1 cursor-pointer ring-1 ring-transparent transition-all group-hover:ring-border group-data-[state=open]:ring-border",
-							pulse
-								? "animate-pulse"
-								: task.status === "in_progress" &&
-										isRunning &&
-										"status-running",
-						)}
-					>
-						{leadingIcon}
-						{label ?? t(TASK_STATUS_LABELS[task.status])}
-						<ChevronDown className="h-3 w-3 opacity-50 transition-all group-hover:opacity-90 group-data-[state=open]:rotate-180" />
-					</Badge>
-				</button>
-			</DropdownMenuTrigger>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<DropdownMenuTrigger asChild>
+						<button
+							type="button"
+							aria-label={t("tasks:modal.move.trigger")}
+							className="group rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+						>
+							<Badge
+								variant={variant}
+								className={cn(
+									// Bordure permanente + transition : le badge se lit comme un menu déroulant
+									"text-xs gap-1 cursor-pointer ring-1 ring-border/60 transition-all group-hover:ring-border group-hover:brightness-110 group-data-[state=open]:ring-border group-data-[state=open]:brightness-110",
+									pulse
+										? "animate-pulse"
+										: task.status === "in_progress" &&
+												isRunning &&
+												"status-running",
+								)}
+							>
+								{leadingIcon}
+								{label ?? t(TASK_STATUS_LABELS[task.status])}
+								<ChevronDown className="h-3 w-3 opacity-70 transition-all group-hover:opacity-100 group-data-[state=open]:rotate-180" />
+							</Badge>
+						</button>
+					</DropdownMenuTrigger>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">
+					{t("tasks:modal.move.trigger")}
+				</TooltipContent>
+			</Tooltip>
 			<DropdownMenuContent align="start" className="min-w-[11rem]">
 				<DropdownMenuLabel className="text-xs text-muted-foreground">
 					{t("tasks:modal.move.label")}

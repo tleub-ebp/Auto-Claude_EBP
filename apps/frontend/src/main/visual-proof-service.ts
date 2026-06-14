@@ -18,6 +18,7 @@ import { promisify } from "node:util";
 import { BrowserWindow, desktopCapturer } from "electron";
 import { getSpecsDir } from "../shared/constants";
 import type {
+	VisualProofApiSmoke,
 	VisualProofNavigationPlan,
 	VisualProofNavigationStep,
 	VisualProofProviderId,
@@ -27,6 +28,7 @@ import type {
 	VisualProofStatus,
 	VisualProofTargetKind,
 } from "../shared/types";
+import { runApiSmokeProof } from "./api-smoke";
 import { logger } from "./app-logger";
 import type { AppEmulatorConfig } from "./app-emulator-service";
 import { appEmulatorService } from "./app-emulator-service";
@@ -119,6 +121,7 @@ interface VisualProofProviderResult {
 	framework?: string;
 	appUrl?: string;
 	screenshots: VisualProofScreenshot[];
+	apiSmoke?: VisualProofApiSmoke;
 	error?: string;
 }
 
@@ -408,6 +411,25 @@ export function buildProofComment(run: VisualProofRun, branch?: string): string 
 		lines.push(`Error: ${run.error}`, "");
 	}
 
+	if (run.apiSmoke && run.apiSmoke.attempted > 0) {
+		lines.push(
+			"### API smoke",
+			"",
+			`**${run.apiSmoke.passed}/${run.apiSmoke.attempted}** endpoints passed` +
+				` ([OpenAPI](${run.apiSmoke.specUrl}))`,
+			"",
+			"| Endpoint | Status | Result |",
+			"| --- | --- | --- |",
+			...run.apiSmoke.results.map(
+				(result) =>
+					`| \`${result.method} ${result.path}\` | ${result.status ?? "—"} | ${
+						result.ok ? "✅" : "❌"
+					} |`,
+			),
+			"",
+		);
+	}
+
 	if (run.screenshots.length > 0) {
 		lines.push("### Screenshots", "");
 		for (const screenshot of run.screenshots) {
@@ -631,6 +653,49 @@ async function captureWebFeatureScreenshots(
 		);
 	}
 	return screenshots;
+}
+
+/**
+ * API complement to the visual proof: when the started app exposes an OpenAPI
+ * document, smoke-test the parameterless GET endpoints (report written to the
+ * artifact dir) and capture the Swagger/OpenAPI console as a screenshot.
+ * Best-effort: returns empty results when the app is not an API.
+ */
+async function runApiProof(
+	appUrl: string,
+	context: VisualProofProviderContext,
+): Promise<{
+	apiSmoke?: VisualProofApiSmoke;
+	screenshots: VisualProofScreenshot[];
+}> {
+	const screenshots: VisualProofScreenshot[] = [];
+	const apiSmoke = await runApiSmokeProof(appUrl, context.artifactDir);
+	if (!apiSmoke) return { screenshots };
+
+	if (apiSmoke.swaggerUiUrl) {
+		const fileName = "swagger-ui.png";
+		const screenshotPath = path.join(context.artifactDir, fileName);
+		try {
+			const viewport = await captureWebPage(apiSmoke.swaggerUiUrl, screenshotPath);
+			screenshots.push(
+				createScreenshot(
+					"Swagger UI",
+					context.relativeArtifactDir,
+					fileName,
+					screenshotPath,
+					viewport,
+				),
+			);
+		} catch (error) {
+			logger.warn("[VisualProof] Could not capture Swagger UI:", error);
+		}
+	}
+	return { apiSmoke, screenshots };
+}
+
+function describeApiSmoke(apiSmoke: VisualProofApiSmoke | undefined): string {
+	if (!apiSmoke || apiSmoke.attempted === 0) return "";
+	return ` API smoke: ${apiSmoke.passed}/${apiSmoke.attempted} endpoints passed.`;
 }
 
 async function captureDesktopImage(
@@ -1705,14 +1770,17 @@ class LocalIisExpressProvider implements VisualProofProvider {
 				context,
 				navigationPlan?.web ?? [],
 			);
+			const apiProof = await runApiProof(appUrl, context);
+			screenshots.push(...apiProof.screenshots);
 			return {
 				status: "passed",
 				targetKind: "web",
 				isolated: false,
-				providerDetails: host.providerDetails,
+				providerDetails: `${host.providerDetails}${describeApiSmoke(apiProof.apiSmoke)}`,
 				framework: "dotnet-framework",
 				appUrl,
 				screenshots,
+				apiSmoke: apiProof.apiSmoke,
 			};
 		} finally {
 			stopChildProcess(child);
@@ -1846,17 +1914,21 @@ class LocalWebProvider implements VisualProofProvider {
 				context,
 				navigationPlan?.web ?? [],
 			);
+			const apiProof = await runApiProof(appUrl, context);
+			screenshots.push(...apiProof.screenshots);
 			return {
 				status: "passed",
 				targetKind: "web",
 				isolated: this.isolated,
 				providerDetails:
-					this.id === "docker"
+					(this.id === "docker"
 						? "Docker-backed web preview through the app emulator."
-						: "Local web preview through the app emulator.",
+						: "Local web preview through the app emulator.") +
+					describeApiSmoke(apiProof.apiSmoke),
 				framework: context.config.framework,
 				appUrl,
 				screenshots,
+				apiSmoke: apiProof.apiSmoke,
 			};
 		} finally {
 			appEmulatorService.stopServer();
@@ -2059,6 +2131,7 @@ export class VisualProofService extends EventEmitter {
 				artifactDir,
 				commitSha,
 				screenshots: providerResult.screenshots,
+				apiSmoke: providerResult.apiSmoke,
 				error: providerResult.error,
 				completedAt: new Date().toISOString(),
 			};

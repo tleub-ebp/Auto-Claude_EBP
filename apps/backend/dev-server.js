@@ -63,6 +63,13 @@ function runUvicorn() {
 		// extra positional args and making uvicorn exit with code 2.
 		"--reload-dir",
 		__dirname,
+		// The Electron PythonEnvManager installs into apps/backend/.venv, which
+		// is INSIDE the watched dir — without this exclude, every pip install
+		// reload-storms the server. No wildcard => safe from the argv expansion
+		// issue above. Must be ABSOLUTE: uvicorn's FileFilter matches exclude
+		// dirs against the changed file's (absolute) parents.
+		"--reload-exclude",
+		join(__dirname, ".venv"),
 	];
 	const proc = spawn(venvPython(), uvicornArgs, {
 		stdio: "inherit",

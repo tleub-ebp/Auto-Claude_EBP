@@ -1137,17 +1137,12 @@ def create_client(
                 server_config["headers"] = custom["headers"]
             mcp_servers[server_id] = server_config
 
-    # Build system prompt
-    base_prompt = (
-        f"You are an expert full-stack developer building production-quality software. "
-        f"Your working directory is: {project_dir.resolve()}\n"
-        f"Your filesystem access is RESTRICTED to this directory only. "
-        f"Use relative paths (starting with ./) for all file operations. "
-        f"Never use absolute paths or try to access files outside your working directory.\n\n"
-        f"You follow existing code patterns, write clean maintainable code, and verify "
-        f"your work through thorough testing. You communicate progress through Git commits "
-        f"and build-progress.txt updates."
-    )
+    # Build system prompt (single source — core/llm_optimization.py).
+    # Byte-stable across sessions of the same task so the SDK's prompt cache
+    # (1h TTL enabled above) keeps hitting between Kanban cards.
+    from core.llm_optimization import build_base_system_prompt
+
+    base_prompt = build_base_system_prompt(project_dir)
 
     # CLAUDE.md loading strategy: hybrid (setting_sources + manual fallback).
     #
@@ -1579,6 +1574,101 @@ def _get_active_provider(spec_dir: Path | None = None) -> str:
     return "claude"
 
 
+# Per-spec record of the last (provider, model, effort) an agent client was
+# created with. Used to detect "context switching" — i.e. when the active LLM
+# provider, model and/or thinking effort changes mid-task (e.g. the user switches
+# Anthropic → Copilot from the paused-task modal, or a per-phase override kicks
+# in) — so we can leave a trace in the task activity feed showing from when which
+# provider/model/effort was in use.
+LLM_CONTEXT_STATE_FILE = ".llm_context.json"
+
+
+def _log_llm_context_switch(
+    spec_dir: Path, provider: str, model: str, thinking: str
+) -> None:
+    """Record the active LLM provider+model+effort and, when it differs from the
+    last recorded context for this spec, emit a human-readable trace into the
+    task activity feed.
+
+    This is the single source of truth for "context switching" traces: every
+    execution phase resolves its client through ``create_agent_client``, so
+    comparing against the persisted ``.llm_context.json`` catches every change
+    (provider switch, per-phase model change, effort change, resume-with-provider)
+    exactly once.
+
+    Resilient by design — context logging must NEVER break client creation, so
+    every step is guarded and failures degrade to a debug log.
+    """
+    try:
+        state_path = Path(spec_dir) / LLM_CONTEXT_STATE_FILE
+
+        previous: dict | None = None
+        if state_path.exists():
+            try:
+                previous = json.loads(state_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError, ValueError):
+                previous = None
+
+        prev_provider = (previous or {}).get("provider")
+        prev_model = (previous or {}).get("model")
+        prev_thinking = (previous or {}).get("thinking")
+
+        # No change since the last client creation — nothing to trace.
+        if (
+            prev_provider == provider
+            and prev_model == model
+            and prev_thinking == thinking
+        ):
+            return
+
+        if previous is None:
+            message = (
+                f"▶️ Contexte LLM initial — Fournisseur : {provider} "
+                f"· Modèle : {model} · Effort : {thinking}"
+            )
+        else:
+            # List only the fields that actually changed so the trace pinpoints
+            # the switch (provider, model and/or thinking effort).
+            changes: list[str] = []
+            if prev_provider != provider:
+                changes.append(f"Fournisseur : {prev_provider} → {provider}")
+            if prev_model != model:
+                changes.append(f"Modèle : {prev_model} → {model}")
+            if prev_thinking != thinking:
+                changes.append(f"Effort : {prev_thinking or '?'} → {thinking}")
+            message = "🔄 Changement de contexte LLM — " + " · ".join(changes)
+
+        logger.info("[llm-context] %s", message)
+
+        # Surface in the task activity feed, but only when the globally-active
+        # task logger belongs to this spec — otherwise (e.g. GitHub PR review
+        # runners, ideation) there's no kanban feed to write into and we must
+        # not contaminate an unrelated task's logs. The running phase has
+        # already set ``current_phase`` on the global logger, so the entry is
+        # attributed to the correct phase.
+        try:
+            from task_logger import get_task_logger
+
+            tl = get_task_logger()
+            if tl is not None and Path(tl.spec_dir) == Path(spec_dir):
+                tl.log_info(message)
+        except Exception:
+            pass
+
+        try:
+            state_path.write_text(
+                json.dumps(
+                    {"provider": provider, "model": model, "thinking": thinking},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+    except Exception as e:  # pragma: no cover - defensive guard
+        logger.debug("Could not record LLM context switch: %s", e)
+
+
 def create_agent_client(
     project_dir: Path,
     spec_dir: Path,
@@ -1632,22 +1722,39 @@ def create_agent_client(
     if provider is None:
         provider = _get_active_provider(spec_dir)
 
+    # Anthropic rejects dotted Copilot-style ids (e.g. "claude-opus-4.8"); rewrite
+    # to the dashed native form before it reaches the SDK or the context trace.
+    # This is the guaranteed net — every phase (spec/planning/coding/qa) funnels
+    # through here, regardless of how the model id was resolved upstream.
+    if provider in ("claude", "anthropic"):
+        try:
+            from phase_config import normalize_anthropic_model_id
+
+            model = normalize_anthropic_model_id(model)
+        except Exception:
+            pass
+
     logger.info(
         f"Creating agent client: provider={provider}, agent_type={agent_type}, model={model}"
     )
 
-    if provider == "copilot":
-        # Build system prompt (reuse logic from create_client)
-        base_prompt = (
-            f"You are an expert full-stack developer building production-quality software. "
-            f"Your working directory is: {project_dir.resolve()}\n"
-            f"Your filesystem access is RESTRICTED to this directory only. "
-            f"Use relative paths (starting with ./) for all file operations. "
-            f"Never use absolute paths or try to access files outside your working directory.\n\n"
-            f"You follow existing code patterns, write clean maintainable code, and verify "
-            f"your work through thorough testing. You communicate progress through Git commits "
-            f"and build-progress.txt updates."
+    # Trace LLM context switches (provider/model/effort changes) into the task
+    # feed. Map the thinking budget back to its effort level for readability.
+    try:
+        from phase_config import thinking_level_from_budget
+
+        effort = thinking_level_from_budget(max_thinking_tokens)
+    except Exception:
+        effort = (
+            "none" if max_thinking_tokens is None else f"{max_thinking_tokens} tokens"
         )
+    _log_llm_context_switch(spec_dir, provider, model, effort)
+
+    if provider == "copilot":
+        # Shared system prompt (single source — core/llm_optimization.py)
+        from core.llm_optimization import build_base_system_prompt
+
+        base_prompt = build_base_system_prompt(project_dir)
         base_prompt = _inject_domain_addendum(base_prompt, agent_type, spec_dir)
 
         # Convert agents dict to SubagentDefinition if provided
@@ -1710,19 +1817,11 @@ def create_agent_client(
         # execution so that Windsurf credits are consumed.
         from core.agent_client import WindsurfAgentClient
 
-        # Build system prompt (same pattern as CopilotAgentClient)
-        windsurf_system_prompt = (
-            f"You are an expert full-stack developer building production-quality software. "
-            f"Your working directory is: {project_dir.resolve()}\n"
-            f"Your filesystem access is RESTRICTED to this directory only. "
-            f"Use relative paths (starting with ./) for all file operations. "
-            f"Never use absolute paths or try to access files outside your working directory.\n\n"
-            f"You follow existing code patterns, write clean maintainable code, and verify "
-            f"your work through thorough testing. You communicate progress through Git commits "
-            f"and build-progress.txt updates.\n\n"
-            f"You MUST use the provided tools (read_file, write_file, list_files, run_command) "
-            f"to interact with the filesystem and execute commands. Do not just describe what to do — "
-            f"actually do it by calling the tools."
+        # Shared system prompt (single source — core/llm_optimization.py)
+        from core.llm_optimization import build_base_system_prompt
+
+        windsurf_system_prompt = build_base_system_prompt(
+            project_dir, tool_use_hint=True
         )
         windsurf_system_prompt = _inject_domain_addendum(
             windsurf_system_prompt, agent_type, spec_dir
@@ -1744,35 +1843,43 @@ def create_agent_client(
 
     elif provider == "openai":
         from core.agent_client import OpenAIAgentClient
-
-        openai_system_prompt = (
-            f"You are an expert full-stack developer building production-quality software. "
-            f"Your working directory is: {project_dir.resolve()}\n"
-            f"Your filesystem access is RESTRICTED to this directory only. "
-            f"Use relative paths (starting with ./) for all file operations. "
-            f"Never use absolute paths or try to access files outside your working directory.\n\n"
-            f"You follow existing code patterns, write clean maintainable code, and verify "
-            f"your work through thorough testing. You communicate progress through Git commits "
-            f"and build-progress.txt updates.\n\n"
-            f"You MUST use the provided tools (read_file, write_file, list_files, run_command) "
-            f"to interact with the filesystem and execute commands. Do not just describe what to do — "
-            f"actually do it by calling the tools."
+        from core.llm_optimization import (
+            build_base_system_prompt,
+            openai_prompt_cache_key,
+            openai_reasoning_effort,
         )
+
+        openai_system_prompt = build_base_system_prompt(project_dir, tool_use_hint=True)
         openai_system_prompt = _inject_domain_addendum(
             openai_system_prompt, agent_type, spec_dir
         )
 
+        # Provider-specific token optimizations layered on the common trunk:
+        # - reasoning_effort: maps the Kanban thinking level to OpenAI's native
+        #   effort control (reasoning models only — omitted otherwise)
+        # - prompt_cache_key: routes consecutive sessions of the same task/phase
+        #   to the same automatic-prompt-cache shard
+        resolved_openai_model = model or "gpt-4o"
+        reasoning_effort = openai_reasoning_effort(
+            resolved_openai_model, max_thinking_tokens
+        )
+        prompt_cache_key = openai_prompt_cache_key(spec_dir, agent_type)
+
         logger.info(
-            "[create_agent_client] Using OpenAIAgentClient (model=%s, agent_type=%s)",
+            "[create_agent_client] Using OpenAIAgentClient (model=%s, agent_type=%s, "
+            "reasoning_effort=%s)",
             model,
             agent_type,
+            reasoning_effort,
         )
         return OpenAIAgentClient(
-            model=model or "gpt-4o",
+            model=resolved_openai_model,
             system_prompt=openai_system_prompt,
             max_turns=50,
             project_dir=str(project_dir),
             agent_type=agent_type,
+            reasoning_effort=reasoning_effort,
+            prompt_cache_key=prompt_cache_key,
         )
 
     else:
