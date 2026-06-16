@@ -743,28 +743,36 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
 					<StreamingSessionButton
 						taskId={task.id}
 						projectPath={currentProject.path}
+						compact
 					/>
 				)}
 				{/* Pause / Reprendre — only meaningful while the task is running. */}
 				{(isRunning || isPaused) && pauseResumeButton}
-				<Button
-					variant={isRunning ? "destructive" : "default"}
-					size="sm"
-					className="h-7 px-2.5"
-					onClick={handleStartStop}
-				>
-					{isRunning ? (
-						<>
-							<Square className="mr-1.5 h-3 w-3" />
-							{t("actions.stop")}
-						</>
-					) : (
-						<>
-							<Play className="mr-1.5 h-3 w-3" />
-							{t("actions.start")}
-						</>
-					)}
-				</Button>
+				{isRunning ? (
+					// While running, the footer already carries Watch-live + Pause, so
+					// keep Stop icon-only — the whole row then fits on a single line and
+					// the in-progress card stays as compact as the other columns.
+					<Button
+						variant="destructive"
+						size="sm"
+						className="h-7 w-7 p-0"
+						onClick={handleStartStop}
+						title={t("actions.stop")}
+						aria-label={t("actions.stop")}
+					>
+						<Square className="h-3 w-3" />
+					</Button>
+				) : (
+					<Button
+						variant="default"
+						size="sm"
+						className="h-7 px-2.5"
+						onClick={handleStartStop}
+					>
+						<Play className="mr-1.5 h-3 w-3" />
+						{t("actions.start")}
+					</Button>
+				)}
 			</>
 		);
 	}
