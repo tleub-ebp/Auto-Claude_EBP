@@ -176,6 +176,11 @@ export function EfficiencyFrontier({
 										: undefined
 								}
 								onClick={() => onSelect(p.f)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" || e.key === " ") {
+										onSelect(p.f);
+									}
+								}}
 							>
 								<title>
 									{`${p.f.provider} ${shortModel(p.f.model)} · ${effortLabel(

@@ -844,13 +844,23 @@ class WorktreeManager:
         branch_exists = self._branch_exists(branch_name)
 
         # Step 6: Fetch latest from remote to ensure we have the most up-to-date code
-        # GitHub/remote is the source of truth, not the local branch
-        fetch_result = self._run_git(["fetch", "origin", self.base_branch])
-        if fetch_result.returncode != 0:
-            print(
-                f"Warning: Could not fetch {self.base_branch} from origin: {fetch_result.stderr}"
-            )
-            print("Falling back to local branch...")
+        # GitHub/remote is the source of truth, not the local branch.
+        #
+        # Offline / local-branch mode: skip the remote fetch entirely. When the
+        # user opted into local-branch mode (useLocalBranch), the remote is not
+        # the source of truth and may be unreachable (air-gapped machine, expired
+        # credentials, VPN down...). Touching the network here only adds latency
+        # and a scary "403 / could not fetch" warning before the local fallback
+        # kicks in anyway, so we don't even try.
+        if self.use_local_branch:
+            print("Local-branch mode: skipping remote fetch (offline-friendly).")
+        else:
+            fetch_result = self._run_git(["fetch", "origin", self.base_branch])
+            if fetch_result.returncode != 0:
+                print(
+                    f"Warning: Could not fetch {self.base_branch} from origin: {fetch_result.stderr}"
+                )
+                print("Falling back to local branch...")
 
         # Step 7: Create the worktree
         if branch_exists:

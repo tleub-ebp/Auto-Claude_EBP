@@ -149,6 +149,7 @@ import {
 	FavoritesDropZone,
 	FavoritesDropZoneEmpty,
 	SortableWrapper,
+	type SortableKind,
 } from "./sidebar/sortable-primitives";
 import { useSidebarPrefs } from "./sidebar/use-sidebar-prefs";
 import { VoiceControlDialog } from "./voice-control/VoiceControlDialog";
@@ -1337,12 +1338,17 @@ export function Sidebar({
 		}),
 	);
 
+	interface SortableInfo {
+		kind: SortableKind;
+		id: string;
+	}
+
 	const handleDragStart = useCallback((event: DragStartEvent) => {
 		setActiveDragId(String(event.active.id));
 	}, []);
 
 	// Helper function to handle dropping on favorites
-	const handleFavoritesDrop = useCallback((activeInfo: any, overInfo: any) => {
+	const handleFavoritesDrop = useCallback((activeInfo: SortableInfo, _overInfo: SortableInfo) => {
 		if (activeInfo.kind === "item" && !pinnedItemsSet.has(activeInfo.id)) {
 			toggleItemPin(activeInfo.id);
 			return true;
@@ -1355,7 +1361,7 @@ export function Sidebar({
 	}, [pinnedItemsSet, pinnedGroupsSet, toggleItemPin, toggleGroupPin]);
 
 	// Helper function to handle group reordering
-	const handleGroupReorder = useCallback((activeInfo: any, overInfo: any) => {
+	const handleGroupReorder = useCallback((activeInfo: SortableInfo, overInfo: SortableInfo) => {
 		if (activeInfo.id === overInfo.id) return true;
 		const actualOrder = visibleNavGroups.map((g) => g.id);
 		reorderGroups(activeInfo.id, overInfo.id, actualOrder);
@@ -1363,7 +1369,7 @@ export function Sidebar({
 	}, [visibleNavGroups, reorderGroups]);
 
 	// Helper function to handle item reordering within groups
-	const handleItemReorder = useCallback((activeInfo: any, overInfo: any) => {
+	const handleItemReorder = useCallback((activeInfo: SortableInfo, overInfo: SortableInfo) => {
 		if (activeInfo.id === overInfo.id) return true;
 		const group = visibleNavGroups.find(
 			(g) =>
@@ -1408,13 +1414,6 @@ export function Sidebar({
 			}
 		},
 		[
-			visibleNavGroups,
-			pinnedItemsSet,
-			pinnedGroupsSet,
-			reorderGroups,
-			reorderItems,
-			toggleItemPin,
-			toggleGroupPin,
 			handleFavoritesDrop,
 			handleGroupReorder,
 			handleItemReorder,

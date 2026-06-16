@@ -59,6 +59,62 @@ export function formatServerExitError(
 	return `${header}\n\n${deduped.join("\n")}`;
 }
 
+/** Read a UTF-8 file, returning an empty string on any error. */
+function readTextFileSafe(filePath: string): string {
+	try {
+		return readFileSync(filePath, "utf-8");
+	} catch {
+		return "";
+	}
+}
+
+/** Default port assumed for Docker projects when none can be parsed. */
+export const DEFAULT_DOCKER_PORT = 3000;
+
+/**
+ * Parse the host port a Dockerfile publishes. Reads the first `EXPOSE`
+ * directive (`EXPOSE 8080`, `EXPOSE 8080/tcp`, `EXPOSE 8080 9090`) and returns
+ * its first port. Falls back to {@link DEFAULT_DOCKER_PORT} when none is found.
+ */
+export function parseDockerExposePort(content: string): number {
+	const match = content.match(/^\s*EXPOSE\s+(\d{2,5})/im);
+	const port = match ? Number.parseInt(match[1], 10) : Number.NaN;
+	return Number.isInteger(port) && port > 0 ? port : DEFAULT_DOCKER_PORT;
+}
+
+/**
+ * Parse the first published host port from a docker-compose file. Scopes to the
+ * first `ports:` block (so volume/env list items are ignored) and handles
+ * `"8080:80"`, `8080:80`, `127.0.0.1:8080:80` and a bare `"8080"`. Falls back
+ * to {@link DEFAULT_DOCKER_PORT} when no port mapping is present.
+ */
+export function parseDockerComposePort(content: string): number {
+	const lines = content.split(/\r?\n/);
+	const itemPort =
+		/^-\s*["']?(?:\d{1,3}(?:\.\d{1,3}){3}:)?(\d{2,5})(?::\d{2,5})?(?:\/(?:tcp|udp))?["']?$/;
+	let inPorts = false;
+	for (const raw of lines) {
+		const line = raw.trim();
+		if (!line) continue;
+		if (/^ports:/.test(line)) {
+			inPorts = true;
+			continue;
+		}
+		if (!inPorts) continue;
+		// A list item — try to read a port; anything else ends the ports block.
+		if (line.startsWith("-")) {
+			const match = line.match(itemPort);
+			if (match) {
+				const port = Number.parseInt(match[1], 10);
+				if (Number.isInteger(port) && port > 0) return port;
+			}
+			continue;
+		}
+		inPorts = false;
+	}
+	return DEFAULT_DOCKER_PORT;
+}
+
 function quoteWindowsShellArgument(value: string): string {
 	return `"${value.replaceAll('"', '\\"')}"`;
 }
@@ -674,24 +730,29 @@ export class AppEmulatorService extends EventEmitter {
 		}
 
 		// Docker projects
-		if (
-			existsSync(path.join(projectDir, "docker-compose.yml")) ||
-			existsSync(path.join(projectDir, "docker-compose.yaml"))
-		) {
+		const composePath =
+			[
+				path.join(projectDir, "docker-compose.yml"),
+				path.join(projectDir, "docker-compose.yaml"),
+			].find((candidate) => existsSync(candidate)) ?? null;
+		if (composePath) {
+			const port = parseDockerComposePort(readTextFileSafe(composePath));
 			return {
 				type: "web",
 				framework: "docker-compose",
 				startCommand: "docker-compose up",
-				port: 3000,
+				port,
 				isWeb: true,
 			};
 		}
-		if (existsSync(path.join(projectDir, "Dockerfile"))) {
+		const dockerfilePath = path.join(projectDir, "Dockerfile");
+		if (existsSync(dockerfilePath)) {
+			const port = parseDockerExposePort(readTextFileSafe(dockerfilePath));
 			return {
 				type: "web",
 				framework: "docker",
-				startCommand: "docker build -t app . && docker run -p 3000:3000 app",
-				port: 3000,
+				startCommand: `docker build -t app . && docker run -p ${port}:${port} app`,
+				port,
 				isWeb: true,
 			};
 		}

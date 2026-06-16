@@ -26,6 +26,15 @@ export interface Formula {
 	/** Default "value" score (success per dollar). */
 	value_score: number;
 	energy_kwh: number;
+	/**
+	 * How the cost/token figures were obtained:
+	 *  - `measured`   — this exact provider/model has real run history here
+	 *  - `calibrated` — real history exists (other models); volumes scaled from it
+	 *  - `heuristic`  — no history; synthetic per-subtask volumes (prices are real)
+	 */
+	cost_basis?: "measured" | "calibrated" | "heuristic" | string;
+	/** 0-1 confidence in the cost figure (rises with measured history). */
+	cost_confidence?: number;
 	rationale: string[];
 	/** True once an AI refine pass has sharpened this formula's probability. */
 	ai_refined?: boolean;
@@ -46,6 +55,11 @@ export interface FormulaMatrix {
 	complexity_score: number;
 	footprint: FormulaFootprint;
 	history_samples: number;
+	/**
+	 * Distinct completed tasks found in the project's real usage history. When
+	 * > 0 the cost figures are calibrated on measured runs, not pure heuristics.
+	 */
+	history_tasks?: number;
 	formulas: Formula[];
 	warnings: string[];
 }

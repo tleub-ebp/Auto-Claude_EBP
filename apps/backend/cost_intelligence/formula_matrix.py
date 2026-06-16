@@ -9,9 +9,12 @@ pricing catalog and the five effort levels, a :class:`Formula` carrying:
   * a default "value" score (success per dollar) for the initial ranking
 
 The goal is to let the user pick *the best formula* before any tokens are
-spent. Estimation is heuristic and free — it never calls an LLM and never
-raises (a kanban ticket must always render an estimate or a graceful
-"unavailable").
+spent. Estimation is free — it never calls an LLM and never raises (a kanban
+ticket must always render an estimate or a graceful "unavailable"). Costs are
+priced through the real pricing catalog; token *volumes* are calibrated on the
+project's measured run history when available (``cost_basis`` = "measured" /
+"calibrated") and fall back to synthetic per-subtask heuristics otherwise
+(``cost_basis`` = "heuristic").
 
 A ticket usually has **no spec yet** (the spec is written during planning),
 so the footprint is derived from the task title/description when no spec
@@ -21,6 +24,7 @@ directory exists, and refined from the spec when one is present.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,6 +58,21 @@ _REFERENCE_THINKING_BUDGET = 4096
 
 # Confidence band width (±) applied around the point cost estimate.
 _COST_BAND = 0.35
+# Floor for the band once real history tightens it (never claim more precision).
+_MIN_COST_BAND = 0.10
+
+# Reference complexity (midpoint of the 1-13 scale) — the "typical" task that
+# the project's measured per-task history is assumed to represent. A ticket's
+# real-data baseline is scaled by ``complexity / _REFERENCE_COMPLEXITY``.
+_REFERENCE_COMPLEXITY = 6.5
+_COMPLEXITY_RATIO_BOUNDS = (0.4, 2.5)
+
+# Anthropic (and most providers) bill extended-thinking tokens at the output
+# rate, so measured output already contains the reasoning. We don't add a
+# separate thinking estimate on the measured path (that would double-count);
+# instead we let a higher effort inflate the *billed output* by this fraction
+# of its thinking-budget ratio, keeping the effort→cost gradient monotonic.
+_THINK_OUTPUT_WEIGHT = 0.35
 
 # Words that hint at a larger / riskier task when no spec is available.
 _COMPLEXITY_KEYWORDS = re.compile(
@@ -82,6 +101,13 @@ class Formula:
     success_probability: float
     value_score: float
     energy_kwh: float
+    # How the cost/token figures were obtained:
+    #   "measured"   — this exact provider/model has real run history here
+    #   "calibrated" — real history exists (other models), volumes scaled from it
+    #   "heuristic"  — no history, synthetic per-subtask volumes (real prices)
+    cost_basis: str = "heuristic"
+    # 0-1 confidence in the cost figure (rises with measured history).
+    cost_confidence: float = 0.25
     rationale: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,6 +126,8 @@ class Formula:
             "success_probability": round(self.success_probability, 4),
             "value_score": round(self.value_score, 4),
             "energy_kwh": round(self.energy_kwh, 4),
+            "cost_basis": self.cost_basis,
+            "cost_confidence": round(self.cost_confidence, 2),
             "rationale": list(self.rationale),
         }
 
@@ -112,6 +140,9 @@ class FormulaMatrix:
     complexity_score: float
     footprint: SpecFootprint
     history_samples: int
+    # Distinct completed tasks found in the project's real usage history. When
+    # > 0 the cost figures are calibrated on measured runs, not pure heuristics.
+    history_tasks: int = 0
     formulas: list[Formula] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -123,6 +154,7 @@ class FormulaMatrix:
             "complexity_score": round(self.complexity_score, 2),
             "footprint": asdict(self.footprint),
             "history_samples": self.history_samples,
+            "history_tasks": self.history_tasks,
             "formulas": [f.to_dict() for f in self.formulas],
             "warnings": list(self.warnings),
         }
@@ -184,6 +216,88 @@ def _per_model_history(
     return {k: (sum(v) / len(v), len(v)) for k, v in buckets.items()}
 
 
+@dataclass
+class _HistoryStats:
+    """Real per-task aggregates derived from the project's usage history."""
+
+    task_count: int
+    avg_task_input: float
+    avg_task_output: float
+    # (provider, model) -> (tasks_seen, avg_input_per_task, avg_output_per_task,
+    #                        avg_cost_per_task)
+    per_model: dict[tuple[str, str], tuple[int, float, float, float]]
+
+
+def _aggregate_history_by_task(
+    samples: list[dict[str, Any]],
+) -> _HistoryStats | None:
+    """Aggregate per-session usage records into real per-task footprints.
+
+    ``usage_tracker`` writes one record per agent session (planning, coding,
+    each QA loop…). To estimate what a whole task costs we sum every record
+    that shares a ``task_id``/``spec_id`` into a per-task total, then average
+    across tasks. Also tracks, per (provider, model), the average tokens/cost
+    it contributed per task it was used on — so a model we have actually run
+    is anchored to its own measured footprint. Returns ``None`` when no record
+    carries usable token counts (caller falls back to heuristics).
+    """
+    per_task_in: dict[str, int] = {}
+    per_task_out: dict[str, int] = {}
+    pm_in: dict[tuple[str, str], int] = {}
+    pm_out: dict[tuple[str, str], int] = {}
+    pm_cost: dict[tuple[str, str], float] = {}
+    pm_tasks: dict[tuple[str, str], set[str]] = {}
+
+    for i, s in enumerate(samples):
+        in_tok = max(0, int(s.get("input_tokens", 0) or 0))
+        out_tok = max(0, int(s.get("output_tokens", 0) or 0))
+        cost = max(0.0, float(s.get("cost", 0.0) or 0.0))
+        if in_tok == 0 and out_tok == 0:
+            continue
+        # Each session without a task id is treated as its own task so distinct
+        # work is never collapsed together.
+        task = str(s.get("task_id") or s.get("spec_id") or f"__rec_{i}")
+        per_task_in[task] = per_task_in.get(task, 0) + in_tok
+        per_task_out[task] = per_task_out.get(task, 0) + out_tok
+
+        provider = str(s.get("provider", "")).lower()
+        model = str(s.get("model", ""))
+        if provider and model:
+            key = (provider, model)
+            pm_in[key] = pm_in.get(key, 0) + in_tok
+            pm_out[key] = pm_out.get(key, 0) + out_tok
+            pm_cost[key] = pm_cost.get(key, 0.0) + cost
+            pm_tasks.setdefault(key, set()).add(task)
+
+    task_count = len(per_task_in)
+    if task_count == 0:
+        return None
+
+    avg_in = sum(per_task_in.values()) / task_count
+    avg_out = sum(per_task_out.values()) / task_count
+    per_model = {
+        key: (
+            len(tasks),
+            pm_in[key] / len(tasks),
+            pm_out[key] / len(tasks),
+            pm_cost[key] / len(tasks),
+        )
+        for key, tasks in pm_tasks.items()
+    }
+    return _HistoryStats(task_count, avg_in, avg_out, per_model)
+
+
+def _effort_multipliers(effort: str) -> tuple[int, float, float, float]:
+    """Return (effort_idx, input_mult, output_mult, thinking_mult) for an effort."""
+    effort_idx = EFFORT_LEVELS.index(effort) if effort in EFFORT_LEVELS else 2
+    # Effort makes the agent re-read more context and emit more reasoning.
+    input_mult = 1.0 + 0.03 * effort_idx
+    output_mult = 1.0 + 0.05 * effort_idx
+    thinking_budget = _EFFORT_THINKING_BUDGET.get(effort, _REFERENCE_THINKING_BUDGET)
+    thinking_mult = thinking_budget / _REFERENCE_THINKING_BUDGET  # none → 0
+    return effort_idx, input_mult, output_mult, thinking_mult
+
+
 def _compute_tokens(
     footprint: SpecFootprint,
     effort: str,
@@ -193,20 +307,41 @@ def _compute_tokens(
     qa_rate: float,
 ) -> tuple[int, int, int]:
     """Expected (input, output, thinking) tokens for a footprint at an effort."""
-    effort_idx = EFFORT_LEVELS.index(effort) if effort in EFFORT_LEVELS else 2
     qa_mult = 1.0 + QA_ITERATION_MULTIPLIER * qa_rate
     base = footprint.subtask_count * footprint.complexity_score * qa_mult
 
-    # Effort makes the agent re-read more context and emit more reasoning.
-    input_mult = 1.0 + 0.03 * effort_idx
-    output_mult = 1.0 + 0.05 * effort_idx
-    thinking_budget = _EFFORT_THINKING_BUDGET.get(effort, _REFERENCE_THINKING_BUDGET)
-    thinking_mult = thinking_budget / _REFERENCE_THINKING_BUDGET  # none → 0
+    _, input_mult, output_mult, thinking_mult = _effort_multipliers(effort)
 
     expected_in = int(avg_in * base * input_mult)
     expected_out = int(avg_out * base * output_mult)
     expected_thinking = int(avg_thinking * base * thinking_mult)
     return expected_in, expected_out, expected_thinking
+
+
+def _compute_tokens_from_history(
+    base_in: float,
+    base_out: float,
+    effort: str,
+    complexity_score: float,
+) -> tuple[int, int, int]:
+    """Expected (input, output, thinking) tokens from a measured per-task baseline.
+
+    ``base_in``/``base_out`` are the real average input/output tokens a task
+    used. We scale them by the ticket's complexity relative to a typical task,
+    then modulate by effort. Output already contains billed reasoning, so the
+    thinking component stays 0 and a higher effort inflates output instead.
+    """
+    ratio = max(
+        _COMPLEXITY_RATIO_BOUNDS[0],
+        min(_COMPLEXITY_RATIO_BOUNDS[1], complexity_score / _REFERENCE_COMPLEXITY),
+    )
+    _, input_mult, output_mult, thinking_mult = _effort_multipliers(effort)
+    effective_output_mult = output_mult * (
+        1.0 + _THINK_OUTPUT_WEIGHT * max(0.0, thinking_mult - 1.0)
+    )
+    expected_in = int(base_in * ratio * input_mult)
+    expected_out = int(base_out * ratio * effective_output_mult)
+    return expected_in, expected_out, 0
 
 
 def _default_value_score(success: float, cost: float, per_token: bool) -> float:
@@ -278,6 +413,9 @@ def compute_formula_matrix(
     if not avg_out:
         avg_out = DEFAULT_OUTPUT_TOKENS_PER_SUBTASK
     per_model_hist = _per_model_history(samples)
+    # Real per-task token/cost aggregates — when present, cost figures are
+    # calibrated on measured runs rather than synthetic per-subtask volumes.
+    history = _aggregate_history_by_task(samples)
 
     # --- cartesian product -------------------------------------------------
     provider_filter = {p.lower() for p in providers} if providers else None
@@ -307,6 +445,7 @@ def compute_formula_matrix(
                         qa_rate=qa_rate,
                         hist_rate=hist_rate,
                         hist_n=hist_n,
+                        history=history,
                     )
                 )
 
@@ -318,6 +457,7 @@ def compute_formula_matrix(
         complexity_score=complexity_score,
         footprint=footprint,
         history_samples=len(samples),
+        history_tasks=history.task_count if history else 0,
         formulas=formulas,
         warnings=warnings,
     )
@@ -338,17 +478,45 @@ def _build_formula(
     qa_rate: float,
     hist_rate: float | None,
     hist_n: int,
+    history: _HistoryStats | None = None,
 ) -> Formula:
-    expected_in, expected_out, expected_thinking = _compute_tokens(
-        footprint, effort, avg_in, avg_out, avg_thinking, qa_rate
-    )
+    # Choose the token basis: measured (this model's own runs) > calibrated
+    # (other models' runs in this project) > heuristic (synthetic volumes).
+    pm = history.per_model.get((provider, model)) if history else None
+    if history is not None and pm is not None:
+        base_in, base_out = pm[1], pm[2]
+        cost_basis = "measured"
+        observed_tasks = pm[0]
+    elif history is not None:
+        base_in, base_out = history.avg_task_input, history.avg_task_output
+        cost_basis = "calibrated"
+        observed_tasks = history.task_count
+    else:
+        base_in = base_out = 0.0
+        cost_basis = "heuristic"
+        observed_tasks = 0
+
+    if cost_basis == "heuristic":
+        expected_in, expected_out, expected_thinking = _compute_tokens(
+            footprint, effort, avg_in, avg_out, avg_thinking, qa_rate
+        )
+        band = _COST_BAND
+        cost_confidence = 0.25
+    else:
+        expected_in, expected_out, expected_thinking = _compute_tokens_from_history(
+            base_in, base_out, effort, complexity_score
+        )
+        # More measured tasks → tighter band → higher confidence.
+        band = max(_MIN_COST_BAND, _COST_BAND * math.exp(-observed_tasks / 8.0))
+        cost_confidence = round(max(0.3, min(0.95, 1.0 - band)), 2)
+
     expected_cost = pricing.cost_for_tokens(
         input_tokens=expected_in,
         output_tokens=expected_out,
         thinking_tokens=expected_thinking,
     )
-    low_cost = expected_cost * (1.0 - _COST_BAND)
-    high_cost = expected_cost * (1.0 + _COST_BAND)
+    low_cost = expected_cost * (1.0 - band)
+    high_cost = expected_cost * (1.0 + band)
 
     energy_kwh = (
         (expected_in + expected_out + expected_thinking)
@@ -381,5 +549,7 @@ def _build_formula(
         success_probability=success.probability,
         value_score=value_score,
         energy_kwh=energy_kwh,
+        cost_basis=cost_basis,
+        cost_confidence=cost_confidence,
         rationale=success.rationale,
     )

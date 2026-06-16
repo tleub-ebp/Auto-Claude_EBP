@@ -39,7 +39,9 @@
 		"taskActions": "Actions de la tâche",
 		"selectTask": "Sélectionner la tâche : {{title}}",
 		"preview": "Aperçu",
-		"syncFromBranch": "Synchroniser depuis une branche"
+		"syncFromBranch": "Synchroniser depuis une branche",
+		"duplicate": "Dupliquer",
+		"duplicateSuffix": "(copie)"
 	},
 	"confirmDelete": {
 		"title": "Supprimer la tâche",
@@ -188,6 +190,8 @@
 		"deleteError": "Échec de la suppression de certaines tâches",
 		"restoreSuccess": "Tâche restaurée avec succès",
 		"restoreError": "Échec de la restauration de la tâche",
+		"duplicateSuccess": "Tâche dupliquée avec succès",
+		"duplicateError": "Échec de la duplication de la tâche",
 		"undo": "Annuler",
 		"clearSelection": "Effacer la sélection",
 		"mixedColumnWarning": "Colonnes différentes — déplacement impossible",
@@ -299,6 +303,8 @@
 			"entry": "entrée",
 			"entries": "entrées",
 			"step": "Étape {{current}}/{{total}}",
+			"stepScrollHint": "Cliquer pour remonter au début de cette étape",
+			"qaPass": "QA — vérification {{n}}",
 			"thinking": "Traitement en cours"
 		},
 		"shortPhases": {
@@ -479,6 +485,14 @@
 			"updateFailed": "Échec de la mise à jour de la tâche. Veuillez réessayer."
 		}
 	},
+	"duplicate": {
+		"title": "Dupliquer la tâche",
+		"description": "Ajustez les champs avant de créer la copie. La nouvelle tâche est créée dans le backlog avec sa propre spécification (les pièces jointes sont conservées).",
+		"createButton": "Créer la copie",
+		"errors": {
+			"createFailed": "Échec de la duplication de la tâche. Veuillez réessayer."
+		}
+	},
 	"form": {
 		"description": "Description",
 		"descriptionPlaceholder": "Décrivez la fonctionnalité, la correction de bug ou l'amélioration que vous souhaitez implémenter. Soyez aussi précis que possible sur les exigences, les contraintes et le comportement attendu.",
@@ -491,6 +505,15 @@
 		"requireReviewDescription": "Lorsque activé, vous serez invité à réviser la spécification et le plan d'implémentation avant le début de la phase de codage. Cela vous permet d'approuver, de demander des modifications ou de fournir des commentaires.",
 		"tddModeLabel": "Mode TDD strict (Red-Green-Refactor)",
 		"tddModeDescription": "Lorsque activé, l'agent suit un cycle TDD strict pour cette tâche : écrire d'abord un test qui échoue, puis le code minimal pour le faire passer, puis refactoriser. Remplace le réglage TDD du projet pour cette tâche uniquement.",
+		"stepDetails": "Détails",
+		"stepEngine": "Moteur",
+		"nextStep": "Suivant : moteur",
+		"previousStep": "Retour",
+		"engineStepTitle": "Moteur d'exécution",
+		"engineStepDescription": "Choisissez le provider, le modèle et l'effort pour cette tâche. Chaque phase (spéc., planification, codage, QA) peut utiliser un modèle différent.",
+		"providerLabel": "Provider",
+		"providerPlaceholder": "Sélectionner un provider",
+		"providerHelp": "Les modèles ci-dessous sont propres à ce provider. Enregistré uniquement sur la tâche — ne change pas votre provider global.",
 		"editor": {
 			"bold": "Gras",
 			"italic": "Italique",
@@ -586,6 +609,21 @@
 		"savedDescription_other": "{{count}} réponses ajoutées à la spécification.",
 		"saveErrorTitle": "Échec de l'enregistrement des clarifications"
 	},
+	"executionFormula": {
+		"bannerImported": "Tâche importée — choisissez le provider, le modèle et l'effort avant de la lancer.",
+		"bannerDuplicated": "Tâche dupliquée — choisissez le provider, le modèle et l'effort avant de la lancer.",
+		"chooseButton": "Choisir le moteur",
+		"dismiss": "Ignorer",
+		"appliedLabel": "Moteur :",
+		"editButton": "Modifier",
+		"gate": {
+			"title": "Choisir le provider/LLM/effort d'abord ?",
+			"body": "Cette tâche a été importée ou dupliquée et aucun provider, modèle ou effort n'a encore été choisi. Sélectionnez une formule dans le Formula Lab, ou démarrez maintenant avec les défauts actuels.",
+			"choose": "Choisir le moteur",
+			"startDefaults": "Démarrer avec les défauts",
+			"cancel": "Annuler"
+		}
+	},
 	"reset": {
 		"button": "Réinitialiser la tâche",
 		"confirmTitle": "Réinitialiser complètement la tâche ?",
@@ -607,6 +645,8 @@
 		"failedCount_other": "{{count}} échouées",
 		"blockedReason": "Bloquée : {{reason}}",
 		"blockedGeneric": "Bloquée — intervention manuelle requise",
+		"changeRequest": "Modification demandée",
+		"requestedAt": "Demandée le {{date}}",
 		"filesViewer": {
 			"filesModified_one": "{{count}} fichier modifié",
 			"filesModified_other": "{{count}} fichiers modifiés",
@@ -681,6 +721,15 @@
 		"phaseEmpty": "Aucun log pour l'instant",
 		"hideOutput": "Masquer la sortie",
 		"showOutput": "Afficher la sortie",
+		"search": {
+			"placeholder": "Rechercher dans les logs…",
+			"ariaLabel": "Rechercher dans les logs",
+			"results_one": "{{count}} résultat",
+			"results_other": "{{count}} résultats",
+			"clear": "Effacer la recherche",
+			"noResults": "Aucun résultat",
+			"noResultsHint": "Aucune entrée de log ne correspond à « {{query}} »."
+		},
 		"thinking": {
 			"selectAria": "Niveau de réflexion pour cette phase",
 			"selectTooltip": "Changer le niveau de réflexion pour cette phase",
@@ -734,7 +783,7 @@
 			"providerSwitch": "Changer de LLM en cours d'exécution",
 			"providerSwitchDesc": "Override à chaud : met la tâche en pause à la fin de l'étape en cours, puis la reprend avec un autre LLM. Pour les étapes non démarrées, utilisez plutôt les sélecteurs LLM de chaque phase ci-dessus.",
 			"providerSwitchPaused": "Tâche en pause",
-			"providerSwitchPausedDesc": "Choisissez un provider et un modèle, puis reprenez la tâche.",
+			"providerSwitchPausedDesc": "Choisissez un provider, un modèle et un niveau d'effort, puis reprenez la tâche.",
 			"pauseToSwitch": "Mettre en pause et changer de LLM",
 			"pauseToSwitchShort": "Mettre en pause",
 			"providerSwitchInfoAria": "Détails du changement de LLM",
@@ -756,6 +805,7 @@
 			"noConfiguredProviders": "Aucun provider configuré. Ajoutez une clé API dans les Paramètres.",
 			"chooseProvider": "Provider",
 			"chooseModel": "Modèle",
+			"chooseEffort": "Effort",
 			"resumeWithChosenLlm": "Reprendre avec ce LLM",
 			"resumeSameProvider": "Reprendre sans changer de LLM",
 			"previousTask": "Tâche précédente",

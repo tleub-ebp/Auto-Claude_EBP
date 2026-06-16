@@ -89,6 +89,15 @@ export interface Subtask {
 		run?: string;
 		scenario?: string;
 	};
+	/**
+	 * Provenance marker. "change_request" = this subtask was created from a user
+	 * "Request Changes" submission during human review — i.e. a trace of a
+	 * modification the user explicitly asked for. The Subtasks tab renders these
+	 * with a distinct colour so they stand out from the originally-planned ones.
+	 */
+	origin?: "change_request";
+	/** ISO timestamp recorded when a change_request subtask was created. */
+	requestedAt?: string;
 }
 
 /**
@@ -302,6 +311,12 @@ export interface TaskMetadata {
 	// inlining des images en pièce jointe, etc.).
 	importSource?: "azure-devops" | "jira";
 
+	// Spec ID of the source task when this task was created via TASK_DUPLICATE.
+	// Duplicates otherwise carry `sourceType: "manual"`, so this is the only
+	// marker that lets the UI treat a clone like an import (e.g. propose the
+	// Provider × LLM × Effort prerequisite before it runs).
+	duplicatedFrom?: string;
+
 	// Classification
 	category?: TaskCategory;
 	complexity?: TaskComplexity;
@@ -467,6 +482,10 @@ export interface PlanSubtask {
 		run?: string;
 		scenario?: string;
 	};
+	/** Provenance marker (see {@link Subtask.origin}). */
+	origin?: "change_request";
+	/** ISO timestamp recorded when a change-request subtask was created. */
+	requested_at?: string;
 }
 
 // Workspace management types (for human review)

@@ -1048,6 +1048,8 @@ export class ProjectStore {
 					status: subtask.status,
 					files: extractSubtaskFiles(subtask),
 					blockedReason: subtask.blocked_reason,
+					origin: subtask.origin,
+					requestedAt: subtask.requested_at,
 				}));
 			}) || []
 		);

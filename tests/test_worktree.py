@@ -144,6 +144,50 @@ class TestWorktreeCreation:
 
         assert info.branch == "workpilot/my-feature-spec"
 
+    def test_create_worktree_skips_remote_fetch_in_local_branch_mode(
+        self, temp_git_repo: Path, monkeypatch
+    ):
+        """Offline: use_local_branch=True must not touch the network (no fetch)."""
+        manager = WorktreeManager(temp_git_repo, use_local_branch=True)
+        manager.setup()
+
+        git_calls: list[list[str]] = []
+        real_run_git = manager._run_git
+
+        def recording_run_git(args, *a, **kw):
+            git_calls.append(list(args))
+            return real_run_git(args, *a, **kw)
+
+        monkeypatch.setattr(manager, "_run_git", recording_run_git)
+
+        info = manager.create_worktree("test-spec")
+
+        assert info.path.exists()
+        # No `git fetch ...` should have been issued in local-branch (offline) mode.
+        assert not any(
+            call and call[0] == "fetch" for call in git_calls
+        ), f"expected no fetch, got: {git_calls}"
+
+    def test_create_worktree_fetches_when_not_local_branch(
+        self, temp_git_repo: Path, monkeypatch
+    ):
+        """Default (online) mode still attempts a remote fetch."""
+        manager = WorktreeManager(temp_git_repo)
+        manager.setup()
+
+        git_calls: list[list[str]] = []
+        real_run_git = manager._run_git
+
+        def recording_run_git(args, *a, **kw):
+            git_calls.append(list(args))
+            return real_run_git(args, *a, **kw)
+
+        monkeypatch.setattr(manager, "_run_git", recording_run_git)
+
+        manager.create_worktree("test-spec")
+
+        assert any(call and call[0] == "fetch" for call in git_calls)
+
     def test_get_or_create_replaces_existing_worktree(self, temp_git_repo: Path):
         """get_or_create_worktree returns existing worktree."""
         manager = WorktreeManager(temp_git_repo)
