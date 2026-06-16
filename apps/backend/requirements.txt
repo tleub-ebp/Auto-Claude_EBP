@@ -6,7 +6,7 @@ claude-agent-sdk>=0.2.94
 python-dotenv>=1.0.0
 
 # WebSocket support for streaming development mode
-websockets>=12.0
+websockets>=16.0
 
 # TOML parsing fallback for Python < 3.11
 tomli>=2.0.0; python_version < "3.11"
