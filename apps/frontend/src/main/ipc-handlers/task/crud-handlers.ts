@@ -1,4 +1,5 @@
 import {
+	cpSync,
 	type Dirent,
 	existsSync,
 	mkdirSync,
@@ -408,6 +409,218 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 			projectStore.invalidateTasksCache(projectId);
 
 			return { success: true, data: task };
+		},
+	);
+
+	/**
+	 * Duplicate a task.
+	 *
+	 * Clones the *spec-defining* artifacts of an existing task into a brand-new
+	 * task that starts fresh in the backlog:
+	 *  - spec.md (H1 retitled), requirements.json (display_title retitled),
+	 *    task_metadata.json (runtime/tracker fields stripped) and the
+	 *    attachments/ directory are copied on disk — so attached images survive
+	 *    (the renderer never carries their base64 data, only paths).
+	 *  - a fresh implementation_plan.json (status "pending", no phases) is written.
+	 *
+	 * Runtime artifacts (plan phases, QA report, progress, conversation logs,
+	 * worktree, halt markers) are intentionally NOT copied: the duplicate is a
+	 * clean ticket the user can plan and run independently.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_DUPLICATE,
+		async (
+			_,
+			taskId: string,
+			newTitle?: string,
+		): Promise<IPCResult<Task>> => {
+			const { task, project } = findTaskAndProject(taskId);
+			if (!task || !project) {
+				return { success: false, error: "Task or project not found" };
+			}
+
+			// Locate the source spec directory (main project location).
+			const specsBaseDir = getSpecsDir(project.autoBuildPath);
+			const specsDir = path.join(project.path, specsBaseDir);
+			const sourceSpecDir = path.join(specsDir, task.specId);
+			if (!existsSync(sourceSpecDir)) {
+				return { success: false, error: "Source spec directory not found" };
+			}
+
+			// Resolve the title for the clone (caller supplies a localized
+			// "(copy)" suffix; fall back to a plain English suffix).
+			const finalTitle =
+				newTitle?.trim() ||
+				`${(task.title || "Untitled").trim()} (copy)`;
+
+			// Allocate the next free spec number, mirroring TASK_CREATE.
+			let specNumber = 1;
+			if (existsSync(specsDir)) {
+				const existingNumbers = readdirSync(specsDir, { withFileTypes: true })
+					.filter((d: Dirent | string) => {
+						if (typeof d === "string") {
+							try {
+								return statSync(path.join(specsDir, d)).isDirectory();
+							} catch {
+								return false;
+							}
+						}
+						return typeof d.isDirectory === "function" && d.isDirectory();
+					})
+					.map((d: Dirent | string) => (typeof d === "string" ? d : d.name))
+					.map((name: string) => {
+						const match = name.match(/^(\d+)/);
+						return match ? parseInt(match[1], 10) : 0;
+					})
+					.filter((n: number) => n > 0);
+				if (existingNumbers.length > 0) {
+					specNumber = Math.max(...existingNumbers) + 1;
+				}
+			}
+
+			const slugifiedTitle = slugifySpecTitle(finalTitle);
+			const newSpecId = `${String(specNumber).padStart(3, "0")}-${slugifiedTitle}`;
+			const newSpecDir = path.join(specsDir, newSpecId);
+			mkdirSync(newSpecDir, { recursive: true });
+
+			const now = new Date().toISOString();
+
+			// 1. spec.md — copy and retitle the first H1 heading.
+			let copiedDescription = task.description || "";
+			const sourceSpecPath = path.join(sourceSpecDir, AUTO_BUILD_PATHS.SPEC_FILE);
+			if (existsSync(sourceSpecPath)) {
+				try {
+					let specContent = readFileSync(sourceSpecPath, "utf-8");
+					specContent = specContent.replace(/^#\s+.*$/m, `# ${finalTitle}`);
+					writeFileSync(
+						path.join(newSpecDir, AUTO_BUILD_PATHS.SPEC_FILE),
+						specContent,
+						"utf-8",
+					);
+				} catch (err) {
+					console.error("[TASK_DUPLICATE] Failed to copy spec.md:", err);
+				}
+			}
+
+			// 2. requirements.json — copy and retitle display_title.
+			const sourceReqPath = path.join(
+				sourceSpecDir,
+				AUTO_BUILD_PATHS.REQUIREMENTS,
+			);
+			if (existsSync(sourceReqPath)) {
+				try {
+					const requirements = JSON.parse(readFileSync(sourceReqPath, "utf-8"));
+					if (typeof requirements.display_title === "string") {
+						requirements.display_title = finalTitle;
+					}
+					if (typeof requirements.task_description === "string") {
+						copiedDescription = requirements.task_description;
+					}
+					writeFileSync(
+						path.join(newSpecDir, AUTO_BUILD_PATHS.REQUIREMENTS),
+						JSON.stringify(requirements, null, 2),
+						"utf-8",
+					);
+				} catch (err) {
+					console.error(
+						"[TASK_DUPLICATE] Failed to copy requirements.json:",
+						err,
+					);
+				}
+			}
+
+			// 3. task_metadata.json — copy classification/config but drop fields
+			// that must not carry over to an independent clone (tracker links,
+			// PR/worktree state, archive flags, pause state).
+			const duplicatedMetadata: TaskMetadata = {
+				...(task.metadata ?? {}),
+				sourceType: "manual",
+			};
+			const NON_CLONED_METADATA_KEYS: (keyof TaskMetadata)[] = [
+				"prUrl",
+				"visualProof",
+				"archivedAt",
+				"archivedInVersion",
+				"paused",
+				"azureDevOpsIdentifier",
+				"azureDevOpsUrl",
+				"azureDevOpsState",
+				"azureDevOpsType",
+				"jiraIdentifier",
+				"jiraUrl",
+				"jiraState",
+				"jiraType",
+				"githubIssueNumber",
+				"githubIssueNumbers",
+				"githubUrl",
+				"gitlabIssueIid",
+				"gitlabUrl",
+				"linearIssueId",
+				"linearIdentifier",
+				"linearUrl",
+				"importSource",
+			];
+			for (const key of NON_CLONED_METADATA_KEYS) {
+				delete duplicatedMetadata[key];
+			}
+			// Mark the clone's lineage so the UI can treat it like an import and
+			// propose the Provider × LLM × Effort prerequisite before it runs.
+			duplicatedMetadata.duplicatedFrom = task.specId;
+			writeFileSync(
+				path.join(newSpecDir, "task_metadata.json"),
+				JSON.stringify(duplicatedMetadata, null, 2),
+				"utf-8",
+			);
+
+			// 4. attachments/ — copy recursively so attached images are preserved.
+			const sourceAttachments = path.join(sourceSpecDir, "attachments");
+			if (existsSync(sourceAttachments)) {
+				try {
+					cpSync(sourceAttachments, path.join(newSpecDir, "attachments"), {
+						recursive: true,
+					});
+				} catch (err) {
+					console.error(
+						"[TASK_DUPLICATE] Failed to copy attachments:",
+						err,
+					);
+				}
+			}
+
+			// 5. Fresh implementation_plan.json (pending, no phases).
+			const implementationPlan = {
+				feature: finalTitle,
+				description: copiedDescription,
+				created_at: now,
+				updated_at: now,
+				status: "pending",
+				phases: [],
+			};
+			writeFileSync(
+				path.join(newSpecDir, AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN),
+				JSON.stringify(implementationPlan, null, 2),
+				"utf-8",
+			);
+
+			const duplicatedTask: Task = {
+				id: newSpecId,
+				specId: newSpecId,
+				projectId: project.id,
+				title: finalTitle,
+				description: task.description || "",
+				status: "backlog",
+				subtasks: [],
+				logs: [],
+				metadata: duplicatedMetadata,
+				createdAt: new Date(),
+				updatedAt: new Date(),
+			};
+
+			projectStore.invalidateTasksCache(project.id);
+			console.warn(
+				`[TASK_DUPLICATE] Task ${taskId} duplicated to ${newSpecId}`,
+			);
+			return { success: true, data: duplicatedTask };
 		},
 	);
 

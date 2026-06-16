@@ -157,7 +157,7 @@ export function PromotionDecisionDialog({
 						Close
 					</Button>
 					<Button
-						disabled={!decision || !decision.promote}
+						disabled={!decision?.promote}
 						onClick={() => {
 							if (decision) onAcceptPromotion?.(decision);
 							onOpenChange(false);

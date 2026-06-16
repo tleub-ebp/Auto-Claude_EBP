@@ -489,9 +489,6 @@ async function launchBackendIfNeeded() {
 	// Mode serveur multi-utilisateurs : le backend tourne sur un serveur
 	// distant, on ne spawne rien en local.
 	if (isServerMode()) {
-		console.log(
-			"[main] Server mode active — skipping local backend spawn",
-		);
 		return;
 	}
 	// Vérifie si le backend répond déjà

@@ -191,6 +191,8 @@
 		"viewMode": "View",
 		"flatList": "Flat list",
 		"treeView": "Tree view",
+		"unifiedView": "Unified view",
+		"splitView": "Side by side",
 		"backToList": "Back to list",
 		"edit": "Edit",
 		"editFile": "Edit File",

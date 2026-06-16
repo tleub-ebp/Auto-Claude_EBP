@@ -136,6 +136,180 @@ Be conversational and helpful. Focus on providing actionable insights and clear 
 Keep responses concise but informative."""
 
 
+def _build_full_prompt(message: str, history: list) -> str:
+    """Build the prompt from the latest message + prior conversation."""
+    conversation_context = ""
+    for msg in history[:-1]:  # Exclude the latest message
+        role = "User" if msg.get("role") == "user" else "Assistant"
+        conversation_context += f"\n{role}: {msg['content']}\n"
+    if conversation_context.strip():
+        return f"""Previous conversation:
+{conversation_context}
+
+Current question: {message}"""
+    return message
+
+
+def _init_learning_mode(enabled: bool, explanation_level: str):
+    """Initialise Learning Mode (shared by both insights code paths)."""
+    if not enabled:
+        return None
+    try:
+        level_map = {
+            "beginner": ExplanationLevel.BEGINNER,
+            "intermediate": ExplanationLevel.INTERMEDIATE,
+            "advanced": ExplanationLevel.ADVANCED,
+            "expert": ExplanationLevel.EXPERT,
+        }
+        config = LearningModeConfig(
+            enabled=True,
+            explanation_level=level_map.get(
+                explanation_level, ExplanationLevel.INTERMEDIATE
+            ),
+        )
+        return LearningMode(config)
+    except Exception as e:
+        debug_error("insights_runner", f"Failed to initialize Learning Mode: {e}")
+        return None
+
+
+async def run_with_agent_client(
+    project_dir: str,
+    message: str,
+    history: list,
+    model: str,
+    thinking_level: str,
+    learning_mode_enabled: bool,
+    explanation_level: str,
+    provider: str,
+) -> None:
+    """Provider-agnostic insights chat (Copilot / OpenAI / Windsurf / …).
+
+    Routes through ``core.client.create_agent_client`` — which wires per-provider
+    tool execution (Read/Glob/Grep) — using the insights system prompt via the
+    ``system_prompt`` override. Streams text and tool markers exactly like the
+    Claude path. Raises on failure so the caller can fall back to the original
+    Claude SDK implementation in ``run_with_sdk``.
+    """
+    from core.agent_client import ContentBlockType
+    from core.client import create_agent_client
+
+    project_path = Path(project_dir).resolve()
+    system_prompt = build_system_prompt(project_dir)
+    learning_mode = _init_learning_mode(learning_mode_enabled, explanation_level)
+    full_prompt = _build_full_prompt(message, history)
+    max_thinking_tokens = get_thinking_budget(thinking_level)
+
+    synthetic_spec_dir = project_path / ".workpilot" / "insights"
+    try:
+        synthetic_spec_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        synthetic_spec_dir = project_path
+
+    debug(
+        "insights_runner",
+        "Using provider-agnostic client",
+        provider=provider,
+        model=model,
+    )
+
+    client = create_agent_client(
+        project_dir=project_path,
+        spec_dir=synthetic_spec_dir,
+        model=resolve_model_id(model),
+        agent_type="insights",
+        max_thinking_tokens=max_thinking_tokens,
+        provider=provider,
+        system_prompt=system_prompt,
+    )
+
+    response_text = ""
+    current_tool = None
+    async with client:
+        await client.query(full_prompt)
+        async for msg in client.receive_response():
+            for block in getattr(msg, "content", []) or []:
+                btype = getattr(block, "type", None)
+                if btype == ContentBlockType.TEXT and getattr(block, "text", None):
+                    print(block.text, flush=True)
+                    response_text += block.text
+                elif btype == ContentBlockType.TOOL_USE:
+                    tool_name = getattr(block, "tool_name", "") or ""
+                    inp = getattr(block, "tool_input", {}) or {}
+                    tool_input = ""
+                    if isinstance(inp, dict):
+                        if "pattern" in inp:
+                            tool_input = f"pattern: {inp['pattern']}"
+                        elif "file_path" in inp:
+                            fp = str(inp["file_path"])
+                            tool_input = ("..." + fp[-1997:]) if len(fp) > 2000 else fp
+                        elif "path" in inp:
+                            tool_input = str(inp["path"])
+                    current_tool = tool_name
+                    print(
+                        f"__TOOL_START__:{json.dumps({'name': tool_name, 'input': tool_input})}",
+                        flush=True,
+                    )
+                    if learning_mode:
+                        try:
+                            explanation = learning_mode.explain_tool_use(
+                                tool_name=tool_name,
+                                tool_input={"input": tool_input} if tool_input else {},
+                                reason="Exploring codebase to answer user question",
+                                expected_outcome="Find relevant information",
+                            )
+                            if explanation:
+                                print(
+                                    f"__EXPLANATION__:{
+                                        json.dumps(
+                                            {
+                                                'category': explanation.category,
+                                                'title': explanation.title,
+                                                'explanation': explanation.explanation,
+                                                'difficulty': explanation.difficulty.value,
+                                            }
+                                        )
+                                    }",
+                                    flush=True,
+                                )
+                        except Exception as e:
+                            debug_error(
+                                "insights_runner",
+                                f"Learning Mode explanation error: {e}",
+                            )
+                elif btype == ContentBlockType.TOOL_RESULT and current_tool:
+                    print(
+                        f"__TOOL_END__:{json.dumps({'name': current_tool})}",
+                        flush=True,
+                    )
+                    current_tool = None
+
+    if response_text and not response_text.endswith("\n"):
+        print()
+
+    # Best-effort usage tracking (mirrors the Claude path).
+    usage = getattr(client, "last_usage", None)
+    if isinstance(usage, dict):
+        try:
+            from core.usage_tracker import record_session_usage
+
+            record_session_usage(
+                spec_dir=synthetic_spec_dir,
+                project_dir=project_path,
+                phase="insights",
+                agent_type="insights",
+                model=resolve_model_id(model) or model,
+                provider=provider,
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                cost_usd=usage.get("cost_usd", 0.0),
+                cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
+                cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
+            )
+        except Exception as _ute:
+            debug_error("insights_runner", f"usage tracking skipped: {_ute}")
+
+
 async def run_with_sdk(
     project_dir: str,
     message: str,
@@ -145,7 +319,40 @@ async def run_with_sdk(
     learning_mode_enabled: bool = False,
     explanation_level: str = "intermediate",
 ) -> None:
-    """Run the chat using Claude SDK with streaming."""
+    """Run the chat using Claude SDK with streaming.
+
+    For non-Claude providers, delegates to the provider-agnostic
+    ``run_with_agent_client``; the Claude SDK implementation below stays as the
+    fallback (used for Claude, and if the provider-agnostic path fails).
+    """
+    try:
+        from core.client import _get_active_provider
+
+        active_provider = _get_active_provider(Path(project_dir).resolve())
+    except Exception:
+        active_provider = "claude"
+
+    if active_provider not in ("claude", "anthropic"):
+        try:
+            await run_with_agent_client(
+                project_dir,
+                message,
+                history,
+                model,
+                thinking_level,
+                learning_mode_enabled,
+                explanation_level,
+                active_provider,
+            )
+            return
+        except Exception as e:
+            print(
+                f"Provider-agnostic insights failed ({e}); "
+                "falling back to Claude SDK path",
+                file=sys.stderr,
+            )
+            # Fall through to the original Claude SDK implementation below.
+
     if not SDK_AVAILABLE:
         print("Claude SDK not available, falling back to simple mode", file=sys.stderr)
         run_simple(project_dir, message, history)

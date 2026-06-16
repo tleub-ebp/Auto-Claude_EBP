@@ -29,6 +29,7 @@ import type {
 	VisualProofTargetKind,
 } from "../shared/types";
 import { runApiSmokeProof } from "./api-smoke";
+import { getAppLanguage } from "./app-language";
 import { logger } from "./app-logger";
 import type { AppEmulatorConfig } from "./app-emulator-service";
 import { appEmulatorService } from "./app-emulator-service";
@@ -47,6 +48,11 @@ import {
 	runWithShortLegacySolutionPath,
 	runWithLegacyXmlNamespacePatch,
 } from "./legacy-dotnet-build";
+import {
+	type NavDomCandidate,
+	type NavUiElement,
+	visualProofNavigationService,
+} from "./visual-proof-navigation-service";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_VIEWPORT = { width: 1440, height: 1000 };
@@ -934,6 +940,265 @@ export function loadVisualProofNavigationPlan(
 	return null;
 }
 
+/**
+ * Read the task's feature spec so the navigation generator knows what was
+ * built. Best-effort: returns an empty string when no spec file is present.
+ */
+function readSpecText(options: VisualProofRunOptions, runPath: string): string {
+	const specDir = path.join(
+		runPath,
+		getSpecsDir(options.autoBuildPath),
+		options.specId,
+	);
+	for (const fileName of ["spec.md", "plan.md", "requirements.json"]) {
+		const content = readTextFile(path.join(specDir, fileName));
+		if (content?.trim()) return content;
+	}
+	return "";
+}
+
+/** Resolve the merge-base against the repository's default branch (best-effort). */
+async function resolveDiffBase(worktreePath: string): Promise<string | null> {
+	const run = async (args: string[]): Promise<string | null> => {
+		try {
+			const { stdout } = await execFileAsync("git", args, { cwd: worktreePath });
+			return stdout.trim() || null;
+		} catch {
+			return null;
+		}
+	};
+	const defaultBranch = await run(["rev-parse", "--abbrev-ref", "origin/HEAD"]);
+	for (const candidate of [
+		defaultBranch,
+		"origin/develop",
+		"origin/main",
+		"origin/master",
+	]) {
+		if (!candidate) continue;
+		const mergeBase = await run(["merge-base", candidate, "HEAD"]);
+		if (mergeBase) return mergeBase;
+	}
+	return null;
+}
+
+/**
+ * Files changed by the task, used to help the navigation generator locate the
+ * feature's route/screen. Diffs against the default branch's merge-base;
+ * best-effort, returns an empty list on any git error.
+ */
+async function getChangedFiles(worktreePath: string): Promise<string[]> {
+	const base = await resolveDiffBase(worktreePath);
+	const ranges = [
+		...(base ? [`${base}...HEAD`] : []),
+		"HEAD~30..HEAD",
+		"HEAD",
+	];
+	for (const range of ranges) {
+		try {
+			const { stdout } = await execFileAsync(
+				"git",
+				["diff", "--name-only", range],
+				{ cwd: worktreePath },
+			);
+			const files = stdout
+				.split(/\r?\n/)
+				.map((line) => line.trim())
+				.filter(Boolean);
+			if (files.length > 0) return files.slice(0, 80);
+		} catch {
+			// try the next range
+		}
+	}
+	return [];
+}
+
+/** In-page collector returning the real interactive elements as plain objects. */
+const DOM_CANDIDATE_SCRIPT = `(() => {
+  const trim = (s) => (s || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+  const esc = (v) => (window.CSS && window.CSS.escape) ? window.CSS.escape(v) : v;
+  const selectorFor = (el) => {
+    if (el.id) return '#' + esc(el.id);
+    const testid = el.getAttribute('data-testid');
+    if (testid) return '[data-testid="' + testid + '"]';
+    const name = el.getAttribute('name');
+    if (name) return el.tagName.toLowerCase() + '[name="' + name + '"]';
+    if (el.tagName === 'A' && el.getAttribute('href')) return 'a[href="' + el.getAttribute('href') + '"]';
+    return el.tagName.toLowerCase();
+  };
+  const out = [];
+  const seen = new Set();
+  const add = (el, extra) => {
+    if (out.length >= 60) return;
+    const selector = selectorFor(el);
+    const key = selector + '|' + (extra.text || '') + '|' + (extra.href || '');
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(Object.assign({ tag: el.tagName.toLowerCase(), selector: selector }, extra));
+  };
+  document.querySelectorAll('a[href]').forEach((el) => add(el, { text: trim(el.textContent), href: el.getAttribute('href') }));
+  document.querySelectorAll('button, [role=button], input[type=submit], input[type=button]').forEach((el) => add(el, { text: trim(el.textContent || el.value) }));
+  document.querySelectorAll('input, textarea, select').forEach((el) => add(el, { type: el.getAttribute('type') || el.tagName.toLowerCase(), text: trim(el.getAttribute('placeholder') || el.getAttribute('aria-label') || el.getAttribute('name') || '') }));
+  return out;
+})()`;
+
+/**
+ * Load the running page in a hidden window and collect the real interactive
+ * elements (links, buttons, inputs). These ground the navigation generator so
+ * it only emits selectors/routes that actually exist. Best-effort: returns an
+ * empty list on any error.
+ */
+async function collectWebDomCandidates(
+	appUrl: string,
+): Promise<NavDomCandidate[]> {
+	const window = new BrowserWindow({
+		show: false,
+		width: DEFAULT_VIEWPORT.width,
+		height: DEFAULT_VIEWPORT.height,
+		webPreferences: {
+			contextIsolation: true,
+			nodeIntegration: false,
+			sandbox: true,
+		},
+	});
+	try {
+		await window.loadURL(appUrl);
+		await delay(1500);
+		const raw = (await window.webContents.executeJavaScript(
+			DOM_CANDIDATE_SCRIPT,
+		)) as unknown;
+		if (!Array.isArray(raw)) return [];
+		return raw.filter(
+			(candidate): candidate is NavDomCandidate =>
+				typeof candidate === "object" &&
+				candidate !== null &&
+				typeof (candidate as NavDomCandidate).selector === "string",
+		);
+	} catch (error) {
+		logger.warn("[VisualProof] Could not collect DOM candidates:", error);
+		return [];
+	} finally {
+		if (!window.isDestroyed()) window.close();
+	}
+}
+
+/**
+ * Enumerate the live UI Automation elements of the running desktop app so the
+ * navigation generator only emits control names that actually exist (the
+ * desktop counterpart of {@link collectWebDomCandidates}). Best-effort and
+ * Windows-only: returns an empty list off Windows, on timeout, or any error.
+ */
+async function collectDesktopUiElements(pid: number): Promise<NavUiElement[]> {
+	if (process.platform !== "win32") return [];
+	const script = `$ErrorActionPreference='Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$procCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, ${pid})
+$win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $procCond)
+if (-not $win) { '[]'; exit 0 }
+$all = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+$results = @()
+foreach ($el in $all) {
+  $name = $el.Current.Name
+  if ([string]::IsNullOrWhiteSpace($name)) { continue }
+  $results += [pscustomobject]@{ name = $name; controlType = $el.Current.LocalizedControlType; automationId = $el.Current.AutomationId }
+  if ($results.Count -ge 80) { break }
+}
+ConvertTo-Json -InputObject @($results) -Compress`;
+	try {
+		const { stdout } = await execFileAsync(
+			"powershell",
+			["-NoProfile", "-NonInteractive", "-Command", script],
+			{ windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 },
+		);
+		const parsed = JSON.parse(stdout.trim() || "[]");
+		const list = Array.isArray(parsed) ? parsed : [parsed];
+		return list.filter(
+			(item): item is NavUiElement =>
+				typeof item === "object" &&
+				item !== null &&
+				typeof (item as NavUiElement).name === "string",
+		);
+	} catch (error) {
+		logger.warn("[VisualProof] Could not enumerate UI Automation elements:", error);
+		return [];
+	}
+}
+
+/** Persist the generated plan beside the screenshots for traceability. */
+function persistNavigationPlan(
+	context: VisualProofProviderContext,
+	plan: VisualProofNavigationPlan,
+): void {
+	try {
+		writeFileSync(
+			path.join(context.artifactDir, "navigation.generated.json"),
+			JSON.stringify(plan, null, 2),
+			"utf-8",
+		);
+	} catch (error) {
+		logger.warn(
+			"[VisualProof] Could not persist generated navigation plan:",
+			error,
+		);
+	}
+}
+
+/**
+ * Resolve the navigation plan for a target. A manual plan (env or
+ * `.workpilot/visual-proof-navigation.json`) always wins; otherwise a one-shot
+ * LLM call derives the steps from the spec, the diff, the framework and (for
+ * web) the real DOM, so the proof navigates to the feature instead of the home
+ * page. Returns null when nothing usable is produced — the caller then falls
+ * back to a home-page screenshot.
+ */
+export async function resolveNavigationPlan(
+	context: VisualProofProviderContext,
+	target: {
+		targetKind: "web" | "desktop";
+		appUrl?: string;
+		windowName?: string;
+		pid?: number;
+	},
+): Promise<VisualProofNavigationPlan | null> {
+	const manual = loadVisualProofNavigationPlan(context.options);
+	if (manual) return manual;
+
+	try {
+		const domCandidates =
+			target.targetKind === "web" && target.appUrl
+				? await collectWebDomCandidates(target.appUrl)
+				: undefined;
+		const uiElements =
+			target.targetKind === "desktop" && target.pid
+				? await collectDesktopUiElements(target.pid)
+				: undefined;
+		const generated = await visualProofNavigationService.generatePlan({
+			targetKind: target.targetKind,
+			framework: context.config.framework,
+			projectDir: context.runPath,
+			specDir: path.join(
+				context.runPath,
+				getSpecsDir(context.options.autoBuildPath),
+				context.options.specId,
+			),
+			specText: readSpecText(context.options, context.runPath),
+			changedFiles: await getChangedFiles(context.runPath),
+			domCandidates,
+			uiElements,
+			windowName: target.windowName,
+			appLanguage: getAppLanguage(),
+		});
+		if (generated) {
+			persistNavigationPlan(context, generated);
+			return generated;
+		}
+	} catch (error) {
+		logger.warn("[VisualProof] Auto navigation generation failed:", error);
+	}
+	return null;
+}
+
 interface DesktopCaptureSequenceOptions {
 	excludeSourceIds: ReadonlySet<string>;
 	preferredNames: readonly string[];
@@ -1764,7 +2029,10 @@ class LocalIisExpressProvider implements VisualProofProvider {
 		try {
 			await waitForHttp(appUrl);
 			mkdirSync(context.artifactDir, { recursive: true });
-			const navigationPlan = loadVisualProofNavigationPlan(context.options);
+			const navigationPlan = await resolveNavigationPlan(context, {
+				targetKind: "web",
+				appUrl,
+			});
 			const screenshots = await captureWebFeatureScreenshots(
 				appUrl,
 				context,
@@ -1849,7 +2117,11 @@ class LocalWindowsDesktopProvider implements VisualProofProvider {
 				path.basename(executablePath, ".exe"),
 				path.basename(project.projectDir),
 			]);
-			const navigationPlan = loadVisualProofNavigationPlan(context.options);
+			const navigationPlan = await resolveNavigationPlan(context, {
+				targetKind: "desktop",
+				windowName: preferredNames[0],
+				pid: handle.pid,
+			});
 			const desktopSteps = navigationPlan?.desktop ?? [];
 			const workpilotElevated = await isCurrentProcessElevated();
 			const driving = resolveDesktopUiAutomation(
@@ -1908,7 +2180,10 @@ class LocalWebProvider implements VisualProofProvider {
 			}
 
 			mkdirSync(context.artifactDir, { recursive: true });
-			const navigationPlan = loadVisualProofNavigationPlan(context.options);
+			const navigationPlan = await resolveNavigationPlan(context, {
+				targetKind: "web",
+				appUrl,
+			});
 			const screenshots = await captureWebFeatureScreenshots(
 				appUrl,
 				context,

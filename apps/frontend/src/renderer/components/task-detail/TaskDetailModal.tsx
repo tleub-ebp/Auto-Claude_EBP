@@ -1,10 +1,11 @@
 ﻿import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	AlertTriangle,
 	CheckCircle2,
 	ChevronLeft,
 	ChevronRight,
+	Copy,
 	FlaskConical,
 	GitMerge,
 	GitPullRequest,
@@ -31,6 +32,8 @@ import {
 	getDisplayProgress,
 } from "../../lib/utils";
 import { isSubtaskDone } from "../../../shared/progress";
+import { needsExecutionFormula } from "../../../shared/utils/task-execution-config";
+import { useFormulaMatrixStore } from "../../stores/formula-matrix-store";
 import { useProjectStore } from "../../stores/project-store";
 import {
 	deleteTask,
@@ -77,9 +80,9 @@ import { TaskFiles } from "./TaskFiles";
 import { TaskLogs } from "./TaskLogs";
 import { TaskPauseControls } from "./TaskPauseControls";
 import { TaskRunControls } from "./TaskRunControls";
-import { TaskPhaseBar } from "./TaskPhaseBar";
 import { translateActivityMessage } from "./translateActivityMessage";
 import { pauseTask } from "../../stores/task-store";
+import { ExecutionFormulaBanner } from "./ExecutionFormulaBanner";
 import { SpecInterviewBanner } from "./SpecInterviewDialog";
 import { TaskMetadata as TaskMetadataComponent } from "./TaskMetadata";
 import { TaskReview } from "./TaskReview";
@@ -282,6 +285,31 @@ function useTaskDetailHandlers(
 	const { t } = useTranslation(["tasks"]);
 	const { toast } = useToast();
 	const activeProject = useProjectStore((s) => s.getActiveProject());
+	const projects = useProjectStore((s) => s.projects);
+	const openFormulaLab = useFormulaMatrixStore((s) => s.openLab);
+
+	// Pré-requis « Provider × LLM × Effort » : on propose (une seule fois par
+	// ouverture) de choisir une formule avant de lancer une tâche importée ou
+	// dupliquée non encore configurée. Skippable via « Démarrer avec les défauts ».
+	const [showFormulaGate, setShowFormulaGate] = useState(false);
+	const formulaGatePromptedRef = useRef(false);
+
+	// Lancement effectif (signale au passage un éventuel changement de provider).
+	const startNow = () => {
+		const projectProvider = activeProject?.settings?.provider;
+		const taskProvider = (task.metadata as TaskMetadata)?.provider;
+		if (projectProvider && taskProvider && projectProvider !== taskProvider) {
+			toast({
+				title: t("tasks:providerSwitch.title"),
+				description: t("tasks:providerSwitch.description", {
+					from: taskProvider,
+					to: projectProvider,
+				}),
+				duration: 4000,
+			});
+		}
+		startTask(task.id);
+	};
 
 	const handleStartStop = async () => {
 		// Stop applies to any actively-executing task — in_progress AND ai_review
@@ -308,19 +336,31 @@ function useTaskDetailHandlers(
 			}
 		}
 
-		const projectProvider = activeProject?.settings?.provider;
-		const taskProvider = (task.metadata as TaskMetadata)?.provider;
-		if (projectProvider && taskProvider && projectProvider !== taskProvider) {
-			toast({
-				title: t("tasks:providerSwitch.title"),
-				description: t("tasks:providerSwitch.description", {
-					from: taskProvider,
-					to: projectProvider,
-				}),
-				duration: 4000,
-			});
+		// Tâche importée/dupliquée non configurée → proposer le choix de la formule
+		// une seule fois avant de lancer (l'utilisateur peut quand même démarrer
+		// avec les défauts depuis le dialog).
+		if (!formulaGatePromptedRef.current && needsExecutionFormula(task)) {
+			formulaGatePromptedRef.current = true;
+			setShowFormulaGate(true);
+			return;
 		}
-		startTask(task.id);
+
+		startNow();
+	};
+
+	// Actions du dialog d'interception du pré-requis de formule.
+	const chooseFormulaFromGate = () => {
+		setShowFormulaGate(false);
+		openFormulaLab({
+			ticketId: task.id,
+			ticketTitle: task.title,
+			description: task.description,
+			projectPath: projects.find((p) => p.id === task.projectId)?.path,
+		});
+	};
+	const startWithDefaultsFromGate = () => {
+		setShowFormulaGate(false);
+		startNow();
 	};
 
 	const handleRecover = async () => {
@@ -444,6 +484,10 @@ function useTaskDetailHandlers(
 		handleClose,
 		handleUpdatePlan,
 		handleToggleTdd,
+		showFormulaGate,
+		setShowFormulaGate,
+		chooseFormulaFromGate,
+		startWithDefaultsFromGate,
 	};
 }
 
@@ -521,6 +565,10 @@ function TaskDetailModalContent({
 		handleClose,
 		handleUpdatePlan,
 		handleToggleTdd,
+		showFormulaGate,
+		setShowFormulaGate,
+		chooseFormulaFromGate,
+		startWithDefaultsFromGate,
 	} = useTaskDetailHandlers(task, state, onOpenChange);
 
 	// Effective per-task TDD state: explicit task override, else project default.
@@ -556,6 +604,7 @@ function TaskDetailModalContent({
 			// Ne pas naviguer quand une popin secondaire est ouverte.
 			if (
 				state.isEditDialogOpen ||
+				state.isDuplicateDialogOpen ||
 				state.showDeleteDialog ||
 				state.showSyncDialog
 			) {
@@ -580,6 +629,7 @@ function TaskDetailModalContent({
 		onNavigatePrevious,
 		onNavigateNext,
 		state.isEditDialogOpen,
+		state.isDuplicateDialogOpen,
 		state.showDeleteDialog,
 		state.showSyncDialog,
 	]);
@@ -965,6 +1015,21 @@ function TaskDetailModalContent({
 											</TooltipContent>
 										</Tooltip>
 									)}
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												variant="ghost"
+												size="icon"
+												className="hover:bg-primary/10 hover:text-primary transition-colors"
+												onClick={() => state.setIsDuplicateDialogOpen(true)}
+											>
+												<Copy className="h-4 w-4" />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">
+											{t("tasks:actions.duplicate")}
+										</TooltipContent>
+									</Tooltip>
 									<Button
 										variant="ghost"
 										size="icon"
@@ -1092,6 +1157,9 @@ function TaskDetailModalContent({
 											{/* Spec interview - clarify the spec before planning */}
 											<SpecInterviewBanner task={task} />
 
+											{/* Provider × LLM × Effort prerequisite for imported/duplicated tasks */}
+											<ExecutionFormulaBanner task={task} />
+
 											{/* Metadata */}
 											<TaskMetadataComponent task={task} />
 
@@ -1153,15 +1221,6 @@ function TaskDetailModalContent({
 									<TaskSubtasks task={task} onUpdatePlan={handleUpdatePlan} />
 								</TabsContent>
 
-								{/* Phase bar - only visible on Logs tab */}
-								{state.activeTab === "logs" && (
-									<TaskPhaseBar
-										phaseLogs={state.phaseLogs}
-										currentPhase={state.currentLogPhase}
-										currentActivity={currentPhaseActivity}
-									/>
-								)}
-
 								{/* Logs Tab */}
 								<TabsContent
 									value="logs"
@@ -1178,6 +1237,8 @@ function TaskDetailModalContent({
 										onLogsScroll={state.handleLogsScroll}
 										onTogglePhase={state.togglePhase}
 										onVisiblePhaseChange={state.setCurrentLogPhase}
+										currentPhase={state.currentLogPhase}
+										currentActivity={currentPhaseActivity}
 									/>
 								</TabsContent>
 
@@ -1330,6 +1391,15 @@ function TaskDetailModalContent({
 				onCloseTask={onCloseTask}
 			/>
 
+			{/* Duplicate Task Dialog — edit fields before creating the copy */}
+			<TaskEditDialog
+				mode="duplicate"
+				task={task}
+				open={state.isDuplicateDialogOpen}
+				onOpenChange={state.setIsDuplicateDialogOpen}
+				onCreated={() => state.setIsDuplicateDialogOpen(false)}
+			/>
+
 			{/* Delete Confirmation Dialog */}
 			<AlertDialog
 				open={state.showDeleteDialog}
@@ -1396,6 +1466,33 @@ function TaskDetailModalContent({
 					onOpenChange={state.setShowSyncDialog}
 				/>
 			)}
+
+			{/* Provider × LLM × Effort prerequisite, proposed when starting an
+			    imported/duplicated task that hasn't chosen a formula yet. */}
+			<AlertDialog open={showFormulaGate} onOpenChange={setShowFormulaGate}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle className="flex items-center gap-2">
+							<FlaskConical className="h-5 w-5 text-primary" />
+							{t("tasks:executionFormula.gate.title")}
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							{t("tasks:executionFormula.gate.body")}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>
+							{t("tasks:executionFormula.gate.cancel")}
+						</AlertDialogCancel>
+						<Button variant="outline" onClick={startWithDefaultsFromGate}>
+							{t("tasks:executionFormula.gate.startDefaults")}
+						</Button>
+						<AlertDialogAction onClick={chooseFormulaFromGate}>
+							{t("tasks:executionFormula.gate.choose")}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</TooltipProvider>
 	);
 }

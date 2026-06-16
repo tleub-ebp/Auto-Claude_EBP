@@ -5,6 +5,7 @@ import {
 	Bug,
 	CheckCircle2,
 	Clock,
+	Copy,
 	FileCode,
 	FileText,
 	FlaskConical,
@@ -116,6 +117,8 @@ interface TaskCardProps {
 	onToggleSelect?: () => void;
 	// Optional delete handler
 	onDelete?: () => void;
+	// Optional duplicate handler (clone the task into a fresh backlog ticket)
+	onDuplicate?: () => void;
 	// Optional PR files viewer handler
 	onViewPRFiles?: (prUrl: string, taskId: string) => void;
 	// Optional app preview handler for done, human_review, and ai_review tasks
@@ -740,28 +743,36 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
 					<StreamingSessionButton
 						taskId={task.id}
 						projectPath={currentProject.path}
+						compact
 					/>
 				)}
 				{/* Pause / Reprendre — only meaningful while the task is running. */}
 				{(isRunning || isPaused) && pauseResumeButton}
-				<Button
-					variant={isRunning ? "destructive" : "default"}
-					size="sm"
-					className="h-7 px-2.5"
-					onClick={handleStartStop}
-				>
-					{isRunning ? (
-						<>
-							<Square className="mr-1.5 h-3 w-3" />
-							{t("actions.stop")}
-						</>
-					) : (
-						<>
-							<Play className="mr-1.5 h-3 w-3" />
-							{t("actions.start")}
-						</>
-					)}
-				</Button>
+				{isRunning ? (
+					// While running, the footer already carries Watch-live + Pause, so
+					// keep Stop icon-only — the whole row then fits on a single line and
+					// the in-progress card stays as compact as the other columns.
+					<Button
+						variant="destructive"
+						size="sm"
+						className="h-7 w-7 p-0"
+						onClick={handleStartStop}
+						title={t("actions.stop")}
+						aria-label={t("actions.stop")}
+					>
+						<Square className="h-3 w-3" />
+					</Button>
+				) : (
+					<Button
+						variant="default"
+						size="sm"
+						className="h-7 px-2.5"
+						onClick={handleStartStop}
+					>
+						<Play className="mr-1.5 h-3 w-3" />
+						{t("actions.start")}
+					</Button>
+				)}
 			</>
 		);
 	}
@@ -880,6 +891,7 @@ function taskCardPropsAreEqual(
 		prevProps.onToggleSelect === nextProps.onToggleSelect &&
 		prevProps.onViewPRFiles === nextProps.onViewPRFiles &&
 		prevProps.onDelete === nextProps.onDelete &&
+		prevProps.onDuplicate === nextProps.onDuplicate &&
 		prevProps.onPreviewApp === nextProps.onPreviewApp
 	) {
 		return true;
@@ -951,6 +963,7 @@ export const TaskCard = memo(function TaskCard({
 	isSelected,
 	onToggleSelect,
 	onDelete,
+	onDuplicate,
 	onViewPRFiles,
 	onPreviewApp,
 }: TaskCardProps) {
@@ -1152,6 +1165,11 @@ export const TaskCard = memo(function TaskCard({
 		}
 	};
 
+	const handleDuplicate = (e: React.MouseEvent) => {
+		e.stopPropagation();
+		onDuplicate?.();
+	};
+
 	const handleCardClick = (e: React.MouseEvent) => {
 		// Don't open task modal while sync dialog is open (prevents portal event leak)
 		if (showSyncDialog) return;
@@ -1347,8 +1365,11 @@ export const TaskCard = memo(function TaskCard({
 									t={t}
 								/>
 
-								{/* More options menu - includes pause/resume and status changes */}
-								{(statusMenuItems || isRunning || task.metadata?.paused?.enabled) && (
+								{/* More options menu - includes duplicate, pause/resume and status changes */}
+								{(statusMenuItems ||
+									isRunning ||
+									onDuplicate ||
+									task.metadata?.paused?.enabled) && (
 									<DropdownMenu>
 										<DropdownMenuTrigger asChild>
 											<Button
@@ -1365,6 +1386,21 @@ export const TaskCard = memo(function TaskCard({
 											align="end"
 											onClick={(e) => e.stopPropagation()}
 										>
+											{/* Duplicate - clone the task into a fresh backlog ticket */}
+											{onDuplicate && (
+												<>
+													<DropdownMenuItem
+														onClick={(e) => {
+															e.stopPropagation();
+															handleDuplicate(e as React.MouseEvent);
+														}}
+													>
+														<Copy className="mr-2 h-4 w-4" />
+														{t("actions.duplicate")}
+													</DropdownMenuItem>
+													<DropdownMenuSeparator />
+												</>
+											)}
 											{/* Pause/Resume - show when task is running or paused */}
 											{(isRunning || task.metadata?.paused?.enabled) && (
 												<>

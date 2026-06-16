@@ -18,8 +18,15 @@
 		"cta": "Refine with AI",
 		"running": "Refining…",
 		"tooltip": "Run one cheap LLM pass to sharpen the success estimate of the top 3 formulas for this task",
-		"error": "AI refine unavailable — keeping heuristic estimates.",
+		"error": "AI confidence refine unavailable — keeping heuristic success probabilities (costs are unaffected).",
 		"aiBadge": "AI-refined estimate"
+	},
+	"costBasis": {
+		"measured": "Costs computed from {{count}} real run(s) in this project — measured tokens × catalog prices.",
+		"calibrated": "Costs calibrated on {{count}} real run(s) in this project — measured volumes × up-to-date catalog prices.",
+		"heuristic": "No run history yet — estimated (default) volumes × real catalog prices. Accuracy improves after your first tasks.",
+		"measuredTag": "measured",
+		"measuredTooltip": "Cost based on this model's real measured usage in this project"
 	},
 	"picks": {
 		"bestValue": "Best value",

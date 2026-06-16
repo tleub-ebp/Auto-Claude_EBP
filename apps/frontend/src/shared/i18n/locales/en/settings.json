@@ -1639,6 +1639,7 @@
 		"selectThinkingLevel": "Select thinking level",
 		"autoLabel": "Auto (Optimized)",
 		"autoDescription": "Uses Opus across all phases with optimized thinking levels",
+		"autoDescriptionModel": "Uses {{model}} across all phases with optimized thinking levels",
 		"phaseConfiguration": "Phase Configuration",
 		"phaseConfigurationDescription": "Configure models and thinking levels for each development pipeline phase",
 		"phases": {

@@ -34,6 +34,7 @@ import type {
 import type {
 	PhaseModelConfig,
 	PhaseThinkingConfig,
+	ThinkingLevel,
 } from "../../../shared/types/settings";
 import type { AgentManager } from "../../agent";
 import { getAppLanguage } from "../../app-language";
@@ -58,8 +59,8 @@ import {
 	getPlanPath,
 	persistPlanStatus,
 	updatePlanSubtasks,
-	getModifiedFilesFromWorktree,
-	generateSubtasksFromModifiedFiles,
+	buildChangeRequestSubtask,
+	addChangeRequestSubtaskToPlan,
 } from "./plan-file-utils";
 import { findTaskAndProject } from "./shared";
 
@@ -1139,126 +1140,121 @@ export function registerTaskExecutionHandlers(
 					};
 				}
 
-				// Generate subtasks from modified files and feedback
-				// This creates new subtasks in the implementation plan with the modified files attached
-				if (hasWorktree && worktreePath) {
-					try {
-						console.warn("[TASK_REVIEW] Generating subtasks from modified files...");
+				// Record the requested change as a single, traceable subtask so the
+				// Subtasks tab keeps a visible history of every modification the user
+				// asked for. It is rendered with a distinct colour in the UI
+				// (origin: "change_request"). This is created unconditionally — even
+				// when there is no worktree or no files have changed yet — so a request
+				// always leaves a trace.
+				try {
+					const changeRequestSubtask = buildChangeRequestSubtask(
+						feedback || "Needs fixes based on user feedback",
+					);
 
-						// Get modified files from the worktree
-						const modifiedFiles = getModifiedFilesFromWorktree(worktreePath);
+					// Write the trace to BOTH plans:
+					//  - the worktree plan, which the agent actually reads/updates;
+					//  - the MAIN project plan, which the Subtasks tab watches. The
+					//    worktree plan is only synced back to the main one after QA, so
+					//    without this second write the new subtask would not appear in
+					//    the UI until much later (the reported "no new coloured subtask").
+					// The subtask carries no files at creation — its real changes are
+					// captured in files_changed by the backend once the agent runs.
+					const worktreePlanPath = path.join(
+						hasWorktree && worktreeSpecDir ? worktreeSpecDir : specDir,
+						AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
+					);
+					const mainPlanPath = path.join(
+						specDir,
+						AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
+					);
 
-						if (modifiedFiles.length > 0) {
-							// Generate subtasks grouped by directory
-							const newSubtasks = generateSubtasksFromModifiedFiles(
-								modifiedFiles,
-								feedback || "Needs fixes based on user feedback",
-							);
-
-							// Load the current implementation plan
-							const planPath = path.join(
-								worktreeSpecDir || specDir,
-								AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
-							);
-
-							try {
-								const planContent = readFileSync(planPath, "utf-8");
-								const plan = JSON.parse(planContent);
-
-								// Add new subtasks to the Implementation phase or create it
-								if (!plan.phases) {
-									plan.phases = [];
-								}
-
-								let implPhase = plan.phases.find(
-									(p: Record<string, unknown>) => p.name === "Implementation",
-								);
-								if (!implPhase) {
-									implPhase = { name: "Implementation", subtasks: [] };
-									plan.phases.push(implPhase);
-								}
-
-								// Add the new subtasks
-								if (!Array.isArray(implPhase.subtasks)) {
-									implPhase.subtasks = [];
-								}
-								implPhase.subtasks.push(...newSubtasks);
-
-								// Update the plan file
-								writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf-8");
-
-								console.warn(
-									`[TASK_REVIEW] Added ${newSubtasks.length} new subtasks to implementation plan`,
-								);
-								appLog.info(
-									`[TASK_REVIEW] Generated ${newSubtasks.length} subtasks from ${modifiedFiles.length} modified files`,
-								);
-							} catch (planError) {
-								console.warn(
-									"[TASK_REVIEW] Could not update implementation plan with subtasks:",
-									planError,
-								);
-								// Log but don't fail - the QA process will still run
-								appLog.warn(
-									`[TASK_REVIEW] Failed to generate subtasks from modified files: ${planError instanceof Error ? planError.message : String(planError)}`,
-								);
-							}
-						} else {
-							console.warn(
-								"[TASK_REVIEW] No modified files detected in worktree",
-							);
-						}
-					} catch (subtaskError) {
-						console.warn(
-							"[TASK_REVIEW] Error generating subtasks:",
-							subtaskError,
-						);
-						// Don't fail the review - continue with QA process
-						appLog.warn(
-							`[TASK_REVIEW] Failed to generate subtasks: ${subtaskError instanceof Error ? subtaskError.message : String(subtaskError)}`,
-						);
+					const wrote = addChangeRequestSubtaskToPlan(
+						worktreePlanPath,
+						changeRequestSubtask,
+					);
+					if (path.resolve(mainPlanPath) !== path.resolve(worktreePlanPath)) {
+						addChangeRequestSubtaskToPlan(mainPlanPath, changeRequestSubtask);
 					}
+
+					appLog.info(
+						`[TASK_REVIEW] Recorded change-request subtask (${changeRequestSubtask.id}, written=${wrote})`,
+					);
+				} catch (subtaskError) {
+					// Don't fail the review - continue with QA process
+					appLog.warn(
+						`[TASK_REVIEW] Failed to record change-request subtask: ${subtaskError instanceof Error ? subtaskError.message : String(subtaskError)}`,
+					);
 				}
 
-				// Reset existing subtasks to "pending" in the implementation plan
-				// so the full pipeline (planning → coding → QA) will re-process them
-				const resetPlanPath = path.join(
-					hasWorktree && worktreeSpecDir ? worktreeSpecDir : specDir,
-					AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
-				);
-				try {
-					const resetPlanContent = readFileSync(resetPlanPath, "utf-8");
-					const resetPlan = JSON.parse(resetPlanContent);
-					if (resetPlan.phases) {
-						for (const phase of resetPlan.phases) {
-							if (Array.isArray(phase.subtasks)) {
-								for (const subtask of phase.subtasks) {
-									// Only reset completed/failed subtasks back to pending
-									if (subtask.status === "completed" || subtask.status === "failed") {
-										subtask.status = "pending";
+				// Re-open the plan for another pass WITHOUT re-running work that
+				// already passed. A "Request Changes" is a follow-up: the agent should
+				// pick up the new change-request subtask (pending) and retry any
+				// genuinely failed ones, but COMPLETED subtasks stay completed —
+				// otherwise every modification re-executes the whole task and floods
+				// the logs with the other subtasks (matches the follow-up planner's
+				// "never change the status of completed subtasks" rule).
+				//
+				// Reset BOTH plans: the MAIN plan is authoritative on restart (run.py
+				// is launched with the main project dir and copy_spec_to_worktree
+				// overwrites the worktree copy from it) AND it is the plan the UI
+				// watches — so it must carry the change-request + in-progress status.
+				const resetPlanPaths = [
+					path.join(specDir, AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN),
+					...(hasWorktree && worktreeSpecDir
+						? [path.join(worktreeSpecDir, AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN)]
+						: []),
+				];
+				for (const resetPlanPath of resetPlanPaths) {
+					if (!existsSync(resetPlanPath)) continue;
+					try {
+						const resetPlan = JSON.parse(readFileSync(resetPlanPath, "utf-8"));
+						if (resetPlan.phases) {
+							for (const phase of resetPlan.phases) {
+								if (Array.isArray(phase.subtasks)) {
+									for (const subtask of phase.subtasks) {
+										// Retry failed subtasks; preserve completed ones.
+										if (subtask.status === "failed") {
+											subtask.status = "pending";
+										}
 									}
 								}
 							}
 						}
+						// Reset QA signoff so QA re-validates the task after the change.
+						if (resetPlan.qa_signoff) {
+							resetPlan.qa_signoff.status = "pending";
+						}
+						resetPlan.status = "in_progress";
+						resetPlan.planStatus = "in_progress";
+						resetPlan.updated_at = new Date().toISOString();
+						writeFileSync(
+							resetPlanPath,
+							JSON.stringify(resetPlan, null, 2),
+							"utf-8",
+						);
+					} catch (resetError) {
+						appLog.warn(
+							`[TASK_REVIEW] Could not reset plan ${resetPlanPath}: ${resetError instanceof Error ? resetError.message : String(resetError)}`,
+						);
 					}
-					// Reset QA signoff so the full pipeline runs again
-					if (resetPlan.qa_signoff) {
-						resetPlan.qa_signoff.status = "pending";
-					}
-					resetPlan.status = "in_progress";
-					resetPlan.planStatus = "in_progress";
-					resetPlan.updated_at = new Date().toISOString();
-					writeFileSync(resetPlanPath, JSON.stringify(resetPlan, null, 2), "utf-8");
-					appLog.info("[TASK_REVIEW] Reset subtasks to pending for full pipeline re-execution");
-				} catch (resetError) {
-					appLog.warn(
-						`[TASK_REVIEW] Could not reset subtasks in plan: ${resetError instanceof Error ? resetError.message : String(resetError)}`,
-					);
 				}
+				appLog.info(
+					"[TASK_REVIEW] Re-opened plan(s) for change request (completed subtasks preserved)",
+				);
 
 				// Start full pipeline (planning → coding → QA) instead of QA-only
-				// This ensures changes requested by the user go through the complete workflow
-				const qaProjectPath = hasWorktree ? worktreePath : project.path;
+				// This ensures changes requested by the user go through the complete workflow.
+				//
+				// IMPORTANT: pass the MAIN project path (never the worktree path) as the
+				// project dir. The WorktreeManager then reuses the EXISTING worktree
+				// idempotently instead of trying to `git worktree add` a branch that is
+				// already checked out (which fails with "branch already used by worktree",
+				// git exit 128). Keeping worktree isolation (not --direct) also preserves
+				// the worktree→main progress sync (run.py sets source_spec_dir), so the
+				// kanban/modal percentage actually reaches 100% once the change-request
+				// completes — running --direct skips that sync and leaves the main plan
+				// (which the UI watches) stuck on the "pending" change-request subtask.
+				const qaProjectPath = project.path;
 				const baseBranch =
 					task.metadata?.baseBranch || project.settings?.mainBranch;
 				console.warn(
@@ -1942,6 +1938,7 @@ print(json.dumps(result))
 			taskId: string,
 			providerName: string,
 			model?: string,
+			effort?: string,
 		): Promise<IPCResult> => {
 			const { task, project } = findTaskAndProject(taskId);
 			if (!task || !project) {
@@ -1956,6 +1953,13 @@ print(json.dumps(result))
 
 			const provider = providerName.trim();
 			const chosenModel = model?.trim() || undefined;
+			// Validate the effort against the known thinking levels; ignore garbage
+			// so a malformed value never poisons task_metadata.json.
+			const VALID_EFFORTS = ["none", "low", "medium", "high", "ultrathink"];
+			const chosenEffort =
+				effort && VALID_EFFORTS.includes(effort.trim())
+					? effort.trim()
+					: undefined;
 			const specPaths = getSpecPaths(task, project);
 
 			// Distinct spec dirs (worktree + main) that may hold a backend copy.
@@ -2007,6 +2011,16 @@ print(json.dumps(result))
 							existing.model = chosenModel;
 							existing.isAutoProfile = false;
 						}
+						if (chosenEffort) {
+							// Apply the chosen effort to the whole resumed run. The backend
+							// (phase_config.get_phase_thinking) honours a per-phase
+							// `phaseThinking[phase]` over the single `thinkingLevel`, so we
+							// must drop the stale per-phase config for the single effort to
+							// actually win — mirroring how a chosen model sets
+							// isAutoProfile:false to force the single model.
+							existing.thinkingLevel = chosenEffort;
+							delete existing.phaseThinking;
+						}
 						atomicWriteFileSync(
 							metadataPath,
 							JSON.stringify(existing, null, 2),
@@ -2024,6 +2038,7 @@ print(json.dumps(result))
 				const markerPayload = JSON.stringify({
 					provider,
 					...(chosenModel ? { model: chosenModel } : {}),
+					...(chosenEffort ? { effort: chosenEffort } : {}),
 				});
 				for (const dir of specDirs) {
 					writeFileSync(
@@ -2037,12 +2052,17 @@ print(json.dumps(result))
 				if (!task.metadata) task.metadata = {};
 				task.metadata.provider = provider;
 				if (chosenModel) task.metadata.model = chosenModel;
+				if (chosenEffort) {
+					task.metadata.thinkingLevel = chosenEffort as ThinkingLevel;
+					task.metadata.phaseThinking = undefined;
+				}
 				if (task.metadata.paused) task.metadata.paused.enabled = false;
 				projectStore.invalidateTasksCache(project.id);
 
 				appLog.info(
 					`[TASK_RESUME_WITH_PROVIDER] Resuming task ${taskId} with ` +
-						`provider=${provider}${chosenModel ? `, model=${chosenModel}` : ""} ` +
+						`provider=${provider}${chosenModel ? `, model=${chosenModel}` : ""}` +
+						`${chosenEffort ? `, effort=${chosenEffort}` : ""} ` +
 						`(${specDirs.length} spec dir(s)). Conversation log will be replayed.`,
 				);
 			} catch (err) {
