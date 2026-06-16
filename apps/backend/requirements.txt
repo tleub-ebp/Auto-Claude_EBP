@@ -3,7 +3,7 @@
 # Earlier versions had 400 errors when tool_use blocks had partial failures
 # Utiliser le nom correct du package (tiret) pour l'installation via pip
 claude-agent-sdk>=0.2.94
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
 
 # WebSocket support for streaming development mode
 websockets>=12.0
