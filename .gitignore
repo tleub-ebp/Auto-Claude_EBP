@@ -198,5 +198,8 @@ nul
 /apps/backend/test_analytics.db
 /data/analytics.db
 /data/test_analytics.db
+# Test-generated SQLite DBs can also land at the repo root depending on cwd.
+/analytics.db
+/test_analytics.db
 /apps/frontend/lint_output.txt
 tmp/ipc-handlers-test/userData/store/projects.json

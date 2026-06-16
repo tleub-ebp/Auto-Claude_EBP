@@ -46,6 +46,7 @@ import {
 	AppSettingsDialog,
 } from "./components/settings/AppSettings";
 import type { ProjectSettingsSection } from "./components/settings/ProjectSettingsContent";
+import { ServerLoginScreen } from "./components/auth/ServerLoginScreen";
 import { TerminalGrid } from "./components/TerminalGrid";
 import { Toaster } from "./components/ui/toaster";
 import { CliStatusProvider } from "./contexts/CliStatusContext";
@@ -341,6 +342,7 @@ import { AzureDevOpsSetupModal } from "./components/AzureDevOpsSetupModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { GitHubSetupModal } from "./components/GitHubSetupModal";
 import { GlobalDownloadIndicator } from "./components/GlobalDownloadIndicator";
+import { FormulaLab } from "./components/formula-lab/FormulaLab";
 import { KeyboardShortcutsOverlay } from "./components/KeyboardShortcutsOverlay";
 import { NavigationConfirmDialog } from "./components/NavigationConfirmDialog";
 import { NoProjectPage } from "./components/NoProjectPage";
@@ -375,6 +377,7 @@ import {
 	saveSettings,
 	useSettingsStore,
 } from "./stores/settings-store";
+import { useServerSessionStore } from "./stores/server-session-store";
 import { loadTasks, stopTask, useTaskStore } from "./stores/task-store";
 import { useKanbanSettingsStore } from "./stores/kanban-settings-store";
 import {
@@ -427,6 +430,31 @@ export function App() {
 	const { toast } = useToast();
 	// Load IPC listeners for real-time updates
 	useIpcListeners();
+
+	// Multi-user server mode: sync session state and gate the UI behind
+	// the login screen while a configured server session is unauthenticated.
+	const initServerSession = useServerSessionStore(
+		(state) => state.initialize,
+	);
+	const serverMode = useServerSessionStore((state) => state.mode);
+	const serverAuthenticated = useServerSessionStore(
+		(state) => state.isAuthenticated,
+	);
+	const isLoginScreenOpen = useServerSessionStore(
+		(state) => state.isLoginScreenOpen,
+	);
+	useEffect(() => {
+		void initServerSession();
+	}, [initServerSession]);
+	useEffect(() => {
+		const open = () =>
+			useServerSessionStore.getState().openLoginScreen();
+		window.addEventListener("workpilot:open-server-login", open);
+		return () =>
+			window.removeEventListener("workpilot:open-server-login", open);
+	}, []);
+	const showServerLogin =
+		isLoginScreenOpen || (serverMode === "server" && !serverAuthenticated);
 
 	// Load global terminal output listeners to buffer output across project switches
 	// This ensures terminal output is captured even when the terminal component is not rendered
@@ -1523,6 +1551,8 @@ export function App() {
 			<ViewStateProvider>
 				<CliStatusProvider>
 					<TooltipProvider>
+						{/* Multi-user server mode: connection gate */}
+						{showServerLogin && <ServerLoginScreen />}
 						<div className="flex h-screen bg-background">
 							{/* Sidebar */}
 							<Sidebar
@@ -1989,6 +2019,10 @@ export function App() {
 						/>
 
 						<Toaster />
+
+						{/* Formula Lab — Provider × LLM × Effort comparator (kanban) */}
+						<FormulaLab />
+
 						{/* Global download progress indicator - shows overall progress of all downloads */}
 						<GlobalDownloadIndicator />
 

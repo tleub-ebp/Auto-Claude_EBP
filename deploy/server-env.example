@@ -1,0 +1,47 @@
+# WorkPilot AI server-mode secrets — copy to .env.server (next to
+# docker-compose.yml) and fill in.
+
+# PostgreSQL password (used by both services)
+POSTGRES_PASSWORD=
+
+# JWT signing secret (>= 32 chars):
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+WORKPILOT_JWT_SECRET=
+
+# Fernet master key encrypting per-user integration secrets:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+WORKPILOT_SECRETS_MASTER_KEY=
+
+# Microsoft Entra ID SSO (leave empty to disable; local accounts always work)
+# App registration type: "Mobile and desktop applications",
+# redirect URI: http://localhost (loopback, any port)
+WORKPILOT_ENTRA_TENANT_ID=
+WORKPILOT_ENTRA_CLIENT_ID=
+
+# Server-level LLM credentials (shared pool for all agent runs)
+CLAUDE_CODE_OAUTH_TOKEN=
+
+# Public base URL of this server (used to build invitation links)
+WORKPILOT_PUBLIC_BASE_URL=https://workpilot.example.com
+
+# Invitation-only self-service signup
+WORKPILOT_INVITATION_TTL_HOURS=72
+WORKPILOT_PASSWORD_MIN_LENGTH=12
+# Optional: reject passwords found in Have I Been Pwned (k-anonymity range
+# query; the full password never leaves the server). Off by default.
+WORKPILOT_PASSWORD_HIBP_CHECK=false
+
+# SMTP for invitation emails (leave WORKPILOT_SMTP_HOST empty to disable;
+# the admin UI then shows a copyable invite link instead).
+WORKPILOT_SMTP_HOST=
+WORKPILOT_SMTP_PORT=587
+WORKPILOT_SMTP_USER=
+WORKPILOT_SMTP_PASSWORD=
+WORKPILOT_SMTP_FROM=WorkPilot <noreply@example.com>
+WORKPILOT_SMTP_USE_TLS=true
+WORKPILOT_SMTP_USE_SSL=false
+
+# Tuning
+WORKPILOT_MAX_CONCURRENT_RUNS=3
+WORKPILOT_ACCESS_TOKEN_TTL_MINUTES=15
+WORKPILOT_REFRESH_TOKEN_TTL_DAYS=14

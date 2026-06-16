@@ -5,6 +5,8 @@ import type { Task } from "../../../shared/types";
 import { startTask, submitReview } from "../../stores/task-store";
 import { Button } from "../ui/button";
 import { Separator } from "../ui/separator";
+import { PlanConflictAlert } from "./PlanConflictAlert";
+import { TaskResetButton } from "./TaskResetButton";
 
 interface PlanApprovalSectionProps {
 	readonly task: Task;
@@ -85,6 +87,12 @@ export function PlanApprovalSection({
 					{t("tasks:modal.plan.approvalDescription")}
 				</p>
 
+				{/* Worktree conflict alert: other active tasks planning to touch the
+				    same files — better caught here than as a merge conflict later */}
+				<div className="mb-4">
+					<PlanConflictAlert task={task} />
+				</div>
+
 				{/* Rejection reason textarea - shown when user wants to reject */}
 				{isRejecting && (
 					<div className="mb-4">
@@ -143,6 +151,12 @@ export function PlanApprovalSection({
 							</>
 						)}
 					</Button>
+				</div>
+
+				{/* Last resort: the proposed subtasks are not worth fixing — wipe
+				    everything (plan, worktree, artifacts) and go back to backlog */}
+				<div className="mt-3 pt-3 border-t border-amber-500/20">
+					<TaskResetButton task={task} className="w-full" />
 				</div>
 			</div>
 		</div>

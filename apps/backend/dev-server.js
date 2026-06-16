@@ -55,8 +55,21 @@ function runUvicorn() {
 		"--port",
 		"9000",
 		"--reload",
+		// Watch only the backend source directory. The shared virtualenv lives at
+		// the repo root (../../.venv), so scoping the watcher to apps/backend keeps
+		// pip installs (PythonEnvManager) from triggering an endless reload storm.
+		// NOTE: do not use glob --reload-exclude patterns like ".venv/*" here: the
+		// bundled Windows python.exe expands wildcard argv, turning the pattern into
+		// extra positional args and making uvicorn exit with code 2.
+		"--reload-dir",
+		__dirname,
+		// The Electron PythonEnvManager installs into apps/backend/.venv, which
+		// is INSIDE the watched dir — without this exclude, every pip install
+		// reload-storms the server. No wildcard => safe from the argv expansion
+		// issue above. Must be ABSOLUTE: uvicorn's FileFilter matches exclude
+		// dirs against the changed file's (absolute) parents.
 		"--reload-exclude",
-		".venv",
+		join(__dirname, ".venv"),
 	];
 	const proc = spawn(venvPython(), uvicornArgs, {
 		stdio: "inherit",

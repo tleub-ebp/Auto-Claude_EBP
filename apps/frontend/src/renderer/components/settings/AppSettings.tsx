@@ -22,7 +22,9 @@ import {
 	ShieldAlert,
 	Sparkles,
 	Terminal,
+	UserPlus,
 	Users,
+	Workflow,
 	Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -33,6 +35,8 @@ import { TerminalFontSettings } from "@/components/settings/terminal-font-settin
 import { ScrollArea } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/stores/project-store";
+import { useServerSessionStore } from "@/stores/server-session-store";
+import { InvitationsAdmin } from "../auth/InvitationsAdmin";
 import { Button } from "../ui/button";
 import {
 	FullScreenDialog,
@@ -120,6 +124,8 @@ export type AppSection =
 	| "guardrails"
 	| "anomaly-detection"
 	| "memory"
+	// Multi-utilisateurs (serveur, admin uniquement)
+	| "team-invitations"
 	// Système & Maintenance
 	| "updates"
 	| "notifications"
@@ -132,6 +138,7 @@ export type ProjectSettingsSection =
 	| "general"
 	| "azure-devops"
 	| "jira"
+	| "cicd"
 	| "github"
 	| "gitlab"
 	| "linear"
@@ -183,12 +190,8 @@ const createSettingsThemes = (t: {
 		color: "text-purple-600",
 		sections: [
 			{ id: "accounts", icon: Users, label: "Comptes IA", type: "app" },
-			{
-				id: "memory",
-				icon: Database,
-				label: t("projectSections.memory.title"),
-				type: "project",
-			},
+			{ id: "github", icon: Globe, label: "GitHub", type: "project" },
+			{ id: "gitlab", icon: GitLabIcon, label: "GitLab", type: "project" },
 			{
 				id: "azure-devops",
 				icon: Cloud,
@@ -196,14 +199,33 @@ const createSettingsThemes = (t: {
 				type: "project",
 			},
 			{ id: "jira", icon: JiraIcon, label: "Jira", type: "project" },
-			{ id: "github", icon: Globe, label: "GitHub", type: "project" },
-			{ id: "gitlab", icon: GitLabIcon, label: "GitLab", type: "project" },
 			{ id: "linear", icon: Zap, label: "Linear", type: "project" },
+			{
+				id: "memory",
+				icon: Database,
+				label: t("projectSections.memory.title"),
+				type: "project",
+			},
+			{
+				id: "cicd",
+				icon: Workflow,
+				label: t("cicd.title", "Pipeline CI/CD"),
+				type: "project",
+			},
 			{
 				id: "teams",
 				icon: MessageSquare,
-				label: "Microsoft Teams",
+				label: t(
+					"channelNotifications.navLabel",
+					"Notifications (Teams, Slack…)",
+				),
 				type: "project",
+			},
+			{
+				id: "team-invitations",
+				icon: UserPlus,
+				label: t("invitationsAdmin.navLabel", "Invitations (équipe)"),
+				type: "app",
 			},
 		],
 		description: "Comptes IA et intégrations externes",
@@ -241,15 +263,15 @@ const createSettingsThemes = (t: {
 			{ id: "paths", icon: FolderOpen, label: t("sections.paths.title"), type: "app" },
 			{ id: "agent", icon: Bot, label: "Agent", type: "app" },
 			{
-				id: "swarm-mode",
-				icon: Zap,
-				label: t("swarm:title", "Swarm Mode"),
-				type: "app",
-			},
-			{
 				id: "continuous-ai",
 				icon: Activity,
 				label: t("continuousAI:title", "Continuous AI"),
+				type: "app",
+			},
+			{
+				id: "swarm-mode",
+				icon: Zap,
+				label: t("swarm:title", "Swarm Mode"),
 				type: "app",
 			},
 		],
@@ -262,12 +284,6 @@ const createSettingsThemes = (t: {
 		color: "text-orange-600",
 		sections: [
 			{
-				id: "sandbox",
-				icon: Shield,
-				label: t("sections.sandbox.title"),
-				type: "app",
-			},
-			{
 				id: "guardrails",
 				icon: Shield,
 				label: t("guardrails.title", "Agent Guardrails"),
@@ -279,6 +295,12 @@ const createSettingsThemes = (t: {
 				label: t("sections.anomaly-detection.title"),
 				type: "app",
 			},
+			{
+				id: "sandbox",
+				icon: Shield,
+				label: t("sections.sandbox.title"),
+				type: "app",
+			},
 		],
 		description: "Sécurité et performance du système",
 		priority: 5,
@@ -288,7 +310,6 @@ const createSettingsThemes = (t: {
 		icon: Package,
 		color: "text-gray-600",
 		sections: [
-			{ id: "updates", icon: Package, label: "Mises à jour", type: "app" },
 			{ id: "notifications", icon: Bell, label: "Notifications", type: "app" },
 			{ id: "debug", icon: Bug, label: "Debug", type: "app" },
 			{
@@ -297,6 +318,7 @@ const createSettingsThemes = (t: {
 				label: "Planification",
 				type: "app",
 			},
+			{ id: "updates", icon: Package, label: "Mises à jour", type: "app" },
 		],
 		description: "Maintenance et système",
 		priority: 6,
@@ -330,6 +352,18 @@ export function AppSettingsDialog(props: AppSettingsDialogProps) {
 
 	// Create dynamic settings themes with translations
 	const SETTINGS_THEMES = createSettingsThemes(t);
+
+	// The team-invitations section is admin-only and only relevant in server
+	// mode; drop it from the nav otherwise.
+	const serverMode = useServerSessionStore((state) => state.mode);
+	const serverUserRole = useServerSessionStore((state) => state.user?.role);
+	const isServerAdmin = serverMode === "server" && serverUserRole === "admin";
+	if (!isServerAdmin) {
+		SETTINGS_THEMES.integrations.sections =
+			SETTINGS_THEMES.integrations.sections.filter(
+				(s) => s.id !== "team-invitations",
+			);
+	}
 
 	// Project state (déclaré avant tout usage)
 	const projects = useProjectStore((state) => state.projects);
@@ -554,6 +588,8 @@ export function AppSettingsDialog(props: AppSettingsDialogProps) {
 				return <SwarmModeSettings />;
 			case "continuous-ai":
 				return <ContinuousAISettings />;
+			case "team-invitations":
+				return isServerAdmin ? <InvitationsAdmin /> : null;
 			default:
 				return null;
 		}

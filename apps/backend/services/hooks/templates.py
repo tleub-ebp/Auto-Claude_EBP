@@ -371,6 +371,75 @@ def get_hook_templates() -> list[HookTemplate]:
                 },
             ],
         ),
+        HookTemplate(
+            id="tpl-announce-pr-ready",
+            name="Announce PR Ready on Channels",
+            description=(
+                "When a task is completed and its PR is created, announce it on "
+                "Microsoft Teams, Slack and/or Discord with all PR details "
+                "(task, branch, link). Remove the channels you don't use; each "
+                "action takes its webhook URL from the project settings "
+                "(Notifications section) or from config['url']."
+            ),
+            category="notification",
+            icon="📣",
+            tags=["notification", "pr", "teams", "slack", "discord", "task-done"],
+            popularity=90,
+            triggers=[
+                {
+                    "id": "t1",
+                    "type": "pr_opened",
+                    "conditions": [],
+                    "config": {},
+                    "position": {"x": 50, "y": 150},
+                }
+            ],
+            # No config["message"]: each action sends the rich per-channel PR
+            # card built from the event data (task, branch, PR link, ...).
+            actions=[
+                {
+                    "id": "a1",
+                    "type": "send_teams",
+                    "config": {},
+                    "position": {"x": 350, "y": 50},
+                },
+                {
+                    "id": "a2",
+                    "type": "send_slack",
+                    "config": {},
+                    "position": {"x": 350, "y": 150},
+                },
+                {
+                    "id": "a3",
+                    "type": "send_discord",
+                    "config": {},
+                    "position": {"x": 350, "y": 250},
+                },
+            ],
+            connections=[
+                {
+                    "source_id": "t1",
+                    "target_id": "a1",
+                    "source_handle": "output",
+                    "target_handle": "input",
+                    "condition": "always",
+                },
+                {
+                    "source_id": "t1",
+                    "target_id": "a2",
+                    "source_handle": "output",
+                    "target_handle": "input",
+                    "condition": "always",
+                },
+                {
+                    "source_id": "t1",
+                    "target_id": "a3",
+                    "source_handle": "output",
+                    "target_handle": "input",
+                    "condition": "always",
+                },
+            ],
+        ),
         # ─── CI/CD ────────────────────────────────────────────────────────
         HookTemplate(
             id="tpl-auto-review-pr",

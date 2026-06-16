@@ -62,6 +62,7 @@ export function MemoryBackendSection({
 }: MemoryBackendSectionProps) {
 	// Ollama model detection state
 	const [ollamaModels, setOllamaModels] = useState<OllamaEmbeddingModel[]>([]);
+	const [ollamaLlmModels, setOllamaLlmModels] = useState<string[]>([]);
 	const [ollamaStatus, setOllamaStatus] = useState<
 		"idle" | "checking" | "connected" | "disconnected"
 	>("idle");
@@ -99,6 +100,18 @@ export function MemoryBackendSection({
 			}
 
 			setOllamaModels(modelsResult.data?.embedding_models || []);
+
+			// Get LLM models (used by graphiti-core for episode ingestion)
+			const allModelsResult =
+				await window.electronAPI.listOllamaModels(ollamaBaseUrl);
+			if (allModelsResult.success) {
+				setOllamaLlmModels(
+					(allModelsResult.data?.models || [])
+						.filter((m) => !m.is_embedding)
+						.map((m) => m.name),
+				);
+			}
+
 			setOllamaStatus("connected");
 		} catch (err) {
 			setOllamaStatus("disconnected");
@@ -586,6 +599,60 @@ export function MemoryBackendSection({
 								<p className="text-xs text-muted-foreground">
 									Required for Ollama embeddings (e.g., 768 for
 									nomic-embed-text)
+								</p>
+							</div>
+
+							<div className="space-y-2">
+								<Label className="text-xs text-muted-foreground">
+									LLM Model (knowledge extraction)
+								</Label>
+								{ollamaLlmModels.length > 0 ? (
+									<Select
+										value={
+											envConfig.graphitiProviderConfig?.ollamaLlmModel || ""
+										}
+										onValueChange={(value) =>
+											onUpdateConfig({
+												graphitiProviderConfig: {
+													...envConfig.graphitiProviderConfig,
+													embeddingProvider: "ollama",
+													ollamaLlmModel: value,
+												},
+											})
+										}
+									>
+										<SelectTrigger>
+											<SelectValue placeholder="Select LLM model" />
+										</SelectTrigger>
+										<SelectContent>
+											{ollamaLlmModels.map((name) => (
+												<SelectItem key={name} value={name}>
+													{name}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+								) : (
+									<Input
+										placeholder="qwen3:4b"
+										value={
+											envConfig.graphitiProviderConfig?.ollamaLlmModel || ""
+										}
+										onChange={(e) =>
+											onUpdateConfig({
+												graphitiProviderConfig: {
+													...envConfig.graphitiProviderConfig,
+													embeddingProvider: "ollama",
+													ollamaLlmModel: e.target.value || undefined,
+												},
+											})
+										}
+									/>
+								)}
+								<p className="text-xs text-muted-foreground">
+									Local LLM used to extract entities when storing memories.
+									Without it, new memories cannot be written to the knowledge
+									graph (a small model like qwen3:4b is enough).
 								</p>
 							</div>
 						</div>

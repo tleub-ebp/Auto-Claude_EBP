@@ -11,10 +11,13 @@ import type {
 	TaskDraft,
 	TaskMetadata,
 	TaskOrderState,
+	TaskPipelineStatus,
 	TaskStatus,
 } from "../../shared/types";
+import { isSubtaskDone } from "../../shared/progress";
 import { debugLog, debugWarn } from "../../shared/utils/debug-logger";
 import { extractSubtaskFiles } from "../../shared/utils/subtask-files";
+import { isMeaningfulFeatureTitle } from "../../shared/utils/task-title";
 
 interface TaskState {
 	tasks: Task[];
@@ -23,6 +26,8 @@ interface TaskState {
 	isLoading: boolean;
 	error: string | null;
 	taskOrder: TaskOrderState | null; // Per-column task ordering for kanban board
+	// Latest CI pipeline run per task, any provider (pushed by the main-process poller)
+	pipelineStatuses: Record<string, TaskPipelineStatus>;
 
 	// Actions
 	setTasks: (tasks: Task[]) => void;
@@ -38,6 +43,7 @@ interface TaskState {
 		taskId: string,
 		progress: Partial<ExecutionProgress>,
 	) => void;
+	setPipelineStatus: (status: TaskPipelineStatus) => void;
 	appendLog: (taskId: string, log: string) => void;
 	batchAppendLogs: (taskId: string, logs: string[]) => void;
 	selectTask: (taskId: string | null) => void;
@@ -241,6 +247,7 @@ function createEmptyTaskOrder(): TaskOrderState {
 		in_progress: [],
 		ai_review: [],
 		human_review: [],
+		build_failed: [],
 		done: [],
 		pr_created: [],
 		error: [],
@@ -254,6 +261,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 	isLoading: false,
 	error: null,
 	taskOrder: null,
+	pipelineStatuses: {},
 
 	setTasks: (tasks) => {
 		debugLog("[TaskStore.setTasks] Hydrating tasks:", {
@@ -467,7 +475,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 					description,
 					status,
 					files: extractSubtaskFiles(subtask),
+					blockedReason: subtask.blocked_reason,
 					verification: subtask.verification as Subtask["verification"],
+					origin: subtask.origin as Subtask["origin"],
+					requestedAt: subtask.requested_at,
 				};
 			};
 
@@ -512,7 +523,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
 				return {
 					...task,
-					title: plan.feature || task.title,
+					// Only adopt plan.feature when it's a real US/RsD title. The
+					// backend auto-fixer can set feature to the spec-folder slug
+					// ("001-…") or "Unnamed Feature"; blindly taking it here would
+					// regress the card to the worktree directory name on every plan
+					// update. task.title was already resolved by the main process
+					// (which also reads requirements.display_title), so keep it.
+					title: isMeaningfulFeatureTitle(plan.feature)
+						? plan.feature.trim()
+						: task.title,
 					subtasks,
 					// Keep existing status and reviewReason - XState manages these via TASK_STATUS_CHANGE
 					updatedAt: new Date(),
@@ -525,6 +544,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 				),
 			};
 		}),
+
+	setPipelineStatus: (status) => {
+		set((state) => ({
+			pipelineStatuses: {
+				...state.pipelineStatuses,
+				[status.taskId]: status,
+			},
+		}));
+	},
 
 	updateExecutionProgress: (taskId, progress) => {
 		// Record activity for stuck detection (outside of set() to avoid triggering extra renders)
@@ -797,6 +825,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 				human_review: isValidColumnArray(parsed.human_review)
 					? parsed.human_review
 					: emptyOrder.human_review,
+				build_failed: isValidColumnArray(parsed.build_failed)
+					? parsed.build_failed
+					: emptyOrder.build_failed,
 				done: isValidColumnArray(parsed.done) ? parsed.done : emptyOrder.done,
 				pr_created: isValidColumnArray(parsed.pr_created)
 					? parsed.pr_created
@@ -982,6 +1013,33 @@ export async function createTask(
 	} catch (error) {
 		store.setError(error instanceof Error ? error.message : "Unknown error");
 		return null;
+	}
+}
+
+/**
+ * Duplicate an existing task into a fresh backlog task.
+ * Clones the spec (spec.md, requirements, metadata, attachments) without any
+ * plan/worktree/runtime artifacts. `newTitle` should already carry the
+ * localized "(copy)" suffix.
+ */
+export async function duplicateTask(
+	taskId: string,
+	newTitle?: string,
+): Promise<{ success: boolean; task?: Task; error?: string }> {
+	const store = useTaskStore.getState();
+
+	try {
+		const result = await globalThis.electronAPI.duplicateTask(taskId, newTitle);
+		if (result.success && result.data) {
+			store.addTask(result.data);
+			return { success: true, task: result.data };
+		}
+		store.setError(result.error || "Failed to duplicate task");
+		return { success: false, error: result.error };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "Unknown error";
+		store.setError(message);
+		return { success: false, error: message };
 	}
 }
 
@@ -1540,8 +1598,10 @@ export function getTaskProgress(task: Task): {
 	percentage: number;
 } {
 	const total = task.subtasks?.length || 0;
+	// Count completed OR blocked as done, matching the backend (a blocked
+	// subtask, e.g. a manual e2e test, doesn't make the build look incomplete).
 	const completed =
-		task.subtasks?.filter((s) => s.status === "completed").length || 0;
+		task.subtasks?.filter((s) => isSubtaskDone(s.status)).length || 0;
 	const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
 	return { completed, total, percentage };
 }
@@ -1571,6 +1631,33 @@ export async function updatePlanSubtasks(
 	}
 
 	return result.success;
+}
+
+/**
+ * Fully reset a task: discard plan/subtasks, worktree and runtime artifacts,
+ * keep the spec, and move the task back to backlog. Used from plan review
+ * when the proposed subtasks are not satisfying.
+ */
+export async function resetTask(
+	taskId: string,
+): Promise<{ success: boolean; error?: string }> {
+	try {
+		const result = await globalThis.electronAPI.resetTask(taskId);
+		if (result.success && result.data) {
+			const store = useTaskStore.getState();
+			store.updateTask(taskId, result.data);
+			debugLog("task-store", `Task ${taskId} fully reset to backlog`);
+			return { success: true };
+		}
+		debugWarn(
+			"task-store",
+			`Failed to reset task ${taskId}: ${result.error}`,
+		);
+		return { success: false, error: result.error };
+	} catch (error) {
+		debugWarn("task-store", `Error resetting task ${taskId}: ${error}`);
+		return { success: false, error: String(error) };
+	}
 }
 
 /**

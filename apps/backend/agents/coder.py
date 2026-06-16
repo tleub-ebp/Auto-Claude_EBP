@@ -21,6 +21,7 @@ from agents.feature_wiring import (
     suggest_routed_model,
 )
 from core.client import create_agent_client
+from core.llm_optimization import should_inline_file_context
 from core.task_event import TaskEventEmitter
 from core.workflow_logger import workflow_logger
 from qa.criteria import save_implementation_plan
@@ -44,7 +45,12 @@ from linear_updater import (
     linear_task_started,
     linear_task_stuck,
 )
-from phase_config import get_phase_model, get_phase_thinking_budget
+from phase_config import (
+    get_phase_model,
+    get_phase_provider,
+    get_phase_thinking_budget,
+    load_task_metadata,
+)
 from phase_event import ExecutionPhase, emit_phase
 from progress import (
     count_subtasks,
@@ -975,12 +981,25 @@ async def run_autonomous_agent(
         phase_model = get_phase_model(spec_dir, current_phase, model)
         phase_thinking_budget = get_phase_thinking_budget(spec_dir, current_phase)
         agent_type = "planner" if first_run else "coder"
+
+        # Honor a per-phase provider override (phaseProviders) when present so a
+        # task can route, e.g., coding to Copilot and QA to Anthropic. When no
+        # per-phase provider is configured we pass None and let
+        # create_agent_client() resolve the provider as before (IPC marker,
+        # env, task-wide metadata.provider), preserving existing behavior.
+        _metadata = load_task_metadata(spec_dir)
+        phase_provider = (
+            get_phase_provider(spec_dir, phase=current_phase)
+            if _metadata and _metadata.get("phaseProviders")
+            else None
+        )
         client = create_agent_client(
             project_dir=project_dir,
             spec_dir=spec_dir,
             model=phase_model,
             agent_type=agent_type,
             max_thinking_tokens=phase_thinking_budget,
+            provider=phase_provider,
         )
 
         # Generate appropriate prompt
@@ -1232,10 +1251,27 @@ async def run_autonomous_agent(
                 recovery_hints=recovery_hints,
             )
 
-            # Load and append relevant file context
-            context = load_subtask_context(spec_dir, project_dir, next_subtask)
-            if context.get("patterns") or context.get("files_to_modify"):
-                prompt += "\n\n" + format_context_for_prompt(context)
+            # Load and append relevant file context — only when the
+            # (provider, effort) pair benefits from inlining. Claude agents
+            # and high-effort runs re-read files via tools anyway, so inline
+            # content there is duplicated input paid on every turn.
+            # Provider resolved WITHOUT side effects (get_phase_provider) —
+            # _get_active_provider would consume the RESUME_WITH_PROVIDER
+            # marker before create_agent_client gets to read it.
+            inline_provider = phase_provider or get_phase_provider(
+                spec_dir, phase=current_phase
+            )
+            if should_inline_file_context(inline_provider, phase_thinking_budget):
+                context = load_subtask_context(spec_dir, project_dir, next_subtask)
+                if context.get("patterns") or context.get("files_to_modify"):
+                    prompt += "\n\n" + format_context_for_prompt(context)
+            else:
+                print(
+                    muted(
+                        "File context inlining skipped (agent reads files via "
+                        "tools — saves duplicated prompt tokens)"
+                    )
+                )
 
             # Retrieve and append Graphiti memory context (if enabled)
             graphiti_context = await get_graphiti_context(
@@ -1262,8 +1298,23 @@ async def run_autonomous_agent(
 
             # Set session info in logger
             if task_logger and subtask_id:
+                # Marque le début d'une nouvelle sous-tâche comme sous-étape de la
+                # phase de codage (affichée dans la barre de phase de l'UI, à la
+                # manière des « phase N: NOM » de la planification). On n'émet
+                # qu'au changement de sous-tâche pour éviter les doublons lors des
+                # reprises/retries sur une même sous-tâche.
+                subtask_changed = task_logger.current_subtask != subtask_id
                 task_logger.set_subtask(subtask_id)
                 task_logger.set_session(iteration)
+                if subtask_changed:
+                    subtask_label = " ".join(
+                        str(next_subtask.get("description") or subtask_id).split()
+                    )[:80]
+                    task_logger.start_subphase(
+                        subtask_label,
+                        phase=LogPhase.CODING,
+                        print_to_console=False,
+                    )
 
         # Run session with Claude SDK client
         # Initialize status before async with block in case client context manager fails

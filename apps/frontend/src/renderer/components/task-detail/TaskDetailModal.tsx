@@ -1,10 +1,11 @@
 ﻿import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	AlertTriangle,
 	CheckCircle2,
 	ChevronLeft,
 	ChevronRight,
+	Copy,
 	FlaskConical,
 	GitMerge,
 	GitPullRequest,
@@ -12,7 +13,6 @@ import {
 	Pencil,
 	Play,
 	RotateCcw,
-	Square,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -21,13 +21,23 @@ import { TASK_STATUS_LABELS } from "../../../shared/constants";
 import type {
 	Task,
 	TaskMetadata,
+	TaskStatus,
 	WorktreeCreatePROptions,
 } from "../../../shared/types";
 import { useToast } from "../../hooks/use-toast";
-import { calculateProgress, cn, extractTextFromHtml } from "../../lib/utils";
+import {
+	calculateProgress,
+	cn,
+	extractTextFromHtml,
+	getDisplayProgress,
+} from "../../lib/utils";
+import { isSubtaskDone } from "../../../shared/progress";
+import { needsExecutionFormula } from "../../../shared/utils/task-execution-config";
+import { useFormulaMatrixStore } from "../../stores/formula-matrix-store";
 import { useProjectStore } from "../../stores/project-store";
 import {
 	deleteTask,
+	persistTaskStatus,
 	persistUpdateTask,
 	recoverStuckTask,
 	startTask,
@@ -65,11 +75,15 @@ import {
 	TooltipTrigger,
 } from "../ui/tooltip";
 import { useTaskDetail } from "./hooks/useTaskDetail";
+import { TaskStatusMoveBadge } from "./TaskStatusMoveBadge";
 import { TaskFiles } from "./TaskFiles";
 import { TaskLogs } from "./TaskLogs";
 import { TaskPauseControls } from "./TaskPauseControls";
-import { TaskPhaseBar } from "./TaskPhaseBar";
-import { pauseTask, resumeTask } from "../../stores/task-store";
+import { TaskRunControls } from "./TaskRunControls";
+import { translateActivityMessage } from "./translateActivityMessage";
+import { pauseTask } from "../../stores/task-store";
+import { ExecutionFormulaBanner } from "./ExecutionFormulaBanner";
+import { SpecInterviewBanner } from "./SpecInterviewDialog";
 import { TaskMetadata as TaskMetadataComponent } from "./TaskMetadata";
 import { TaskReview } from "./TaskReview";
 import { TaskSubtasks } from "./TaskSubtasks";
@@ -148,39 +162,43 @@ const renderTaskStatusBadges = (
 		| "muted"
 		| null
 		| undefined,
+	onMove: (newStatus: TaskStatus) => void,
 ) => {
 	if (state.isStuck) {
 		return (
-			<Badge
+			<TaskStatusMoveBadge
+				task={task}
 				variant="warning"
-				className="text-xs flex items-center gap-1 animate-pulse"
-			>
-				<AlertTriangle className="h-3 w-3" />
-				Stuck
-			</Badge>
+				isRunning={state.isRunning}
+				onMove={onMove}
+				pulse
+				leadingIcon={<AlertTriangle className="h-3 w-3" />}
+				label={t("tasks:modal.badges.stuck")}
+			/>
 		);
 	}
 
 	if (state.isIncomplete) {
 		return (
-			<Badge variant="warning" className="text-xs flex items-center gap-1">
-				<AlertTriangle className="h-3 w-3" />
-				Incomplete
-			</Badge>
+			<TaskStatusMoveBadge
+				task={task}
+				variant="warning"
+				isRunning={state.isRunning}
+				onMove={onMove}
+				leadingIcon={<AlertTriangle className="h-3 w-3" />}
+				label={t("tasks:modal.badges.incomplete")}
+			/>
 		);
 	}
 
 	return (
 		<>
-			<Badge
+			<TaskStatusMoveBadge
+				task={task}
 				variant={getStatusBadgeVariant(task.status, state.isStuck)}
-				className={cn(
-					"text-xs",
-					task.status === "in_progress" && !state.isStuck && "status-running",
-				)}
-			>
-				{t(TASK_STATUS_LABELS[task.status])}
-			</Badge>
+				isRunning={state.isRunning}
+				onMove={onMove}
+			/>
 			{task.status === "human_review" && task.reviewReason && (
 				<Badge
 					variant={getReviewReasonBadgeVariant(task.reviewReason)}
@@ -267,9 +285,39 @@ function useTaskDetailHandlers(
 	const { t } = useTranslation(["tasks"]);
 	const { toast } = useToast();
 	const activeProject = useProjectStore((s) => s.getActiveProject());
+	const projects = useProjectStore((s) => s.projects);
+	const openFormulaLab = useFormulaMatrixStore((s) => s.openLab);
+
+	// Pré-requis « Provider × LLM × Effort » : on propose (une seule fois par
+	// ouverture) de choisir une formule avant de lancer une tâche importée ou
+	// dupliquée non encore configurée. Skippable via « Démarrer avec les défauts ».
+	const [showFormulaGate, setShowFormulaGate] = useState(false);
+	const formulaGatePromptedRef = useRef(false);
+
+	// Lancement effectif (signale au passage un éventuel changement de provider).
+	const startNow = () => {
+		const projectProvider = activeProject?.settings?.provider;
+		const taskProvider = (task.metadata as TaskMetadata)?.provider;
+		if (projectProvider && taskProvider && projectProvider !== taskProvider) {
+			toast({
+				title: t("tasks:providerSwitch.title"),
+				description: t("tasks:providerSwitch.description", {
+					from: taskProvider,
+					to: projectProvider,
+				}),
+				duration: 4000,
+			});
+		}
+		startTask(task.id);
+	};
 
 	const handleStartStop = async () => {
-		if (state.isRunning && !state.isStuck) {
+		// Stop applies to any actively-executing task — in_progress AND ai_review
+		// (QA review/fixing) — so the user can interrupt the QA phase too.
+		if (
+			(state.isRunning || task.status === "ai_review") &&
+			!state.isStuck
+		) {
 			stopTask(task.id);
 			return;
 		}
@@ -288,19 +336,31 @@ function useTaskDetailHandlers(
 			}
 		}
 
-		const projectProvider = activeProject?.settings?.provider;
-		const taskProvider = (task.metadata as TaskMetadata)?.provider;
-		if (projectProvider && taskProvider && projectProvider !== taskProvider) {
-			toast({
-				title: t("tasks:providerSwitch.title"),
-				description: t("tasks:providerSwitch.description", {
-					from: taskProvider,
-					to: projectProvider,
-				}),
-				duration: 4000,
-			});
+		// Tâche importée/dupliquée non configurée → proposer le choix de la formule
+		// une seule fois avant de lancer (l'utilisateur peut quand même démarrer
+		// avec les défauts depuis le dialog).
+		if (!formulaGatePromptedRef.current && needsExecutionFormula(task)) {
+			formulaGatePromptedRef.current = true;
+			setShowFormulaGate(true);
+			return;
 		}
-		startTask(task.id);
+
+		startNow();
+	};
+
+	// Actions du dialog d'interception du pré-requis de formule.
+	const chooseFormulaFromGate = () => {
+		setShowFormulaGate(false);
+		openFormulaLab({
+			ticketId: task.id,
+			ticketTitle: task.title,
+			description: task.description,
+			projectPath: projects.find((p) => p.id === task.projectId)?.path,
+		});
+	};
+	const startWithDefaultsFromGate = () => {
+		setShowFormulaGate(false);
+		startNow();
 	};
 
 	const handleRecover = async () => {
@@ -424,6 +484,10 @@ function useTaskDetailHandlers(
 		handleClose,
 		handleUpdatePlan,
 		handleToggleTdd,
+		showFormulaGate,
+		setShowFormulaGate,
+		chooseFormulaFromGate,
+		startWithDefaultsFromGate,
 	};
 }
 
@@ -448,6 +512,7 @@ function TaskDetailModalContent({
 	readonly hasNext?: boolean;
 }) {
 	const { t } = useTranslation(["tasks"]);
+	const { toast } = useToast();
 	const state = useTaskDetail({ task });
 	const { maximized, toggle: toggleMaximized } = useDialogMaximize(
 		"workpilot:task-detail-maximized",
@@ -457,10 +522,29 @@ function TaskDetailModalContent({
 	const taskProject = allProjects.find((p) => p.id === task.projectId);
 	const showFilesTab = isFilesTabEnabled();
 	const progressPercent = calculateProgress(task.subtasks);
-	const completedSubtasks = task.subtasks.filter(
-		(s) => s.status === "completed",
+	// "Done" = completed or blocked (a blocked subtask, e.g. a manual e2e test,
+	// is handled by the build and counts toward completion — matches the backend).
+	const completedSubtasks = task.subtasks.filter((s) =>
+		isSubtaskDone(s.status),
 	).length;
 	const totalSubtasks = task.subtasks.length;
+
+	// Pendant une exécution active, l'avancement par sous-tâches terminées ne se
+	// met à jour qu'au passage d'une sous-tâche à « completed », ce qui donne
+	// l'impression d'un pourcentage figé. On privilégie donc la progression
+	// temps réel calculée côté backend (overallProgress, pondérée par phase),
+	// avec repli sur l'avancement par sous-tâches.
+	//
+	// Dès qu'il y a des sous-tâches, leur avancement reflète le travail réel : on
+	// l'affiche tel quel (2/3 → 67%) plutôt que la progression pondérée par phase
+	// qui gonflerait à ~94% en QA. Sans sous-tâches (spec/planning), repli sur la
+	// progression de phase.
+	const headerProgressPercent = getDisplayProgress(
+		progressPercent,
+		task.executionProgress?.overallProgress,
+		!!state.hasActiveExecution,
+		totalSubtasks > 0,
+	);
 
 	// Activité en cours affichée dans la barre de phase : on privilégie le
 	// sous-tâche actuellement traité, avec repli sur les informations de
@@ -469,7 +553,7 @@ function TaskDetailModalContent({
 	const currentPhaseActivity =
 		task.subtasks.find((s) => s.status === "in_progress")?.title ??
 		task.executionProgress?.currentSubtask ??
-		task.executionProgress?.message ??
+		translateActivityMessage(t, task.executionProgress?.message) ??
 		null;
 
 	// Extract handlers using custom hook
@@ -481,6 +565,10 @@ function TaskDetailModalContent({
 		handleClose,
 		handleUpdatePlan,
 		handleToggleTdd,
+		showFormulaGate,
+		setShowFormulaGate,
+		chooseFormulaFromGate,
+		startWithDefaultsFromGate,
 	} = useTaskDetailHandlers(task, state, onOpenChange);
 
 	// Effective per-task TDD state: explicit task override, else project default.
@@ -516,6 +604,7 @@ function TaskDetailModalContent({
 			// Ne pas naviguer quand une popin secondaire est ouverte.
 			if (
 				state.isEditDialogOpen ||
+				state.isDuplicateDialogOpen ||
 				state.showDeleteDialog ||
 				state.showSyncDialog
 			) {
@@ -540,6 +629,7 @@ function TaskDetailModalContent({
 		onNavigatePrevious,
 		onNavigateNext,
 		state.isEditDialogOpen,
+		state.isDuplicateDialogOpen,
 		state.showDeleteDialog,
 		state.showSyncDialog,
 	]);
@@ -632,6 +722,32 @@ function TaskDetailModalContent({
 		}
 	};
 
+	/**
+	 * Déplace la tâche vers une autre colonne depuis le header de la modale.
+	 * Réutilise la même persistance que le Kanban ; un échec (worktree, IO) est
+	 * remonté via un toast plutôt que de bloquer la popin.
+	 */
+	const handleMoveStatus = async (newStatus: TaskStatus) => {
+		if (newStatus === task.status) return;
+		const result = await persistTaskStatus(task.id, newStatus);
+		if (result.success) {
+			toast({
+				title: t("tasks:modal.move.successTitle"),
+				description: t("tasks:modal.move.successDescription", {
+					status: t(TASK_STATUS_LABELS[newStatus]),
+				}),
+			});
+			return;
+		}
+		toast({
+			title: t("common:errors.operationFailed"),
+			description: result.worktreeExists
+				? t("tasks:modal.move.worktreeBlocked")
+				: result.error || t("common:errors.unknownError"),
+			variant: "destructive",
+		});
+	};
+
 	// Helper function to get status badge variant
 	const getStatusBadgeVariant = (status: string, isStuck: boolean) => {
 		if (isStuck) return "warning";
@@ -696,8 +812,14 @@ function TaskDetailModalContent({
 		if (
 			task.status === "backlog" ||
 			task.status === "queue" ||
-			task.status === "in_progress"
+			task.status === "in_progress" ||
+			task.status === "ai_review"
 		) {
+			// Actively executing = in_progress OR ai_review (QA running). Both get
+			// the first-class Pause / Reprendre / Arrêter control so the user can
+			// pause at any moment, including during the AI review.
+			const isActivelyRunning =
+				state.isRunning || task.status === "ai_review";
 			return (
 				<div className="flex items-center gap-2">
 					{/* Watch Live button - show when project path is available */}
@@ -708,22 +830,22 @@ function TaskDetailModalContent({
 						/>
 					)}
 
-					<Button
-						variant={state.isRunning ? "destructive" : "default"}
-						onClick={handleStartStop}
-					>
-						{state.isRunning ? (
-							<>
-								<Square className="mr-2 h-4 w-4" />
-								{t("tasks:modal.actions.stopTask")}
-							</>
-						) : (
-							<>
-								<Play className="mr-2 h-4 w-4" />
-								{t("tasks:modal.actions.startTask")}
-							</>
-						)}
-					</Button>
+					{isActivelyRunning ? (
+						// Running (or cooperatively paused): first-class Pause /
+						// Reprendre / Arrêter instead of stop-only. Pausing keeps the
+						// task in its current kanban column and lets the user resume.
+						<TaskRunControls
+							task={task}
+							isPaused={state.isPaused}
+							pauseProcessAlive={state.pauseProcessAlive}
+							onStop={handleStartStop}
+						/>
+					) : (
+						<Button variant="default" onClick={handleStartStop}>
+							<Play className="mr-2 h-4 w-4" />
+							{t("tasks:modal.actions.startTask")}
+						</Button>
+					)}
 				</div>
 			);
 		}
@@ -817,6 +939,7 @@ function TaskDetailModalContent({
 												state,
 												t,
 												getStatusBadgeVariant,
+												handleMoveStatus,
 											)}
 											{/* Compact progress indicator */}
 											{totalSubtasks > 0 && (
@@ -892,6 +1015,21 @@ function TaskDetailModalContent({
 											</TooltipContent>
 										</Tooltip>
 									)}
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												variant="ghost"
+												size="icon"
+												className="hover:bg-primary/10 hover:text-primary transition-colors"
+												onClick={() => state.setIsDuplicateDialogOpen(true)}
+											>
+												<Copy className="h-4 w-4" />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">
+											{t("tasks:actions.duplicate")}
+										</TooltipContent>
+									</Tooltip>
 									<Button
 										variant="ghost"
 										size="icon"
@@ -932,14 +1070,14 @@ function TaskDetailModalContent({
 
 							{/* Progress bar - only show when running or has progress */}
 							{(state.isRunning || completedSubtasks > 0) &&
-								totalSubtasks > 0 && (
+								(totalSubtasks > 0 || state.hasActiveExecution) && (
 									<div className="mt-3 flex items-center gap-3">
 										<Progress
-											value={progressPercent}
+											value={headerProgressPercent}
 											className="h-1.5 flex-1"
 										/>
 										<span className="text-xs text-muted-foreground tabular-nums w-10 text-right">
-											{progressPercent}%
+											{headerProgressPercent}%
 										</span>
 									</div>
 								)}
@@ -1016,6 +1154,12 @@ function TaskDetailModalContent({
 								>
 									<ScrollArea className="h-full">
 										<div className="p-5 space-y-5 overflow-x-hidden max-w-full">
+											{/* Spec interview - clarify the spec before planning */}
+											<SpecInterviewBanner task={task} />
+
+											{/* Provider × LLM × Effort prerequisite for imported/duplicated tasks */}
+											<ExecutionFormulaBanner task={task} />
+
 											{/* Metadata */}
 											<TaskMetadataComponent task={task} />
 
@@ -1077,15 +1221,6 @@ function TaskDetailModalContent({
 									<TaskSubtasks task={task} onUpdatePlan={handleUpdatePlan} />
 								</TabsContent>
 
-								{/* Phase bar - only visible on Logs tab */}
-								{state.activeTab === "logs" && (
-									<TaskPhaseBar
-										phaseLogs={state.phaseLogs}
-										currentPhase={state.currentLogPhase}
-										currentActivity={currentPhaseActivity}
-									/>
-								)}
-
 								{/* Logs Tab */}
 								<TabsContent
 									value="logs"
@@ -1102,6 +1237,8 @@ function TaskDetailModalContent({
 										onLogsScroll={state.handleLogsScroll}
 										onTogglePhase={state.togglePhase}
 										onVisiblePhaseChange={state.setCurrentLogPhase}
+										currentPhase={state.currentLogPhase}
+										currentActivity={currentPhaseActivity}
 									/>
 								</TabsContent>
 
@@ -1139,23 +1276,18 @@ function TaskDetailModalContent({
 
 						{/* Footer */}
 						<div className="border-t border-border shrink-0">
-							{/* Pause/Resume Controls - shown at bottom when paused or running */}
-							{(task.metadata?.paused?.enabled || (state.isRunning && !state.isStuck)) && (
+							{/* Advanced resume panel — only once the task is paused. Quick
+							    pause/reprise/stop now lives in the action bar
+							    (TaskRunControls); this panel adds the "resume with a
+							    different provider/model" flow on top. */}
+							{task.metadata?.paused?.enabled && (
 								<div className="px-5 py-3 border-b border-border">
 									<TaskPauseControls
 										task={task}
 										isPaused={task.metadata?.paused?.enabled}
-										isRunning={
-											task.metadata?.paused?.enabled
-												? state.pauseProcessAlive !== false
-												: state.isRunning
-										}
+										isRunning={state.pauseProcessAlive !== false}
 										onPause={async (subtaskId) => {
 											await pauseTask(task.id, subtaskId);
-										}}
-										onResumeSameProvider={async () => {
-											await resumeTask(task.id);
-											await handleStartStop();
 										}}
 									/>
 								</div>
@@ -1259,6 +1391,15 @@ function TaskDetailModalContent({
 				onCloseTask={onCloseTask}
 			/>
 
+			{/* Duplicate Task Dialog — edit fields before creating the copy */}
+			<TaskEditDialog
+				mode="duplicate"
+				task={task}
+				open={state.isDuplicateDialogOpen}
+				onOpenChange={state.setIsDuplicateDialogOpen}
+				onCreated={() => state.setIsDuplicateDialogOpen(false)}
+			/>
+
 			{/* Delete Confirmation Dialog */}
 			<AlertDialog
 				open={state.showDeleteDialog}
@@ -1325,6 +1466,33 @@ function TaskDetailModalContent({
 					onOpenChange={state.setShowSyncDialog}
 				/>
 			)}
+
+			{/* Provider × LLM × Effort prerequisite, proposed when starting an
+			    imported/duplicated task that hasn't chosen a formula yet. */}
+			<AlertDialog open={showFormulaGate} onOpenChange={setShowFormulaGate}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle className="flex items-center gap-2">
+							<FlaskConical className="h-5 w-5 text-primary" />
+							{t("tasks:executionFormula.gate.title")}
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							{t("tasks:executionFormula.gate.body")}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>
+							{t("tasks:executionFormula.gate.cancel")}
+						</AlertDialogCancel>
+						<Button variant="outline" onClick={startWithDefaultsFromGate}>
+							{t("tasks:executionFormula.gate.startDefaults")}
+						</Button>
+						<AlertDialogAction onClick={chooseFormulaFromGate}>
+							{t("tasks:executionFormula.gate.choose")}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</TooltipProvider>
 	);
 }

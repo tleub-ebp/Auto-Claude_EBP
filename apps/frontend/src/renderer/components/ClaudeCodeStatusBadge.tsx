@@ -40,6 +40,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 interface ClaudeCodeStatusBadgeProps {
 	readonly className?: string;
 	readonly onNavigateToTerminals?: () => void; // Ajout de la prop pour la navigation
+	// Mode replié de la sidebar : affiche uniquement l'icône pour éviter le débordement
+	readonly isCollapsed?: boolean;
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: variable kept for clarity
@@ -57,6 +59,7 @@ const VERSION_RECHECK_DELAY_MS = 5000;
 export function ClaudeCodeStatusBadge({
 	className,
 	onNavigateToTerminals,
+	isCollapsed = false,
 }: ClaudeCodeStatusBadgeProps) {
 	const { t } = useTranslation(["common", "navigation"]);
 	const { data, refreshClaude } = useCliStatus();
@@ -506,9 +509,11 @@ export function ClaudeCodeStatusBadge({
 					<PopoverTrigger asChild>
 						<Button
 							variant="ghost"
-							size="sm"
+							size={isCollapsed ? "icon" : "sm"}
 							className={cn(
-								"w-full justify-start gap-2 text-xs",
+								isCollapsed
+									? "justify-center"
+									: "w-full justify-start gap-2 text-xs",
 								status === "not-found" || status === "error"
 									? "text-destructive"
 									: "",
@@ -527,21 +532,26 @@ export function ClaudeCodeStatusBadge({
 									)}
 								/>
 							</div>
-							<span className="truncate">
-								Claude Code
-								{versionInfo?.installed && versionInfo.installed !== "unknown"
-									? ` (${versionInfo.installed})`
-									: ""}
-							</span>
-							{status === "outdated" && (
-								<span className="ml-auto text-[10px] bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 px-1.5 py-0.5 rounded">
-									{t("common:update", "Update")}
-								</span>
-							)}
-							{(status === "not-found" || status === "error") && (
-								<span className="ml-auto text-[10px] bg-destructive/20 text-destructive px-1.5 py-0.5 rounded">
-									{t("common:install", "Install")}
-								</span>
+							{!isCollapsed && (
+								<>
+									<span className="truncate">
+										Claude Code
+										{versionInfo?.installed &&
+										versionInfo.installed !== "unknown"
+											? ` (${versionInfo.installed})`
+											: ""}
+									</span>
+									{status === "outdated" && (
+										<span className="ml-auto text-[10px] bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 px-1.5 py-0.5 rounded">
+											{t("common:update", "Update")}
+										</span>
+									)}
+									{(status === "not-found" || status === "error") && (
+										<span className="ml-auto text-[10px] bg-destructive/20 text-destructive px-1.5 py-0.5 rounded">
+											{t("common:install", "Install")}
+										</span>
+									)}
+								</>
 							)}
 						</Button>
 					</PopoverTrigger>

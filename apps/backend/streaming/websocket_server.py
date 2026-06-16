@@ -32,6 +32,32 @@ from .streaming_manager import get_streaming_manager
 
 logger = logging.getLogger(__name__)
 
+# WebSocket close code used when authentication fails in server mode.
+WS_CLOSE_UNAUTHORIZED = 4401
+
+
+def _server_mode_enabled() -> bool:
+    """True when multi-user server mode is active (lazy, never raises)."""
+    try:
+        from server.config import get_settings
+
+        return get_settings().server_mode
+    except Exception:
+        return False
+
+
+def _validate_ws_token(token: str) -> dict | None:
+    """Validate a WorkPilot access token for a WS connection -> claims or None."""
+    try:
+        from server.auth.jwt_tokens import TokenError, decode_access_token
+
+        try:
+            return decode_access_token(token)
+        except TokenError:
+            return None
+    except Exception:
+        return None
+
 
 def _is_port_available(port: int) -> bool:
     """Check if port is available."""
@@ -321,6 +347,7 @@ class StreamingWebSocketServer:
 
     def _extract_session_id(self, path: str, websocket: WebSocketServerProtocol) -> str:
         """Extract session ID from path and websocket."""
+        path = path.split("?", 1)[0]  # drop ?token=... and any other query args
         connection_id = id(websocket)
         session_id = f"session-{connection_id}"
 
@@ -402,6 +429,8 @@ class StreamingWebSocketServer:
 
         try:
             await self._setup_client_connection(websocket, ctx)
+            if ctx.get("session_id") is None:
+                return  # connection was rejected (auth failure)
             await self._handle_client_messages(websocket, ctx)
         except Exception as e:
             logger.error(f"Critical error in _handle_client: {e}")
@@ -409,12 +438,49 @@ class StreamingWebSocketServer:
         finally:
             self._ensure_cleanup(ctx, websocket)
 
+    def _authenticate_connection(self, path: str, ctx: dict) -> bool:
+        """Server mode: require a valid ?token=<JWT> on the WS URL.
+
+        Stores the user claims in ctx["user"] for event attribution.
+        Local mode: no-op, anonymous ctx. Returns False when the connection
+        must be rejected.
+        """
+        if not _server_mode_enabled():
+            ctx["user"] = None
+            return True
+
+        from urllib.parse import parse_qs, urlparse
+
+        query = parse_qs(urlparse(path).query)
+        token_values = query.get("token", [])
+        claims = _validate_ws_token(token_values[0]) if token_values else None
+        if claims is None:
+            return False
+        ctx["user"] = {
+            "id": claims.get("sub"),
+            "name": claims.get("name", ""),
+            "email": claims.get("email", ""),
+            "role": claims.get("role", "member"),
+        }
+        return True
+
     async def _setup_client_connection(
         self, websocket: WebSocketServerProtocol, ctx: dict
     ):
         """Setup initial client connection and session."""
         # Extract path and session ID
         path = self._extract_websocket_path(websocket)
+
+        if not self._authenticate_connection(path, ctx):
+            logger.warning(
+                "Rejecting unauthenticated WS connection from %s",
+                getattr(websocket, "remote_address", "?"),
+            )
+            await websocket.close(
+                code=WS_CLOSE_UNAUTHORIZED, reason="authentication required"
+            )
+            return
+
         ctx["session_id"] = self._extract_session_id(path, websocket)
         logger.info(
             f"New connection for session {ctx['session_id']} from {websocket.remote_address}"
@@ -501,9 +567,9 @@ class StreamingWebSocketServer:
             if msg_type == "init_session":
                 await self._handle_init_session(ctx, websocket, data)
             elif msg_type == "agent_event":
-                await self._handle_agent_event(session_id, data, websocket)
+                await self._handle_agent_event(session_id, data, websocket, ctx)
             elif msg_type == "chat_message":
-                await self._handle_chat_message(session_id, data)
+                await self._handle_chat_message(session_id, data, ctx)
             elif msg_type == "control":
                 await self._handle_control(session_id, data.get("action"))
             # Unknown message types are ignored gracefully
@@ -593,7 +659,11 @@ class StreamingWebSocketServer:
         logger.info(f"Sent confirmation for session: {session_id}")
 
     async def _handle_agent_event(
-        self, session_id: str, data: dict, websocket: WebSocketServerProtocol
+        self,
+        session_id: str,
+        data: dict,
+        websocket: WebSocketServerProtocol,
+        ctx: dict | None = None,
     ):
         """Handle agent event message."""
         event_data = data.get("event")
@@ -605,10 +675,21 @@ class StreamingWebSocketServer:
         # Use session_id from event data as authoritative source
         event_session = event_data.get("session_id", session_id)
         try:
+            payload = event_data.get("data", {})
+            # Server mode: stamp the authenticated sender on the event so
+            # every client can show who did what. The token-derived identity
+            # always wins over anything the sender wrote in the payload.
+            user = (ctx or {}).get("user")
+            if user and isinstance(payload, dict):
+                payload = {
+                    **payload,
+                    "user_id": user["id"],
+                    "user_name": user["name"],
+                }
             event = StreamingEvent(
                 event_type=EventType(event_data.get("event_type", "agent_thinking")),
                 timestamp=event_data.get("timestamp", time.time()),
-                data=event_data.get("data", {}),
+                data=payload,
                 session_id=event_session,
             )
             logger.info(
@@ -620,12 +701,15 @@ class StreamingWebSocketServer:
         except (ValueError, KeyError) as e:
             logger.warning(f"Invalid agent event: {e}")
 
-    async def _handle_chat_message(self, session_id: str, data: dict):
+    async def _handle_chat_message(
+        self, session_id: str, data: dict, ctx: dict | None = None
+    ):
         """Handle chat message."""
+        user = (ctx or {}).get("user")
         await self.streaming_manager.emit_chat_message(
             session_id=session_id,
             message=data.get("message", ""),
-            author="User",
+            author=(user or {}).get("name") or "User",
             author_type="user",
         )
 

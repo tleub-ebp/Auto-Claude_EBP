@@ -58,3 +58,14 @@ Each pattern object must have these fields:
    - Phase timing: Which phases took longest and why
 5. **Limit to 15 most impactful patterns** — quality over quantity
 6. **Balance types** — include both success and failure patterns
+
+## Outcome Signals in the Build Data
+
+Some builds include outcome fields that carry strong learning signal — weigh them heavily:
+
+- **build_failure**: Excerpt of `BUILD_FAILURE.md` written when the CI/CD pipeline went red after the agent's changes. Extract `error_resolution` failure patterns: what kind of change broke CI, and what instruction would have prevented it.
+- **task_outcome**: The recorded verdict on the task. `verdict` is one of:
+  - `approved` — a human reviewer validated the work (treat the build's approach as a confirmed success pattern)
+  - `rejected` — a human reviewer sent the work back for rework (the `details` field contains review notes; extract failure patterns from them)
+  - `build_failed` — the CI pipeline rejected the work
+  The `history` list shows successive verdicts (e.g., two `build_failed` then `approved` means the fix eventually worked — capture what changed).

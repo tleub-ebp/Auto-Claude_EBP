@@ -44,6 +44,75 @@ def emit_stream_chunk(chunk: str) -> None:
     emit_event("stream_chunk", data=chunk)
 
 
+async def record_outcome(
+    project_dir: str,
+    spec_id: str,
+    verdict: str,
+    details: str = "",
+) -> Path | None:
+    """
+    Record a task outcome (human verdict or CI failure) for the learning loop.
+
+    Writes task_outcome.json into the spec directory (read by the pattern
+    extractor) and, when Graphiti memory is enabled, stores a task_outcome
+    episode so future tasks can retrieve similar outcomes.
+
+    Returns the spec directory, or None if it does not exist.
+    """
+    from datetime import datetime, timezone
+
+    spec_dir = Path(project_dir) / ".workpilot" / "specs" / spec_id
+    if not spec_dir.exists():
+        emit_event("error", message=f"Spec directory not found: {spec_id}")
+        return None
+
+    outcome = {
+        "verdict": verdict,
+        "details": details[:2000],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Keep a short history of outcomes (a task can fail CI several times
+    # before being approved); the latest verdict is also exposed at top level.
+    outcome_file = spec_dir / "task_outcome.json"
+    history = []
+    if outcome_file.exists():
+        try:
+            previous = json.loads(outcome_file.read_text(encoding="utf-8"))
+            history = previous.get("history", [])
+        except (json.JSONDecodeError, OSError):
+            pass
+    history.append(outcome)
+    outcome_file.write_text(
+        json.dumps(
+            {**outcome, "history": history[-10:]},
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    emit_status(f"Recorded outcome '{verdict}' for {spec_id}")
+
+    # Best-effort: also store in Graphiti so get_similar_task_outcomes works
+    try:
+        from memory.graphiti_helpers import get_graphiti_memory
+
+        memory = await get_graphiti_memory(spec_dir, Path(project_dir))
+        if memory is not None:
+            try:
+                await memory.save_task_outcome(
+                    task_id=spec_id,
+                    success=verdict == "approved",
+                    outcome=f"{verdict}: {details[:500]}" if details else verdict,
+                )
+            finally:
+                await memory.close()
+    except Exception as e:
+        emit_status(f"Graphiti outcome save skipped: {e}")
+
+    return spec_dir
+
+
 async def run_analysis(
     project_dir: str,
     spec_id: str | None = None,
@@ -111,17 +180,43 @@ def main() -> None:
     parser.add_argument("--spec-id", help="Analyze a specific build (spec ID)")
     parser.add_argument("--model", default="sonnet", help="LLM model to use")
     parser.add_argument("--thinking-level", default="medium", help="Thinking level")
+    parser.add_argument(
+        "--record-outcome",
+        choices=["approved", "rejected", "build_failed"],
+        help=(
+            "Record a task outcome (human verdict or CI failure) for the spec "
+            "given by --spec-id, then run single-build analysis on it"
+        ),
+    )
+    parser.add_argument(
+        "--outcome-details",
+        default="",
+        help="Optional free-text details about the outcome (review notes, CI error)",
+    )
     args = parser.parse_args()
 
-    try:
-        asyncio.run(
-            run_analysis(
+    if args.record_outcome and not args.spec_id:
+        parser.error("--record-outcome requires --spec-id")
+
+    async def run() -> None:
+        if args.record_outcome:
+            spec_dir = await record_outcome(
                 project_dir=args.project_dir,
                 spec_id=args.spec_id,
-                model=args.model,
-                thinking_level=args.thinking_level,
+                verdict=args.record_outcome,
+                details=args.outcome_details,
             )
+            if spec_dir is None:
+                sys.exit(1)
+        await run_analysis(
+            project_dir=args.project_dir,
+            spec_id=args.spec_id,
+            model=args.model,
+            thinking_level=args.thinking_level,
         )
+
+    try:
+        asyncio.run(run())
     except KeyboardInterrupt:
         emit_event("error", message="Analysis cancelled by user")
         sys.exit(1)

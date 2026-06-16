@@ -18,6 +18,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 interface CodexCliStatusBadgeProps {
 	readonly className?: string;
 	readonly onNavigateToTerminals?: () => void;
+	// Mode replié de la sidebar : affiche uniquement l'icône pour éviter le débordement
+	readonly isCollapsed?: boolean;
 }
 
 interface CodexIconProps {
@@ -60,6 +62,7 @@ function CodexIcon({ className }: CodexIconProps) {
 export function CodexCliStatusBadge({
 	className,
 	onNavigateToTerminals: _onNavigateToTerminals,
+	isCollapsed = false,
 }: CodexCliStatusBadgeProps) {
 	const { t } = useTranslation(["common", "navigation"]);
 	const { data, refreshCodex } = useCliStatus();
@@ -169,9 +172,11 @@ export function CodexCliStatusBadge({
 					<PopoverTrigger asChild>
 						<Button
 							variant="ghost"
-							size="sm"
+							size={isCollapsed ? "icon" : "sm"}
 							className={cn(
-								"w-full justify-start gap-2 text-xs",
+								isCollapsed
+									? "justify-center"
+									: "w-full justify-start gap-2 text-xs",
 								status === "not-found" || status === "error"
 									? "text-destructive"
 									: "",
@@ -190,19 +195,25 @@ export function CodexCliStatusBadge({
 									)}
 								/>
 							</div>
-							<span className="truncate">
-								Codex
-								{versionInfo?.installed ? ` (${versionInfo.installed})` : ""}
-							</span>
-							{status === "outdated" && (
-								<span className="ml-auto text-[10px] bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 px-1.5 py-0.5 rounded">
-									{t("common:update", "Update")}
-								</span>
-							)}
-							{(status === "not-found" || status === "error") && (
-								<span className="ml-auto text-[10px] bg-destructive/20 text-destructive px-1.5 py-0.5 rounded">
-									{t("common:install", "Install")}
-								</span>
+							{!isCollapsed && (
+								<>
+									<span className="truncate">
+										Codex
+										{versionInfo?.installed
+											? ` (${versionInfo.installed})`
+											: ""}
+									</span>
+									{status === "outdated" && (
+										<span className="ml-auto text-[10px] bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 px-1.5 py-0.5 rounded">
+											{t("common:update", "Update")}
+										</span>
+									)}
+									{(status === "not-found" || status === "error") && (
+										<span className="ml-auto text-[10px] bg-destructive/20 text-destructive px-1.5 py-0.5 rounded">
+											{t("common:install", "Install")}
+										</span>
+									)}
+								</>
 							)}
 						</Button>
 					</PopoverTrigger>

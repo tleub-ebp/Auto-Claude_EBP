@@ -127,6 +127,42 @@ E2E TESTS:
 - [flow-name]: PASS/FAIL
 ```
 
+### 3.4: Coverage Gate (MANDATORY)
+
+> **HARD REQUIREMENT**: unit + integration test coverage must reach
+> **{{MIN_COVERAGE}}%** (lines AND branches). This is enforced deterministically
+> after your sign-off — if the recorded coverage is below the threshold, the task
+> is automatically **rejected** and sent back to the Coder Agent. Do NOT approve
+> a task whose coverage is below {{MIN_COVERAGE}}%.
+
+Run the test suites **with coverage** using each service's coverage tooling
+(language-agnostic — use the project's own tools), e.g.:
+
+```bash
+# Python:        pytest --cov=. --cov-branch --cov-report=term-missing
+# JS/TS (vitest): vitest run --coverage
+# JS/TS (jest):   jest --coverage
+# Go:             go test ./... -cover
+# Java:           mvn test (JaCoCo)
+# .NET:           dotnet test --collect:"XPlat Code Coverage"
+# Get per-service commands when available:
+cat project_index.json | jq '.services[].coverage_command // .services[].test_command'
+```
+
+Rules:
+- **unit** and **integration**: coverage **MUST be ≥ {{MIN_COVERAGE}}%** → otherwise REJECT.
+- **e2e**: best-effort — record it if measurable; a shortfall is a warning, not a blocker.
+- If coverage **cannot be measured** for unit/integration, treat it as a blocking
+  issue (REJECT) and request the Coder Agent to add the missing tests/tooling.
+
+**Document results:**
+```
+COVERAGE (threshold {{MIN_COVERAGE}}%):
+- unit:        XX.X%  (PASS/FAIL)
+- integration: XX.X%  (PASS/FAIL)
+- e2e:         XX.X%  (best-effort)
+```
+
 ---
 
 ## PHASE 4: BROWSER VERIFICATION (If Frontend)
@@ -357,6 +393,7 @@ Create a comprehensive QA report:
 | Unit Tests | ✓/✗ | X/Y passing |
 | Integration Tests | ✓/✗ | X/Y passing |
 | E2E Tests | ✓/✗ | X/Y passing |
+| Coverage (unit+integration) | ✓/✗ | unit XX%, integration XX% (threshold {{MIN_COVERAGE}}%) |
 | Browser Verification | ✓/✗ | [summary] |
 | Project-Specific Validation | ✓/✗ | [summary based on project type] |
 | Database Verification | ✓/✗ | [summary] |
@@ -422,6 +459,12 @@ Update `{{SPEC_DIR}}/implementation_plan.json` to record QA sign-off:
       "unit": "[X/Y]",
       "integration": "[X/Y]",
       "e2e": "[X/Y]"
+    },
+    "coverage": {
+      "measured": true,
+      "unit": [coverage % as number, e.g. 100],
+      "integration": [coverage % as number, e.g. 100],
+      "e2e": [coverage % as number or null if not measurable]
     },
     "verified_by": "qa_agent"
   }

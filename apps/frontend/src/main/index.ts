@@ -75,6 +75,11 @@ import {
 import { preWarmToolCache } from "./cli-tool-manager";
 import { initializeUsageMonitorForwarding } from "./ipc-handlers/terminal-handlers";
 import { setupIpcHandlers } from "./ipc-setup";
+import {
+	isServerMode,
+	loadPersistedState,
+	restoreSession,
+} from "./server-connection";
 import { initializeCredentialIntegration } from "./services/credential-integration";
 import { ensureOAuthServerRunning } from "./oauth-server";
 import { isMacOS, isWindows } from "./platform";
@@ -481,6 +486,11 @@ async function waitForBackendReady(url: string, timeoutMs = 10000) {
 
 // Fonction pour lancer le backend si nécessaire
 async function launchBackendIfNeeded() {
+	// Mode serveur multi-utilisateurs : le backend tourne sur un serveur
+	// distant, on ne spawne rien en local.
+	if (isServerMode()) {
+		return;
+	}
 	// Vérifie si le backend répond déjà
 	try {
 		await waitForBackendReady("http://127.0.0.1:9000/providers", 1500);
@@ -508,6 +518,21 @@ async function launchBackendIfNeeded() {
 			"--port",
 			"9000",
 			"--reload",
+			// Watch only backend source; the shared virtualenv lives at the repo
+			// root, so scoping the watcher to backendDir keeps pip installs (from
+			// the PythonEnvManager) from triggering an endless reload storm.
+			// NOTE: do not add glob --reload-exclude patterns (e.g. ".venv/*"):
+			// the bundled Windows python.exe expands wildcard argv, turning the
+			// pattern into extra positional args and making uvicorn exit code 2.
+			"--reload-dir",
+			backendDir,
+			// PythonEnvManager installs into backendDir/.venv, which is INSIDE
+			// the watched dir — exclude it or every pip install reload-storms
+			// the server. No wildcard => safe from the argv expansion issue
+			// above. Must be ABSOLUTE: uvicorn's FileFilter matches exclude
+			// dirs against the changed file's (absolute) parents.
+			"--reload-exclude",
+			resolve(backendDir, ".venv"),
 		],
 		{
 			cwd: backendDir,
@@ -925,6 +950,13 @@ async function main() {
 	app.on("browser-window-created", (_, window) => {
 		optimizer.watchWindowShortcuts(window);
 	});
+
+	// Multi-user server mode: restore persisted connection (mode, URL,
+	// encrypted refresh token) before anything queries the backend.
+	loadPersistedState();
+	restoreSession().catch((err) =>
+		console.warn("[main] Could not restore server session:", err),
+	);
 
 	// Initialize agent manager
 	agentManager = new AgentManager();

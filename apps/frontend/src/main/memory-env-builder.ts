@@ -37,6 +37,35 @@ export function buildMemoryEnvVars(
 	const embeddingProvider = settings.memoryEmbeddingProvider || "ollama";
 	env.GRAPHITI_EMBEDDER_PROVIDER = embeddingProvider;
 
+	// graphiti-core still needs an LLM to ingest episodes (entity extraction).
+	// Derive it from the embedding provider so a single UI choice configures
+	// both; for Ollama this keeps the whole memory stack local.
+	switch (embeddingProvider) {
+		case "ollama":
+			if (settings.memoryOllamaLlmModel) {
+				env.GRAPHITI_LLM_PROVIDER = "ollama";
+				env.OLLAMA_LLM_MODEL = settings.memoryOllamaLlmModel;
+			}
+			break;
+		case "openai":
+			if (settings.globalOpenAIApiKey) {
+				env.GRAPHITI_LLM_PROVIDER = "openai";
+			}
+			break;
+		case "google":
+			if (settings.globalGoogleApiKey) {
+				env.GRAPHITI_LLM_PROVIDER = "google";
+			}
+			break;
+		case "openrouter":
+			if (settings.globalOpenRouterApiKey) {
+				env.GRAPHITI_LLM_PROVIDER = "openrouter";
+			}
+			break;
+		// voyage / azure_openai: embeddings-only here, leave the LLM provider
+		// to backend defaults (requires OPENAI_API_KEY to ingest episodes)
+	}
+
 	// Provider-specific configuration
 	switch (embeddingProvider) {
 		case "ollama":

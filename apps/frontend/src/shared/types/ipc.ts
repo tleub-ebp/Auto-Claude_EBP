@@ -150,6 +150,7 @@ import type {
 	WorktreeCreatePROptions,
 	WorktreeCreatePRResult,
 	WorktreeDiff,
+	WorktreeDiffFile,
 	WorktreeDiscardResult,
 	WorktreeListResult,
 	WorktreeMergeResult,
@@ -298,6 +299,10 @@ export interface ElectronAPI {
 	// Per-spec architecture: Each spec has its own worktree at .worktrees/{spec-name}/
 	getWorktreeStatus: (taskId: string) => Promise<IPCResult<WorktreeStatus>>;
 	getWorktreeDiff: (taskId: string) => Promise<IPCResult<WorktreeDiff>>;
+	getFileDiff: (
+		taskId: string,
+		filePath: string,
+	) => Promise<IPCResult<WorktreeDiffFile>>;
 	mergeWorktree: (
 		taskId: string,
 		options?: { noCommit?: boolean },

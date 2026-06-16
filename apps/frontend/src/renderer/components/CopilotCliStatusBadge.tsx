@@ -40,6 +40,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 interface CopilotCliStatusBadgeProps {
 	readonly className?: string;
 	readonly onNavigateToTerminals?: () => void;
+	// Mode replié de la sidebar : affiche uniquement l'icône pour éviter le débordement
+	readonly isCollapsed?: boolean;
 }
 
 interface CopilotIconProps {
@@ -92,6 +94,7 @@ function CopilotIcon({ className }: CopilotIconProps) {
 export function CopilotCliStatusBadge({
 	className,
 	onNavigateToTerminals,
+	isCollapsed = false,
 }: CopilotCliStatusBadgeProps) {
 	const { t } = useTranslation(["common", "navigation", "settings"]);
 	const { data, refreshCopilot } = useCliStatus();
@@ -401,9 +404,11 @@ export function CopilotCliStatusBadge({
 					<PopoverTrigger asChild>
 						<Button
 							variant="ghost"
-							size="sm"
+							size={isCollapsed ? "icon" : "sm"}
 							className={cn(
-								"w-full justify-start gap-2 text-xs",
+								isCollapsed
+									? "justify-center"
+									: "w-full justify-start gap-2 text-xs",
 								status === "not-found" ||
 									status === "gh-missing" ||
 									status === "error"
@@ -424,23 +429,29 @@ export function CopilotCliStatusBadge({
 									)}
 								/>
 							</div>
-							<span className="truncate">
-								Copilot
-								{versionInfo?.installed ? ` (${versionInfo.installed})` : ""}
-							</span>
-							{status === "outdated" && (
-								<span className="ml-auto text-[10px] bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 px-1.5 py-0.5 rounded">
-									{t("common:update", "Update")}
-								</span>
-							)}
-							{(status === "not-found" ||
-								status === "gh-missing" ||
-								status === "error") && (
-								<span className="ml-auto text-[10px] bg-destructive/20 text-destructive px-1.5 py-0.5 rounded">
-									{status === "gh-missing"
-										? "gh missing"
-										: t("common:install", "Install")}
-								</span>
+							{!isCollapsed && (
+								<>
+									<span className="truncate">
+										Copilot
+										{versionInfo?.installed
+											? ` (${versionInfo.installed})`
+											: ""}
+									</span>
+									{status === "outdated" && (
+										<span className="ml-auto text-[10px] bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 px-1.5 py-0.5 rounded">
+											{t("common:update", "Update")}
+										</span>
+									)}
+									{(status === "not-found" ||
+										status === "gh-missing" ||
+										status === "error") && (
+										<span className="ml-auto text-[10px] bg-destructive/20 text-destructive px-1.5 py-0.5 rounded">
+											{status === "gh-missing"
+												? "gh missing"
+												: t("common:install", "Install")}
+										</span>
+									)}
+								</>
 							)}
 						</Button>
 					</PopoverTrigger>

@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { AUTO_BUILD_PATHS, getSpecsDir } from "../../../shared/constants";
 import type { Project, TaskMetadata } from "../../../shared/types";
+import { slugifySpecTitle } from "../../../shared/utils/spec-slug";
 import { withSpecNumberLock } from "../../utils/spec-number-lock";
 import { labelMatchesWholeWord } from "../shared/label-utils";
 import {
@@ -26,11 +27,7 @@ export interface SpecCreationData {
  * Create a slug from a title
  */
 function slugifyTitle(title: string): string {
-	return title
-		.toLowerCase()
-		.replace(/[^\p{L}\p{N}]+/gu, "-")
-		.replace(/^-|-$/g, "")
-		.substring(0, 50);
+	return slugifySpecTitle(title);
 }
 
 /**

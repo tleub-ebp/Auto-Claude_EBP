@@ -26,6 +26,7 @@ export const IPC_CHANNELS = {
 	// Task operations
 	TASK_LIST: "task:list",
 	TASK_CREATE: "task:create",
+	TASK_DUPLICATE: "task:duplicate", // Clone a task's spec (spec.md, requirements, metadata, attachments) into a fresh backlog task; no plan/worktree/runtime artifacts
 	TASK_DELETE: "task:delete",
 	TASK_UPDATE: "task:update",
 	TASK_START: "task:start",
@@ -39,12 +40,21 @@ export const IPC_CHANNELS = {
 	TASK_RESUME_SESSION: "task:resumeSession", // Resume a Claude SDK session (uses .session.json)
 	TASK_RESUME_WITH_PROVIDER: "task:resumeWithProvider", // Resume a paused task under a different LLM provider (Niveau 3b)
 	TASK_RESET_CONVERSATION: "task:resetConversation", // Clear conversation.jsonl + PROMPT_TOO_LONG_HALT marker so the task can restart with a fresh context
+	TASK_RESET: "task:reset", // Full reset: discard plan/subtasks, worktree and runtime artifacts; keep the spec and go back to backlog
+	TASK_CHECK_PLAN_CONFLICTS: "task:checkPlanConflicts", // Detect file overlaps between this task's plan and other active tasks (parallel worktrees)
+
+	// CI/CD pipeline loop (« Build rouge » column) — provider-agnostic (Azure DevOps, GitHub Actions, GitLab CI, Jenkins)
+	TASK_PIPELINE_STATUS_GET: "task:pipelineStatusGet", // On-demand fetch of the latest build for a task's branch
+	TASK_PIPELINE_FIX: "task:pipelineFix", // Launch the agent to repair a red build (writes BUILD_FAILURE.md + fix subtask)
+	TASK_PIPELINE_STATUS_EVENT: "task:pipelineStatus", // Event (main -> renderer): pipeline status changed for a task
+	TASK_SPEC_INTERVIEW: "task:specInterview", // Generate 3-5 clarifying questions about the spec before planning (answers are appended to the description)
 	TASK_LOAD_IMAGE_THUMBNAIL: "task:loadImageThumbnail",
 
 	// Workspace management (for human review)
 	// Per-spec architecture: Each spec has its own worktree at .worktrees/{spec-name}/
 	TASK_WORKTREE_STATUS: "task:worktreeStatus",
 	TASK_WORKTREE_DIFF: "task:worktreeDiff",
+	TASK_FILE_DIFF: "task:fileDiff", // Diff à la demande d'un fichier impacté (inclut les changements non commités)
 	TASK_WORKTREE_MERGE: "task:worktreeMerge",
 	TASK_WORKTREE_MERGE_PREVIEW: "task:worktreeMergePreview", // Preview merge conflicts before merging
 	TASK_WORKTREE_DISCARD: "task:worktreeDiscard",

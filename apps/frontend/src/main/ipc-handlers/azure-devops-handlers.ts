@@ -23,6 +23,7 @@ import type {
 	Project,
 	TaskMetadata,
 } from "../../shared/types";
+import { slugifySpecTitle } from "../../shared/utils/spec-slug";
 import type { AgentManager } from "../agent";
 import { projectStore } from "../project-store";
 import {
@@ -729,12 +730,7 @@ except Exception as e:
 						const safeIdentifier = sanitizeText(`ADO-${item.id}`, 100);
 						const safeUrl = item.url ? sanitizeUrl(item.url) : "";
 
-						const slugifiedTitle =
-							safeTitle
-								.toLowerCase()
-								.replace(/[^\p{L}\p{N}]+/gu, "-")
-								.replace(/^-|-$/g, "")
-								.substring(0, 50) || "task";
+						const slugifiedTitle = slugifySpecTitle(safeTitle) || "task";
 						const specId = `${String(specNumber).padStart(3, "0")}-${slugifiedTitle}`;
 						specNumber += 1;
 

@@ -208,10 +208,19 @@ The task is complete when:
 3. [ ] No console errors
 4. [ ] Existing tests still pass
 5. [ ] New functionality verified via browser/API or appropriate testing method
+6. [ ] Unit + integration test coverage reaches **{{MIN_COVERAGE}}%** (lines and branches) — mandatory gate
 
 ## QA Acceptance Criteria
 
 **CRITICAL**: These criteria must be verified by the QA Agent before sign-off.
+
+### Test Coverage (MANDATORY GATE)
+
+Unit and integration tests **must reach {{MIN_COVERAGE}}%** line and branch
+coverage for the new/changed code. This is enforced automatically: the task is
+rejected and sent back for fixes while coverage is below the threshold. E2E
+coverage is best-effort. Write tests covering every branch, error path and edge
+case.
 
 ### Unit Tests
 | Test | File | What to Verify |

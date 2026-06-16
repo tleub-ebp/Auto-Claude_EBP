@@ -615,6 +615,13 @@ Work through each section methodically:
 - [ ] All acceptance criteria from spec considered
 - [ ] No scope creep - stayed within subtask boundaries
 
+**Test coverage (MANDATORY):**
+- [ ] Unit + integration tests cover the new/changed code to **100%** (lines and
+      branches). This is a hard gate: the QA stage will reject the task if unit or
+      integration coverage is below the configured threshold ({{MIN_COVERAGE}}%
+      by default). Add tests for every branch, error path and edge case — do not
+      leave any line uncovered.
+
 #### 3. Identify Issues
 
 List any concerns, limitations, or potential problems:

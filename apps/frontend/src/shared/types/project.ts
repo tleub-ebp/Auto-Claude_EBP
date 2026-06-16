@@ -225,7 +225,9 @@ export type GraphitiLLMProvider =
 	| "openrouter";
 
 export interface GraphitiProviderConfig {
-	// Embedding Provider (LLM provider removed - Claude SDK handles RAG)
+	// Embedding Provider. A small LLM is still required for episode ingestion
+	// (entity extraction in graphiti-core); it is derived from the embedding
+	// provider, or runs locally via Ollama (ollamaLlmModel).
 	embeddingProvider: GraphitiEmbeddingProvider;
 	embeddingModel?: string; // Embedding model, uses provider default if not specified
 
@@ -256,6 +258,7 @@ export interface GraphitiProviderConfig {
 	ollamaBaseUrl?: string; // Default: http://localhost:11434
 	ollamaEmbeddingModel?: string;
 	ollamaEmbeddingDim?: number;
+	ollamaLlmModel?: string; // Local LLM used by graphiti-core for episode ingestion
 
 	// LadybugDB settings (embedded database - no Docker required)
 	database?: string; // Database name (default: auto_claude_memory)
@@ -369,6 +372,17 @@ export interface ProjectEnvConfig {
 	jiraProjectKey?: string; // Jira project key (e.g., PROJ)
 	jiraAutoSync?: boolean; // Auto-sync issues on project load
 
+	// CI/CD pipeline loop (« Build rouge » — see ci-pipeline-service.ts)
+	// Azure DevOps / GitHub / GitLab credentials are reused from the sections
+	// above; only the provider choice, the loop knobs and Jenkins live here.
+	cicdProvider?: "" | "azure" | "github" | "gitlab" | "jenkins" | "none"; // "" = auto-detect
+	cicdAutoFix?: boolean; // default true: agent repairs red builds automatically
+	cicdPollSeconds?: number; // default 60
+	cicdJenkinsUrl?: string; // Jenkins base URL
+	cicdJenkinsJob?: string; // Multibranch pipeline job name
+	cicdJenkinsUser?: string; // User for basic auth (with API token)
+	cicdJenkinsToken?: string; // Jenkins API token
+
 	// Git/Worktree Settings
 	defaultBranch?: string; // Base branch for worktree creation (e.g., 'main', 'develop')
 
@@ -402,9 +416,22 @@ export interface ProjectEnvConfig {
 		chromeDevtoolsEnabled?: boolean;
 	};
 
-	// Microsoft Teams Notifications
+	// Channel Notifications (task done → PR ready announcement)
+	// Microsoft Teams
 	teamsNotificationsEnabled?: boolean;
 	teamsWebhookUrl?: string; // Incoming Webhook URL from Teams channel connector
+	// Slack
+	slackNotificationsEnabled?: boolean;
+	slackWebhookUrl?: string; // Slack Incoming Webhook URL
+	// Discord
+	discordNotificationsEnabled?: boolean;
+	discordWebhookUrl?: string; // Discord channel webhook URL
+	// Google Chat
+	googleChatNotificationsEnabled?: boolean;
+	googleChatWebhookUrl?: string; // Google Chat space webhook URL
+	// Generic webhook (flat JSON POST)
+	notifyWebhookEnabled?: boolean;
+	notifyWebhookUrl?: string;
 
 	// Per-agent MCP overrides (add/remove MCPs from specific agents)
 	agentMcpOverrides?: AgentMcpOverrides;

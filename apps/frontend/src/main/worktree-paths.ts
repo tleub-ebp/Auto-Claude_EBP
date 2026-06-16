@@ -70,6 +70,27 @@ export function isPathWithinBase(
 }
 
 /**
+ * Transliterate an accented/Unicode spec id to its ASCII-only equivalent.
+ *
+ * Pourquoi : le backend assainit le nom du worktree en ASCII (décomposition
+ * NFKD, suppression des diacritiques — « é » -> « e ») pour respecter la
+ * whitelist stricte des refs git. Le dossier du worktree sur disque est donc
+ * ASCII (ex. « 002-…-numero-… ») alors que le specId peut conserver ses accents
+ * (« 002-…-numéro-… »). Sans cette équivalence, `findTaskWorktree` ne retrouve
+ * pas le worktree et le panneau de logs reste vide pendant un build isolé.
+ *
+ * Reproduit la logique de `WorktreeManager._sanitize_spec_name` côté Python :
+ * NFKD, on retire les marques combinantes puis tout codepoint non-ASCII.
+ */
+export function sanitizeSpecNameToAscii(specId: string): string {
+	return specId
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "")
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: on conserve l'ASCII imprimable et de contrôle, on retire le reste
+		.replace(/[^\x00-\x7f]/g, "");
+}
+
+/**
  * Find a task worktree path, checking new location first then legacy
  * Returns the path if found, null otherwise
  * Includes path traversal protection to ensure paths stay within project
@@ -94,33 +115,40 @@ export function findTaskWorktree(
 
 	const normalizedProject = path.resolve(projectPath);
 
-	// Check new path first
-	const newPath = path.join(projectPath, TASK_WORKTREE_DIR, specId);
-	const resolvedNewPath = path.resolve(newPath);
-
-	// Validate path stays within project (defense against path traversal)
-	if (!isPathWithinBase(resolvedNewPath, normalizedProject)) {
-		console.error(
-			`[worktree-paths] Path traversal detected: specId "${specId}" resolves outside project`,
-		);
-		return null;
+	// Try the specId as-is first, then its ASCII-sanitized form. The backend
+	// names the worktree folder using the ASCII transliteration, so an accented
+	// specId only matches via the sanitized candidate.
+	const candidates = [specId];
+	const asciiSpecId = sanitizeSpecNameToAscii(specId);
+	if (asciiSpecId && asciiSpecId !== specId) {
+		candidates.push(asciiSpecId);
 	}
 
-	if (existsSync(resolvedNewPath)) return resolvedNewPath;
-
-	// Legacy fallback
-	const legacyPath = path.join(projectPath, LEGACY_WORKTREE_DIR, specId);
-	const resolvedLegacyPath = path.resolve(legacyPath);
-
-	// Validate legacy path as well
-	if (!isPathWithinBase(resolvedLegacyPath, normalizedProject)) {
-		console.error(
-			`[worktree-paths] Path traversal detected: specId "${specId}" resolves outside project (legacy)`,
+	for (const candidate of candidates) {
+		// Check new path first
+		const resolvedNewPath = path.resolve(
+			path.join(projectPath, TASK_WORKTREE_DIR, candidate),
 		);
-		return null;
-	}
+		if (!isPathWithinBase(resolvedNewPath, normalizedProject)) {
+			console.error(
+				`[worktree-paths] Path traversal detected: specId "${candidate}" resolves outside project`,
+			);
+			return null;
+		}
+		if (existsSync(resolvedNewPath)) return resolvedNewPath;
 
-	if (existsSync(resolvedLegacyPath)) return resolvedLegacyPath;
+		// Legacy fallback
+		const resolvedLegacyPath = path.resolve(
+			path.join(projectPath, LEGACY_WORKTREE_DIR, candidate),
+		);
+		if (!isPathWithinBase(resolvedLegacyPath, normalizedProject)) {
+			console.error(
+				`[worktree-paths] Path traversal detected: specId "${candidate}" resolves outside project (legacy)`,
+			);
+			return null;
+		}
+		if (existsSync(resolvedLegacyPath)) return resolvedLegacyPath;
+	}
 
 	return null;
 }

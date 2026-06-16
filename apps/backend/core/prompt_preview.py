@@ -54,17 +54,9 @@ class PromptPreview:
 
 def _base_prompt_for(project_dir: Path) -> str:
     """The same opening paragraph create_client builds for every Claude run."""
-    return (
-        f"You are an expert full-stack developer building production-quality "
-        f"software. Your working directory is: {project_dir.resolve()}\n"
-        f"Your filesystem access is RESTRICTED to this directory only. "
-        f"Use relative paths (starting with ./) for all file operations. "
-        f"Never use absolute paths or try to access files outside your working "
-        f"directory.\n\n"
-        f"You follow existing code patterns, write clean maintainable code, "
-        f"and verify your work through thorough testing. You communicate "
-        f"progress through Git commits and build-progress.txt updates."
-    )
+    from core.llm_optimization import build_base_system_prompt
+
+    return build_base_system_prompt(project_dir)
 
 
 def build_prompt_preview(

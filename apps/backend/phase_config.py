@@ -85,6 +85,18 @@ WINDSURF_MODEL = _WINDSURF_ENTRY.model_id if _WINDSURF_ENTRY else "swe-1.6"
 _COPILOT_ENTRY = get_default("copilot")
 COPILOT_MODEL = _COPILOT_ENTRY.model_id if _COPILOT_ENTRY else "claude-sonnet-4.6"
 
+_OPENAI_ENTRY = get_default("openai")
+OPENAI_MODEL = _OPENAI_ENTRY.model_id if _OPENAI_ENTRY else "gpt-5.5"
+
+_MISTRAL_ENTRY = get_default("mistral")
+MISTRAL_MODEL = _MISTRAL_ENTRY.model_id if _MISTRAL_ENTRY else "mistral-large-3"
+
+_DEEPSEEK_ENTRY = get_default("deepseek")
+DEEPSEEK_MODEL = _DEEPSEEK_ENTRY.model_id if _DEEPSEEK_ENTRY else "deepseek-v3"
+
+_GROK_ENTRY = get_default("grok")
+GROK_MODEL = _GROK_ENTRY.model_id if _GROK_ENTRY else "grok-4.3"
+
 PROVIDER_DEFAULT_MODELS: dict[str, dict[str, str]] = {
     # Anthropic / Claude — use Claude shorthands (resolved by resolve_model_id)
     "anthropic": {
@@ -101,10 +113,10 @@ PROVIDER_DEFAULT_MODELS: dict[str, dict[str, str]] = {
     },
     # OpenAI
     "openai": {
-        "spec": "gpt-4o",
-        "planning": "gpt-4o",
-        "coding": "gpt-4o",
-        "qa": "gpt-4o",
+        "spec": OPENAI_MODEL,
+        "planning": OPENAI_MODEL,
+        "coding": OPENAI_MODEL,
+        "qa": OPENAI_MODEL,
     },
     # GitHub Copilot
     "copilot": {
@@ -122,24 +134,24 @@ PROVIDER_DEFAULT_MODELS: dict[str, dict[str, str]] = {
     },
     # Mistral AI
     "mistral": {
-        "spec": "mistral-large-2",
-        "planning": "mistral-large-2",
-        "coding": "mistral-large-2",
-        "qa": "mistral-large-2",
+        "spec": MISTRAL_MODEL,
+        "planning": MISTRAL_MODEL,
+        "coding": MISTRAL_MODEL,
+        "qa": MISTRAL_MODEL,
     },
     # DeepSeek
     "deepseek": {
-        "spec": "deepseek-v3",
-        "planning": "deepseek-v3",
-        "coding": "deepseek-v3",
-        "qa": "deepseek-v3",
+        "spec": DEEPSEEK_MODEL,
+        "planning": DEEPSEEK_MODEL,
+        "coding": DEEPSEEK_MODEL,
+        "qa": DEEPSEEK_MODEL,
     },
     # Grok (xAI)
     "grok": {
-        "spec": "grok-2",
-        "planning": "grok-2",
-        "coding": "grok-2",
-        "qa": "grok-2",
+        "spec": GROK_MODEL,
+        "planning": GROK_MODEL,
+        "coding": GROK_MODEL,
+        "qa": GROK_MODEL,
     },
     # Meta (LLaMA)
     "meta": {
@@ -193,6 +205,13 @@ class PhaseThinkingConfig(TypedDict, total=False):
     qa: str
 
 
+class PhaseProviderConfig(TypedDict, total=False):
+    spec: str
+    planning: str
+    coding: str
+    qa: str
+
+
 class TaskMetadataConfig(TypedDict, total=False):
     """Structure of model-related fields in task_metadata.json"""
 
@@ -200,11 +219,36 @@ class TaskMetadataConfig(TypedDict, total=False):
     isAutoProfile: bool
     phaseModels: PhaseModelConfig
     phaseThinking: PhaseThinkingConfig
+    phaseProviders: PhaseProviderConfig
     model: str
     thinkingLevel: str
 
 
 Phase = Literal["spec", "planning", "coding", "qa"]
+
+
+# Dotted Claude model ids are the Copilot/Windsurf spelling (e.g.
+# "claude-opus-4.8", "claude-sonnet-4.6"). The Anthropic API only accepts the
+# dash-separated form ("claude-opus-4-8"), so a dotted id left in
+# task_metadata.json after switching a task back from Copilot to Anthropic is
+# rejected with "model ... may not exist". This regex matches the dotted version
+# separator on a Claude id so it can be rewritten to the native dashed form.
+_DOTTED_CLAUDE_VERSION_RE = re.compile(r"^(claude-(?:opus|sonnet|haiku)-\d+)\.(\d+)")
+
+
+def normalize_anthropic_model_id(model: str) -> str:
+    """Rewrite a dotted Claude model id to its Anthropic-native dashed form.
+
+    ``"claude-opus-4.8"`` → ``"claude-opus-4-8"``;
+    ``"claude-sonnet-4.6"`` → ``"claude-sonnet-4-6"``.
+
+    Ids that don't match the dotted Claude pattern (including non-Claude models
+    and already-dashed ids) are returned unchanged. Only call this when the model
+    is destined for Anthropic — Copilot/Windsurf keep the dotted spelling.
+    """
+    if not model:
+        return model
+    return _DOTTED_CLAUDE_VERSION_RE.sub(r"\1-\2", model)
 
 
 def resolve_model_id(model: str) -> str:
@@ -241,6 +285,25 @@ def resolve_model_id(model: str) -> str:
 
     # Already a full model ID or unknown shorthand
     return model
+
+
+# Reverse of THINKING_BUDGET_MAP, to label a thinking budget (tokens) back as
+# its effort level (none/low/medium/high/ultrathink) for display/tracing.
+_BUDGET_TO_THINKING_LEVEL: dict[int | None, str] = {
+    budget: level for level, budget in THINKING_BUDGET_MAP.items()
+}
+
+
+def thinking_level_from_budget(budget: int | None) -> str:
+    """Map a thinking budget (tokens) back to its effort level name.
+
+    Inverse of ``get_thinking_budget`` / ``THINKING_BUDGET_MAP``. Unknown budgets
+    (custom token counts) are rendered as ``"<n> tokens"`` so the trace still
+    carries the information.
+    """
+    if budget in _BUDGET_TO_THINKING_LEVEL:
+        return _BUDGET_TO_THINKING_LEVEL[budget]
+    return f"{budget} tokens"
 
 
 def get_thinking_budget(thinking_level: str) -> int | None:
@@ -287,22 +350,39 @@ def load_task_metadata(spec_dir: Path) -> TaskMetadataConfig | None:
         return None
 
 
+def _metadata_phase_provider(
+    metadata: TaskMetadataConfig | None, phase: Phase | None
+) -> str | None:
+    """Return the per-phase provider from metadata.phaseProviders, if any."""
+    if not metadata or phase is None:
+        return None
+    phase_providers = metadata.get("phaseProviders")
+    if phase_providers:
+        provider = phase_providers.get(phase)
+        if provider:
+            return provider
+    return None
+
+
 def get_phase_provider(
     spec_dir: Path,
     cli_provider: str | None = None,
+    phase: Phase | None = None,
 ) -> str | None:
     """
     Get the LLM provider configured for this task.
 
     Priority:
     1. CLI argument (if provided)
-    2. Provider from task_metadata.json
-    3. Provider selected via IPC (from frontend UI)
-    4. None (let downstream code use its default)
+    2. Per-phase provider from task_metadata.json (phaseProviders[phase])
+    3. Task-wide provider from task_metadata.json
+    4. Provider selected via IPC (from frontend UI)
+    5. None (let downstream code use its default)
 
     Args:
         spec_dir: Path to the spec directory
         cli_provider: Provider from CLI argument (optional)
+        phase: Execution phase (spec, planning, coding, qa) for per-phase lookup
 
     Returns:
         Provider string (e.g. 'anthropic', 'openai', 'ollama') or None
@@ -311,6 +391,12 @@ def get_phase_provider(
         return cli_provider
 
     metadata = load_task_metadata(spec_dir)
+
+    # Per-phase provider takes precedence over the task-wide provider.
+    phase_provider = _metadata_phase_provider(metadata, phase)
+    if phase_provider:
+        return phase_provider
+
     if metadata and metadata.get("provider"):
         return metadata["provider"]
 
@@ -342,9 +428,11 @@ def _resolve_provider_model(model: str, provider: str | None) -> str:
     Returns:
         Full model ID ready for the API
     """
-    # Anthropic/Claude shorthands need resolution
+    # Anthropic/Claude shorthands need resolution. Also normalize any dotted
+    # Copilot-style Claude id (e.g. "claude-opus-4.8") to the dashed Anthropic
+    # form before it reaches the API, which rejects the dotted spelling.
     if not provider or provider in ("anthropic", "claude"):
-        return resolve_model_id(model)
+        return resolve_model_id(normalize_anthropic_model_id(model))
 
     # For non-Anthropic providers, check if it's a Claude shorthand
     # (could happen if user switched providers but metadata still has "sonnet")
@@ -360,7 +448,11 @@ def _resolve_provider_model(model: str, provider: str | None) -> str:
     # This happens when a task was started with Anthropic and its task_metadata.json
     # still contains the old versioned model after the provider was switched.
     # Fall back to the provider's default model instead of sending an invalid ID.
-    if re.match(r"^claude-(opus|sonnet|haiku)-\d+-\d", model):
+    # The « Mythos-class » family (claude-fable-5, claude-mythos-5) has a single
+    # version group and is matched by a second pattern.
+    if re.match(r"^claude-(opus|sonnet|haiku)-\d+-\d", model) or re.match(
+        r"^claude-(fable|mythos)-\d", model
+    ):
         provider_defaults = PROVIDER_DEFAULT_MODELS.get(provider, {})
         fallback = provider_defaults.get("spec") or provider_defaults.get("coding")
         if fallback:
@@ -385,7 +477,11 @@ def _resolve_auto_profile_model(
         return None
 
     phase_models = metadata["phaseModels"]
-    provider = cli_provider or metadata.get("provider")
+    provider = (
+        cli_provider
+        or _metadata_phase_provider(metadata, phase)
+        or metadata.get("provider")
+    )
     model = phase_models.get(phase, DEFAULT_PHASE_MODELS[phase])
     return _resolve_provider_model(model, provider)
 
@@ -419,7 +515,11 @@ def _resolve_complexity_routing(
             return None
 
         model = routing.phase_models.get(phase, DEFAULT_PHASE_MODELS[phase])
-        provider = cli_provider or (metadata.get("provider") if metadata else None)
+        provider = (
+            cli_provider
+            or _metadata_phase_provider(metadata, phase)
+            or (metadata.get("provider") if metadata else None)
+        )
         return _resolve_provider_model(model, provider)
     except ImportError:
         return None
@@ -433,10 +533,12 @@ def _resolve_provider_default(
 ) -> str | None:
     """Resolve model from provider-specific defaults."""
     provider = cli_provider
+    if not provider:
+        provider = _metadata_phase_provider(metadata, phase)
     if not provider and metadata:
         provider = metadata.get("provider")
     if not provider:
-        provider = get_phase_provider(spec_dir)
+        provider = get_phase_provider(spec_dir, phase=phase)
 
     if provider and provider in PROVIDER_DEFAULT_MODELS:
         provider_models = PROVIDER_DEFAULT_MODELS[provider]
@@ -516,8 +618,9 @@ def get_phase_thinking(
 
     Priority:
     1. CLI argument (if provided)
-    2. Phase-specific config from task_metadata.json (if auto profile)
-    3. Single thinking level from task_metadata.json (if not auto profile)
+    2. Per-phase thinking from task_metadata.json (phaseThinking[phase]) whenever
+       present — regardless of isAutoProfile
+    3. Single thinking level from task_metadata.json
     4. Default phase configuration
 
     Args:
@@ -536,12 +639,17 @@ def get_phase_thinking(
     metadata = load_task_metadata(spec_dir)
 
     if metadata:
-        # Check for auto profile with phase-specific config
-        if metadata.get("isAutoProfile") and metadata.get("phaseThinking"):
-            phase_thinking = metadata["phaseThinking"]
-            return phase_thinking.get(phase, DEFAULT_PHASE_THINKING[phase])
+        # Per-phase thinking wins whenever the phase is present — regardless of
+        # isAutoProfile. This mirrors the frontend selector, whose `getPhaseConfig`
+        # reads `metadata.phaseThinking[phase]` unconditionally. A single-model
+        # resume (RESUME_WITH_PROVIDER sets isAutoProfile=false to force its chosen
+        # model) must keep honouring the per-phase effort the user still sees;
+        # otherwise the UI shows e.g. "Low" while the run uses the "high" default.
+        phase_thinking = metadata.get("phaseThinking") or {}
+        if phase_thinking.get(phase):
+            return phase_thinking[phase]
 
-        # Non-auto profile: use single thinking level
+        # Otherwise honour a single thinking level if one was set.
         if metadata.get("thinkingLevel"):
             return metadata["thinkingLevel"]
 

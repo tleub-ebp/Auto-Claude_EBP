@@ -21,6 +21,7 @@ import {
 	WorkspaceStatus,
 } from "./task-review";
 import { PlanApprovalSection } from "./PlanApprovalSection";
+import { TaskTestGenerator } from "./TaskTestGenerator";
 
 interface TaskReviewProps {
 	readonly task: Task;
@@ -195,6 +196,16 @@ export function TaskReview({
 
 			{/* Workspace Status Section */}
 			{workspaceStatusComponent}
+
+			{/* Test generation for the files touched by this task */}
+			{worktreeStatus?.exists && !task.stagedInMainProject && (
+				<TaskTestGenerator
+					task={task}
+					worktreeDiff={worktreeDiff}
+					worktreePath={worktreeStatus.worktreePath}
+					onTestsWritten={onRefreshDiff}
+				/>
+			)}
 
 			{/* QA Feedback Section */}
 			<QAFeedbackSection

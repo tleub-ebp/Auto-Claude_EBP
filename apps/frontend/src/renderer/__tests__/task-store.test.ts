@@ -349,6 +349,42 @@ describe("Task Store", () => {
 			expect(useTaskStore.getState().tasks[0].title).toBe("New Feature Name");
 		});
 
+		it("should NOT overwrite title when plan feature is a spec-folder slug", () => {
+			// The backend auto-fixer can set feature to the spec_id (the slugified
+			// worktree folder name). Adopting it would regress the card title to the
+			// directory name, so we must keep the already-resolved US/RsD title.
+			useTaskStore.setState({
+				tasks: [
+					createTestTask({
+						id: "task-1",
+						title: "Limitation du numéro de TVA intracommunautaire",
+					}),
+				],
+			});
+
+			const plan = createTestPlan({
+				feature: "001-limitation-du-num-ro-de-tva-intracommunautaire-18-",
+			});
+
+			useTaskStore.getState().updateTaskFromPlan("task-1", plan);
+
+			expect(useTaskStore.getState().tasks[0].title).toBe(
+				"Limitation du numéro de TVA intracommunautaire",
+			);
+		});
+
+		it("should NOT overwrite title when plan feature is the Unnamed Feature placeholder", () => {
+			useTaskStore.setState({
+				tasks: [createTestTask({ id: "task-1", title: "Real US Title" })],
+			});
+
+			const plan = createTestPlan({ feature: "Unnamed Feature" });
+
+			useTaskStore.getState().updateTaskFromPlan("task-1", plan);
+
+			expect(useTaskStore.getState().tasks[0].title).toBe("Real US Title");
+		});
+
 		it("should keep status when plan has no status", () => {
 			useTaskStore.setState({
 				tasks: [createTestTask({ id: "task-1", status: "in_progress" })],

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -52,7 +52,7 @@ export function VariationsDialog({
 	const [count, setCount] = useState<number>(2);
 	const [creating, setCreating] = useState(false);
 
-	const reload = async (signal?: AbortSignal) => {
+	const reload = useCallback(async (signal?: AbortSignal) => {
 		setLoading(true);
 		setError(null);
 		const [m, c] = await Promise.all([
@@ -63,7 +63,7 @@ export function VariationsDialog({
 		if (m.ok) setManifest(m.data.manifest);
 		else if (m.error !== "aborted") setError(m.error);
 		if (c.ok) setComparison(c.data.comparison);
-	};
+	}, [specDir]);
 
 	useEffect(() => {
 		if (!open) {
@@ -75,8 +75,7 @@ export function VariationsDialog({
 		const controller = new AbortController();
 		void reload(controller.signal);
 		return () => controller.abort();
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [open, specDir]);
+	}, [open, reload]);
 
 	const handleCreate = async () => {
 		setCreating(true);

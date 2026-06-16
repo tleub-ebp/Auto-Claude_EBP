@@ -221,6 +221,81 @@ class TestStreamingIntegration:
         assert "command_output" in event_types
 
 
+class TestStreamingReconnection:
+    """The wrapper must self-heal a lost/failed WebSocket connection.
+
+    Regression: the wrapper connected only once in start_session. If that
+    connect failed (race with the server starting) or the connection later
+    dropped, _send_event silently early-returned forever and the live view
+    showed zero events ("0 fichiers", stuck on "waiting for code changes").
+    """
+
+    @pytest.mark.asyncio
+    async def test_send_event_reconnects_when_disconnected(self):
+        wrapper = StreamingAgentWrapper("s", enable_recording=False)
+        wrapper._is_active = True
+        fake_ws = AsyncMock()
+
+        async def fake_connect():
+            wrapper._ws = fake_ws
+            wrapper._connected = True
+            return True
+
+        wrapper._connect = AsyncMock(side_effect=fake_connect)
+
+        assert wrapper._connected is False
+        await wrapper.emit_agent_thinking("hi")
+
+        wrapper._connect.assert_awaited_once()
+        fake_ws.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_send_failure_drops_socket_and_next_event_reconnects(self):
+        wrapper = StreamingAgentWrapper("s", enable_recording=False)
+        wrapper._is_active = True
+
+        bad_ws = AsyncMock()
+        bad_ws.send.side_effect = ConnectionError("boom")
+        good_ws = AsyncMock()
+        attempts: list = []
+
+        async def fake_connect():
+            ws = bad_ws if not attempts else good_ws
+            attempts.append(ws)
+            wrapper._ws = ws
+            wrapper._connected = True
+            return True
+
+        wrapper._connect = AsyncMock(side_effect=fake_connect)
+
+        # First emit connects to the failing socket; send fails -> socket dropped
+        await wrapper.emit_agent_thinking("one")
+        assert wrapper._connected is False
+        assert wrapper._ws is None
+
+        # Bypass the reconnect throttle, then the next emit must reconnect
+        wrapper._last_reconnect_attempt = 0.0
+        await wrapper.emit_agent_thinking("two")
+
+        assert wrapper._connect.await_count == 2
+        good_ws.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reconnect_attempts_are_throttled(self):
+        wrapper = StreamingAgentWrapper("s", enable_recording=False)
+        wrapper._is_active = True
+        wrapper._connect = AsyncMock(return_value=False)  # server unreachable
+
+        await wrapper.emit_agent_thinking("one")  # attempt 1
+        await wrapper.emit_agent_thinking("two")  # within throttle window -> skip
+        assert wrapper._connect.await_count == 1
+
+        # Once the throttle window elapses, a new attempt is allowed
+        wrapper._last_reconnect_attempt = 0.0
+        await wrapper.emit_agent_thinking("three")
+        assert wrapper._connect.await_count == 2
+
+
 if __name__ == "__main__":
     # Run tests
     pytest.main([__file__, "-v"])
