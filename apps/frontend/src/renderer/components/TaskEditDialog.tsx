@@ -27,8 +27,8 @@
  * ```
  */
 
-import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	DEFAULT_AGENT_PROFILES,
@@ -48,9 +48,11 @@ import type {
 	PhaseModelConfig,
 	PhaseThinkingConfig,
 } from "../../shared/types/settings";
+import { cn } from "../lib/utils";
 import { useProjectStore } from "../stores/project-store";
 import { useSettingsStore } from "../stores/settings-store";
 import { duplicateTask, persistUpdateTask } from "../stores/task-store";
+import { useProviderContext } from "./ProviderContext";
 import { TaskFormFields } from "./task-form/TaskFormFields";
 import { TaskModalLayout } from "./task-form/TaskModalLayout";
 import type { FileReferenceData } from "./task-form/useImageUpload";
@@ -98,6 +100,8 @@ export function TaskEditDialog({
 		: task.title;
 	// Get selected agent profile from settings for defaults
 	const { settings } = useSettingsStore();
+	// Global provider, used as the per-task default when the task has none yet.
+	const { selectedProvider } = useProviderContext();
 	const selectedProfile =
 		DEFAULT_AGENT_PROFILES.find(
 			(p) => p.id === settings.selectedAgentProfile,
@@ -117,6 +121,9 @@ export function TaskEditDialog({
 	const [isSaving, setIsSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [showClassification, setShowClassification] = useState(false);
+	// 2-step wizard: 1 = task details, 2 = execution engine (provider/LLM/effort),
+	// so the engine choice gets a dedicated, prominent page instead of being buried.
+	const [step, setStep] = useState<1 | 2>(1);
 
 	// Classification fields
 	const [category, setCategory] = useState<TaskCategory | "">(
@@ -131,6 +138,14 @@ export function TaskEditDialog({
 	const [impact, setImpact] = useState<TaskImpact | "">(
 		task.metadata?.impact || "",
 	);
+
+	// Per-task LLM provider. Defaults to the task's own provider, else the global
+	// selection. `initialProviderRef` lets edit mode tell "untouched" from an
+	// explicit change so we don't silently pin a provider the user didn't pick.
+	const defaultProvider =
+		task.metadata?.provider || selectedProvider || "anthropic";
+	const [provider, setProvider] = useState<string>(defaultProvider);
+	const initialProviderRef = useRef<string>(defaultProvider);
 
 	// Agent profile / model configuration
 	const [profileId, setProfileId] = useState<string>(() => {
@@ -234,7 +249,12 @@ export function TaskEditDialog({
 				task.metadata?.requireReviewBeforeCoding ?? false,
 			);
 			setTddMode(task.metadata?.tddMode ?? false);
+			const resolvedProvider =
+				task.metadata?.provider || selectedProvider || "anthropic";
+			setProvider(resolvedProvider);
+			initialProviderRef.current = resolvedProvider;
 			setError(null);
+			setStep(1);
 
 			// Auto-expand classification if it has content
 			if (
@@ -257,6 +277,7 @@ export function TaskEditDialog({
 		selectedProfile.thinkingLevel,
 		selectedProfile.phaseModels,
 		selectedProfile.phaseThinking,
+		selectedProvider,
 	]);
 
 	// Resolve Azure DevOps attachment images (PAT-protected URLs the renderer
@@ -315,6 +336,9 @@ export function TaskEditDialog({
 
 		const trimmedTitle = title.trim();
 		const trimmedDescription = description.trim();
+		// Provider is "changed" only when the user picked a different one than the
+		// value the dialog opened with (so plain edits don't pin a provider).
+		const providerChanged = provider !== initialProviderRef.current;
 
 		// Edit mode short-circuits when nothing changed. Duplicate always creates.
 		if (!isDuplicate) {
@@ -325,6 +349,7 @@ export function TaskEditDialog({
 				priority !== (task.metadata?.priority || "") ||
 				complexity !== (task.metadata?.complexity || "") ||
 				impact !== (task.metadata?.impact || "") ||
+				providerChanged ||
 				model !== (task.metadata?.model || "") ||
 				thinkingLevel !== (task.metadata?.thinkingLevel || "") ||
 				requireReviewBeforeCoding !==
@@ -360,6 +385,18 @@ export function TaskEditDialog({
 			metadataUpdates.isAutoProfile = profileId === "auto";
 			metadataUpdates.phaseModels = phaseModels;
 			metadataUpdates.phaseThinking = phaseThinking;
+		}
+		// Pin the provider on this task (uniformly across phases) when it was
+		// chosen for a clone or explicitly changed, so the task runs with the
+		// selected provider regardless of the global selection.
+		if ((isDuplicate || providerChanged) && provider) {
+			metadataUpdates.provider = provider;
+			metadataUpdates.phaseProviders = {
+				spec: provider,
+				planning: provider,
+				coding: provider,
+				qa: provider,
+			};
 		}
 		// Always set attachedImages to persist removal when all images are deleted
 		metadataUpdates.attachedImages = images.length > 0 ? images : [];
@@ -408,6 +445,17 @@ export function TaskEditDialog({
 
 	const isValid = description.trim().length > 0;
 
+	// Advance to the engine step, enforcing the only hard requirement (description)
+	// before leaving the details page.
+	const goToEngineStep = () => {
+		if (!description.trim()) {
+			setError(t("tasks:form.errors.descriptionRequired"));
+			return;
+		}
+		setError(null);
+		setStep(2);
+	};
+
 	return (
 		<TaskModalLayout
 			open={open}
@@ -421,32 +469,64 @@ export function TaskEditDialog({
 			disabled={isSaving}
 			onClose={onCloseTask}
 			footer={
-				<div className="flex items-center justify-end gap-3">
-					<Button
-						variant="outline"
-						onClick={() => onOpenChange(false)}
-						disabled={isSaving}
-					>
-						{t("common:buttons.cancel")}
-					</Button>
-					<Button onClick={handleSave} disabled={isSaving || !isValid}>
-						{isSaving ? (
+				<div className="flex items-center justify-between gap-3">
+					{/* Step indicator — makes the 2 pages explicit */}
+					<div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+						<span className={cn(step === 1 && "font-medium text-foreground")}>
+							1. {t("tasks:form.stepDetails")}
+						</span>
+						<ChevronRight className="h-3.5 w-3.5" />
+						<span className={cn(step === 2 && "font-medium text-foreground")}>
+							2. {t("tasks:form.stepEngine")}
+						</span>
+					</div>
+					<div className="flex items-center gap-3">
+						{step === 1 ? (
 							<>
-								<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-								{isDuplicate
-									? t("common:buttons.creating")
-									: t("common:buttons.saving")}
+								<Button
+									variant="outline"
+									onClick={() => onOpenChange(false)}
+									disabled={isSaving}
+								>
+									{t("common:buttons.cancel")}
+								</Button>
+								<Button onClick={goToEngineStep} disabled={isSaving || !isValid}>
+									{t("tasks:form.nextStep")}
+									<ChevronRight className="ml-2 h-4 w-4" />
+								</Button>
 							</>
-						) : isDuplicate ? (
-							t("tasks:duplicate.createButton")
 						) : (
-							t("tasks:edit.saveChanges")
+							<>
+								<Button
+									variant="outline"
+									onClick={() => setStep(1)}
+									disabled={isSaving}
+								>
+									<ChevronLeft className="mr-2 h-4 w-4" />
+									{t("tasks:form.previousStep")}
+								</Button>
+								<Button onClick={handleSave} disabled={isSaving || !isValid}>
+									{isSaving ? (
+										<>
+											<Loader2 className="mr-2 h-4 w-4 animate-spin" />
+											{isDuplicate
+												? t("common:buttons.creating")
+												: t("common:buttons.saving")}
+										</>
+									) : isDuplicate ? (
+										t("tasks:duplicate.createButton")
+									) : (
+										t("tasks:edit.saveChanges")
+									)}
+								</Button>
+							</>
 						)}
-					</Button>
+					</div>
 				</div>
 			}
 		>
 			<TaskFormFields
+				section={step === 1 ? "content" : "engine"}
 				projectPath={projectPath}
 				specId={task.specId}
 				description={description}
@@ -457,6 +537,8 @@ export function TaskEditDialog({
 				profileId={profileId}
 				model={model}
 				thinkingLevel={thinkingLevel}
+				provider={provider}
+				onProviderChange={setProvider}
 				phaseModels={phaseModels}
 				phaseThinking={phaseThinking}
 				onProfileChange={(newProfileId, newModel, newThinkingLevel) => {

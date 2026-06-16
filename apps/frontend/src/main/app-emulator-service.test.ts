@@ -9,7 +9,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AppEmulatorService, formatServerExitError } from "./app-emulator-service";
+import {
+	AppEmulatorService,
+	DEFAULT_DOCKER_PORT,
+	formatServerExitError,
+	parseDockerComposePort,
+	parseDockerExposePort,
+} from "./app-emulator-service";
 
 vi.mock("electron", () => ({
 	app: {
@@ -220,6 +226,92 @@ describe("AppEmulatorService project detection", () => {
 
 		expect(config.framework).toBe("dotnet-framework-desktop");
 		expect(existsSync(path.join(worktreeSourcesDir, "packages"))).toBe(true);
+	});
+});
+
+describe("parseDockerExposePort", () => {
+	it("reads the first EXPOSE directive", () => {
+		expect(parseDockerExposePort("FROM node\nEXPOSE 8080\n")).toBe(8080);
+	});
+
+	it("handles EXPOSE with a protocol suffix and multiple ports", () => {
+		expect(parseDockerExposePort("EXPOSE 5000/tcp 9090")).toBe(5000);
+	});
+
+	it("falls back to the default when no EXPOSE is present", () => {
+		expect(parseDockerExposePort("FROM scratch\n")).toBe(DEFAULT_DOCKER_PORT);
+	});
+});
+
+describe("parseDockerComposePort", () => {
+	it("reads the first published host port", () => {
+		const compose = [
+			"services:",
+			"  web:",
+			"    ports:",
+			'      - "8080:80"',
+		].join("\n");
+		expect(parseDockerComposePort(compose)).toBe(8080);
+	});
+
+	it("handles an unquoted host:container mapping with a bind address", () => {
+		const compose = [
+			"services:",
+			"  api:",
+			"    ports:",
+			"      - 127.0.0.1:4000:4000",
+		].join("\n");
+		expect(parseDockerComposePort(compose)).toBe(4000);
+	});
+
+	it("ignores volume/environment list items outside the ports block", () => {
+		const compose = [
+			"services:",
+			"  db:",
+			"    environment:",
+			"      - POSTGRES_PASSWORD=secret",
+			"    volumes:",
+			"      - ./data:/var/lib/postgresql/data",
+			"    ports:",
+			'      - "5433:5432"',
+		].join("\n");
+		expect(parseDockerComposePort(compose)).toBe(5433);
+	});
+
+	it("falls back to the default when there is no ports block", () => {
+		expect(parseDockerComposePort("services:\n  web:\n")).toBe(
+			DEFAULT_DOCKER_PORT,
+		);
+	});
+});
+
+describe("AppEmulatorService Docker detection", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(path.join(tmpdir(), "workpilot-docker-"));
+	});
+
+	afterEach(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("uses the EXPOSE port from a Dockerfile", async () => {
+		writeFileSync(path.join(tempDir, "Dockerfile"), "FROM node\nEXPOSE 8080\n");
+		const config = await new AppEmulatorService().detectProject(tempDir);
+		expect(config.framework).toBe("docker");
+		expect(config.port).toBe(8080);
+		expect(config.startCommand).toContain("8080:8080");
+	});
+
+	it("uses the published port from a docker-compose file", async () => {
+		writeFileSync(
+			path.join(tempDir, "docker-compose.yml"),
+			["services:", "  web:", "    ports:", '      - "8088:80"'].join("\n"),
+		);
+		const config = await new AppEmulatorService().detectProject(tempDir);
+		expect(config.framework).toBe("docker-compose");
+		expect(config.port).toBe(8088);
 	});
 });
 

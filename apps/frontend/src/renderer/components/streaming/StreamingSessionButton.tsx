@@ -26,11 +26,17 @@ import { StreamingSession } from "./StreamingSession";
 interface StreamingSessionButtonProps {
 	readonly taskId: string;
 	readonly projectPath: string;
+	/**
+	 * Icon-only rendering for dense contexts (e.g. the kanban card footer),
+	 * where the full "Watch live" label would push the footer onto a second row.
+	 */
+	readonly compact?: boolean;
 }
 
 export function StreamingSessionButton({
 	taskId,
 	projectPath,
+	compact = false,
 }: StreamingSessionButtonProps) {
 	const [isOpen, setIsOpen] = useState(false);
 	const { t } = useTranslation(["tasks", "streaming"]);
@@ -45,10 +51,14 @@ export function StreamingSessionButton({
 				variant="outline"
 				size="sm"
 				onClick={handleWatchLive}
-				className="gap-2"
+				className={compact ? "h-7 w-7 p-0" : "gap-2"}
+				title={compact ? t("tasks:modal.actions.watchLive") : undefined}
+				aria-label={
+					compact ? t("tasks:modal.actions.watchLive") : undefined
+				}
 			>
-				<Film className="w-4 h-4" />
-				{t("tasks:modal.actions.watchLive")}
+				<Film className={compact ? "h-3.5 w-3.5" : "w-4 h-4"} />
+				{!compact && t("tasks:modal.actions.watchLive")}
 			</Button>
 
 			<Dialog open={isOpen} onOpenChange={setIsOpen}>
