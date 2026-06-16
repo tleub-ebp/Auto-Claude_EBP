@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Providers with a first-class AgentClient that can be instantiated without any
 # project context — required for the context-free utilities.
-_FIRST_CLASS = {"claude", "anthropic", "copilot", "openai", "windsurf"}
+_unused_first_class = {"claude", "anthropic", "copilot", "openai", "windsurf"}
 
 # Cheap default model per provider for these tiny one-shot calls.
 _DEFAULT_MODELS = {
