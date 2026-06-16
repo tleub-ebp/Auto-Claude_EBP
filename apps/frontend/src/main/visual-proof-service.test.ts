@@ -7,8 +7,9 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VisualProofRun } from "../shared/types";
+import { visualProofNavigationService } from "./visual-proof-navigation-service";
 import {
 	analyzeDotNetProjects,
 	buildProofComment,
@@ -20,6 +21,7 @@ import {
 	normalizeNavigationPlan,
 	parseGitHubPrUrl,
 	resolveDesktopUiAutomation,
+	resolveNavigationPlan,
 	selectDesktopCaptureSource,
 } from "./visual-proof-service";
 
@@ -321,6 +323,88 @@ describe("loadVisualProofNavigationPlan", () => {
 
 	it("returns null when no plan is configured", () => {
 		expect(loadVisualProofNavigationPlan({ projectPath: dir })).toBeNull();
+	});
+});
+
+describe("resolveNavigationPlan", () => {
+	let dir: string;
+
+	const makeContext = (): Parameters<typeof resolveNavigationPlan>[0] =>
+		({
+			options: {
+				taskId: "t1",
+				projectPath: dir,
+				worktreePath: dir,
+				specId: "spec-1",
+				prUrl: "",
+				autoBuildPath: ".workpilot",
+			},
+			runPath: dir,
+			artifactDir: dir,
+			relativeArtifactDir: "",
+			config: {
+				framework: "vite",
+				isWeb: true,
+				type: "web",
+				startCommand: "npm run dev",
+				port: 5173,
+				projectDir: dir,
+			},
+			dotnetProjects: [],
+		}) as unknown as Parameters<typeof resolveNavigationPlan>[0];
+
+	beforeEach(() => {
+		dir = mkdtempSync(path.join(tmpdir(), "vp-resolve-"));
+		delete process.env.WORKPILOT_VISUAL_PROOF_NAVIGATION;
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("returns the manual plan and never calls the generator", async () => {
+		mkdirSync(path.join(dir, ".workpilot"), { recursive: true });
+		writeFileSync(
+			path.join(dir, ".workpilot", "visual-proof-navigation.json"),
+			JSON.stringify({ web: [{ path: "/manual" }] }),
+		);
+		const generate = vi
+			.spyOn(visualProofNavigationService, "generatePlan")
+			.mockResolvedValue({ web: [{ path: "/llm" }] });
+
+		const plan = await resolveNavigationPlan(makeContext(), {
+			targetKind: "web",
+			appUrl: "http://localhost:5173",
+		});
+
+		expect(plan?.web).toEqual([{ path: "/manual" }]);
+		expect(generate).not.toHaveBeenCalled();
+	});
+
+	it("falls back to null when the generator yields nothing", async () => {
+		const generate = vi
+			.spyOn(visualProofNavigationService, "generatePlan")
+			.mockResolvedValue(null);
+
+		const plan = await resolveNavigationPlan(makeContext(), {
+			targetKind: "desktop",
+		});
+
+		expect(plan).toBeNull();
+		expect(generate).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns the generated plan when the generator succeeds", async () => {
+		vi.spyOn(visualProofNavigationService, "generatePlan").mockResolvedValue({
+			desktop: [{ invoke: "Ventes" }],
+		});
+
+		const plan = await resolveNavigationPlan(makeContext(), {
+			targetKind: "desktop",
+		});
+
+		expect(plan?.desktop).toEqual([{ invoke: "Ventes" }]);
 	});
 });
 

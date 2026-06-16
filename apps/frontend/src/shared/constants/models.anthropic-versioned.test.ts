@@ -26,6 +26,12 @@ describe("isAnthropicNativeVersionedModelId", () => {
 		);
 	});
 
+	it("détecte les IDs natifs « Mythos-class » (fable/mythos)", () => {
+		// Nouvelle famille au-dessus d'Opus : un seul groupe de version (-5).
+		expect(isAnthropicNativeVersionedModelId("claude-fable-5")).toBe(true);
+		expect(isAnthropicNativeVersionedModelId("claude-mythos-5")).toBe(true);
+	});
+
 	it("ignore les modèles non-Claude", () => {
 		expect(isAnthropicNativeVersionedModelId("gpt-5.5")).toBe(false);
 		expect(isAnthropicNativeVersionedModelId("gemini-3.1-pro")).toBe(false);

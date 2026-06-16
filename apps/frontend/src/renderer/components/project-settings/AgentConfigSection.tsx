@@ -1,4 +1,5 @@
 import type { ProjectSettings } from "../../../shared/types";
+import { resolveCatalogModelValue } from "../../../shared/constants";
 import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
 import { useProviderContext } from "../ProviderContext";
 import { Label } from "../ui/label";
@@ -21,6 +22,10 @@ export function AgentConfigSection({
 }: AgentConfigSectionProps) {
 	const { selectedProvider } = useProviderContext();
 	const { models } = useProviderModelCatalog(selectedProvider || "anthropic");
+	// A persisted alias / dated id may no longer appear verbatim in the
+	// deduplicated catalog; resolve it to the visible canonical entry so the
+	// trigger renders the correct selection.
+	const selectedValue = resolveCatalogModelValue(settings.model, models);
 
 	return (
 		<section className="space-y-4">
@@ -32,7 +37,7 @@ export function AgentConfigSection({
 					Model
 				</Label>
 				<Select
-					value={settings.model}
+					value={selectedValue}
 					onValueChange={(value) => onUpdateSettings({ model: value })}
 				>
 					<SelectTrigger id="model">

@@ -2513,34 +2513,12 @@ export function registerWorktreeHandlers(
 				// Get the diff with file stats
 				const files: WorktreeDiffFile[] = [];
 
-				let numstat = "";
-				let nameStatus = "";
-				let fullDiff = "";
 				try {
-					// Get numstat for additions/deletions per file (cross-platform)
-					numstat = execFileSync(
-						getToolPath("git"),
-						["diff", "--numstat", diffRange],
-						{
-							cwd: worktreePath,
-							encoding: "utf-8",
-							stdio: ["pipe", "pipe", "pipe"],
-						},
-					).trim();
-
-					// Get name-status for file status (cross-platform)
-					nameStatus = execFileSync(
-						getToolPath("git"),
-						["diff", "--name-status", diffRange],
-						{
-							cwd: worktreePath,
-							encoding: "utf-8",
-							stdio: ["pipe", "pipe", "pipe"],
-						},
-					).trim();
-
-					// Get full diff for patch content
-					fullDiff = execFileSync(
+					// Single atomic git call: status, stats and patch all come from the
+					// same snapshot, preventing a race where separate numstat/fullDiff
+					// invocations could see different HEAD commits on an
+					// actively-committing worktree (causing additions > 0 but patch = "").
+					const fullDiff = execFileSync(
 						getToolPath("git"),
 						["diff", diffRange],
 						{
@@ -2550,95 +2528,49 @@ export function registerWorktreeHandlers(
 						},
 					).trim();
 
-					// Parse name-status to get file statuses
-					const statusMap: Record<
-						string,
-						"added" | "modified" | "deleted" | "renamed"
-					> = {};
-					nameStatus
-						.split("\n")
-						.filter(Boolean)
-						.forEach((line: string) => {
-							const [status, ...pathParts] = line.split("\t");
-							const filePath = pathParts.join("\t"); // Handle files with tabs in name
-							switch (status[0]) {
-								case "A":
-									statusMap[filePath] = "added";
-									break;
-								case "M":
-									statusMap[filePath] = "modified";
-									break;
-								case "D":
-									statusMap[filePath] = "deleted";
-									break;
-								case "R":
-									statusMap[pathParts[1] || filePath] = "renamed";
-									break;
-								default:
-									statusMap[filePath] = "modified";
-							}
-						});
+					// Split into per-file sections by walking the diff line by line.
+					const sections: string[] = [];
+					let currentLines: string[] = [];
+					for (const line of fullDiff.split("\n")) {
+						if (line.startsWith("diff --git ")) {
+							if (currentLines.length > 0) sections.push(currentLines.join("\n"));
+							currentLines = [line];
+						} else {
+							currentLines.push(line);
+						}
+					}
+					if (currentLines.length > 0) sections.push(currentLines.join("\n"));
 
-					// Function to extract patch for a specific file from full diff
-					const extractFilePatch = (
-						filePath: string,
-						_fileStatus: string,
-					): string => {
-						const lines = fullDiff.split("\n");
-						let fileLines: string[] = [];
-						let foundFile = false;
+					for (const section of sections) {
+						const headerMatch = section.match(/^diff --git a\/(.*) b\/(.*)$/m);
+						if (!headerMatch) continue;
 
-						for (let i = 0; i < lines.length; i++) {
-							const line = lines[i];
+						// Use the b/ (destination) path as canonical — correct for renames too.
+						const filePath = headerMatch[2];
 
-							// Look for the diff header for this file
-							if (line.startsWith("diff --git")) {
-								// Extract file paths from the diff header
-								const match = line.match(/diff --git a\/(.*) b\/(.*)/);
-								if (match && (match[1] === filePath || match[2] === filePath)) {
-									foundFile = true;
-									fileLines = [line];
-									continue;
-								}
-							}
+						let status: "added" | "modified" | "deleted" | "renamed" =
+							"modified";
+						if (/^new file mode/m.test(section)) status = "added";
+						else if (/^deleted file mode/m.test(section)) status = "deleted";
+						else if (/^rename from /m.test(section)) status = "renamed";
 
-							// If we found the file and hit the next file, stop
-							if (foundFile && line.startsWith("diff --git")) {
-								// Check if this is a new file's diff
-								const match = line.match(/diff --git a\/(.*) b\/(.*)/);
-								if (match && match[1] !== filePath && match[2] !== filePath) {
-									break;
-								}
-							}
-
-							// Add lines if we're in this file's section
-							if (foundFile) {
-								fileLines.push(line);
-							}
+						// Count additions/deletions from the same content as the patch.
+						let additions = 0;
+						let deletions = 0;
+						for (const line of section.split("\n")) {
+							if (line.startsWith("+") && !line.startsWith("+++")) additions++;
+							else if (line.startsWith("-") && !line.startsWith("---"))
+								deletions++;
 						}
 
-						const patch = fileLines.join("\n");
-
-						return patch;
-					};
-
-					// Parse numstat for additions/deletions and create file objects
-					numstat
-						.split("\n")
-						.filter(Boolean)
-						.forEach((line: string) => {
-							const [adds, dels, filePath] = line.split("\t");
-							const fileStatus = statusMap[filePath] || "modified";
-							const patch = extractFilePatch(filePath, fileStatus);
-
-							files.push({
-								path: filePath,
-								status: fileStatus,
-								additions: parseInt(adds, 10) || 0,
-								deletions: parseInt(dels, 10) || 0,
-								patch: patch || undefined, // Only include patch if it exists
-							});
+						files.push({
+							path: filePath,
+							status,
+							additions,
+							deletions,
+							patch: section || undefined,
 						});
+					}
 				} catch (diffError) {
 					console.error("Error getting diff:", diffError);
 				}
@@ -2722,6 +2654,193 @@ export function registerWorktreeHandlers(
 						error instanceof Error
 							? error.message
 							: "Failed to get worktree diff",
+				};
+			}
+		},
+	);
+
+	/**
+	 * Get the diff for a single impacted file, on demand.
+	 *
+	 * Contrairement à TASK_WORKTREE_DIFF (qui n'expose que les changements
+	 * commités via `base...head`), ce handler tente plusieurs stratégies afin de
+	 * toujours pouvoir montrer les lignes modifiées d'un fichier impacté :
+	 *   1. plage commitée `base...head`,
+	 *   2. changements non commités vs `HEAD`,
+	 *   3. arbre de travail vs index,
+	 *   4. fichier non suivi (synthétise un patch « ajouté »).
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_FILE_DIFF,
+		async (
+			_,
+			taskId: string,
+			filePath: string,
+		): Promise<IPCResult<WorktreeDiffFile>> => {
+			try {
+				const { task, project } = findTaskAndProject(taskId);
+				if (!task || !project) {
+					return { success: false, error: "Task not found" };
+				}
+
+				const worktreePath = findTaskWorktree(project.path, task.specId);
+				if (!worktreePath) {
+					return { success: false, error: "No worktree found for this task" };
+				}
+
+				// Normalise et protège contre la traversée de chemin.
+				const normalized = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+				if (
+					!normalized ||
+					normalized.split("/").some((segment) => segment === "..")
+				) {
+					return { success: false, error: "Invalid file path" };
+				}
+
+				const git = getToolPath("git");
+				const runGit = (args: string[]): string => {
+					try {
+						return execFileSync(git, args, {
+							cwd: worktreePath,
+							encoding: "utf-8",
+							stdio: ["pipe", "pipe", "pipe"],
+						}).trim();
+					} catch {
+						return "";
+					}
+				};
+
+				const baseBranch = getEffectiveBaseBranch(
+					project.path,
+					task.specId,
+					project.settings?.mainBranch,
+				);
+				let worktreeBranch = "HEAD";
+				try {
+					worktreeBranch = execFileSync(
+						git,
+						["rev-parse", "--abbrev-ref", "HEAD"],
+						{
+							cwd: worktreePath,
+							encoding: "utf-8",
+							stdio: ["pipe", "pipe", "pipe"],
+						},
+					).trim();
+				} catch {
+					// fallback à HEAD
+				}
+				const diffRefs = resolveDiffRefs(
+					worktreePath,
+					worktreeBranch,
+					baseBranch,
+				);
+				const diffRange = `${diffRefs.baseRef}...${diffRefs.headRef}`;
+
+				const parseStatus = (
+					nameStatus: string,
+				): WorktreeDiffFile["status"] => {
+					const first = nameStatus.split("\n").filter(Boolean)[0];
+					switch (first?.[0]) {
+						case "A":
+							return "added";
+						case "D":
+							return "deleted";
+						case "R":
+							return "renamed";
+						default:
+							return "modified";
+					}
+				};
+				const parseNumstat = (
+					numstat: string,
+				): { additions: number; deletions: number } => {
+					const first = numstat.split("\n").filter(Boolean)[0];
+					if (!first) return { additions: 0, deletions: 0 };
+					const [adds, dels] = first.split("\t");
+					return {
+						additions: Number.parseInt(adds, 10) || 0,
+						deletions: Number.parseInt(dels, 10) || 0,
+					};
+				};
+
+				const tryDiff = (spec: string[]): WorktreeDiffFile | null => {
+					const patch = runGit(["diff", ...spec, "--", normalized]);
+					if (!patch) return null;
+					const numstat = runGit([
+						"diff",
+						...spec,
+						"--numstat",
+						"--",
+						normalized,
+					]);
+					const nameStatus = runGit([
+						"diff",
+						...spec,
+						"--name-status",
+						"--",
+						normalized,
+					]);
+					const { additions, deletions } = parseNumstat(numstat);
+					return {
+						path: normalized,
+						status: parseStatus(nameStatus),
+						additions,
+						deletions,
+						patch,
+					};
+				};
+
+				let result =
+					tryDiff([diffRange]) ?? tryDiff(["HEAD"]) ?? tryDiff([]);
+
+				// Fichier non suivi : git diff ne renvoie rien → patch synthétique.
+				if (!result) {
+					const porcelain = runGit([
+						"status",
+						"--porcelain",
+						"--",
+						normalized,
+					]);
+					if (porcelain.startsWith("??")) {
+						const content = await fsPromises
+							.readFile(path.join(worktreePath, normalized), "utf-8")
+							.catch(() => "");
+						const lines = content.split("\n");
+						const body = lines.map((line) => `+${line}`).join("\n");
+						result = {
+							path: normalized,
+							status: "added",
+							additions: lines.length,
+							deletions: 0,
+							patch:
+								`diff --git a/${normalized} b/${normalized}\n` +
+								`--- /dev/null\n+++ b/${normalized}\n` +
+								`@@ -0,0 +1,${lines.length} @@\n${body}`,
+						};
+					}
+				}
+
+				// Aucun changement détecté : réponse neutre (l'UI affiche « no diff »).
+				if (!result) {
+					return {
+						success: true,
+						data: {
+							path: normalized,
+							status: "modified",
+							additions: 0,
+							deletions: 0,
+							patch: undefined,
+						},
+					};
+				}
+
+				return { success: true, data: result };
+			} catch (error) {
+				console.error("Failed to get file diff:", error);
+				return {
+					success: false,
+					error:
+						error instanceof Error ? error.message : "Failed to get file diff",
 				};
 			}
 		},

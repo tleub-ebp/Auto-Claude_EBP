@@ -1,0 +1,67 @@
+{
+	"title": "Formula Lab",
+	"subtitle": "Comparez chaque combinaison Provider × LLM × Effort et choisissez votre formule avant de dépenser le moindre token.",
+	"computing": "Calcul des formules…",
+	"error": "Estimation indisponible : {{error}}",
+	"retry": "Réessayer",
+	"tokens": "tok",
+	"flatRate": "Forfait",
+	"apply": "Appliquer",
+	"applied": "Appliquée",
+	"applySelected": "Appliquer cette formule",
+	"slider": {
+		"cost": "Coût",
+		"confidence": "Confiance",
+		"preference": "Préférence"
+	},
+	"refine": {
+		"cta": "Affiner avec l'IA",
+		"running": "Affinage…",
+		"tooltip": "Lance un appel LLM économique pour affiner l'estimation de réussite des 3 meilleures formules pour cette tâche",
+		"error": "Affinage IA de la confiance indisponible — probabilités de réussite heuristiques conservées (les coûts ne sont pas affectés).",
+		"aiBadge": "Estimation affinée par l'IA"
+	},
+	"costBasis": {
+		"measured": "Coûts calculés sur {{count}} exécution(s) réelle(s) de ce projet — tokens mesurés × prix catalogue.",
+		"calibrated": "Coûts calibrés sur {{count}} exécution(s) réelle(s) de ce projet — volumes mesurés × prix catalogue à jour.",
+		"heuristic": "Aucun historique d'exécution — volumes estimés (par défaut) × prix catalogue réels. La précision augmentera après vos premières tâches.",
+		"measuredTag": "mesuré",
+		"measuredTooltip": "Coût basé sur l'usage réel mesuré de ce modèle dans ce projet"
+	},
+	"picks": {
+		"bestValue": "Meilleur rapport",
+		"safest": "Plus sûr",
+		"cheapest": "Moins cher",
+		"fastest": "Plus rapide"
+	},
+	"chart": {
+		"aria": "Frontière d'efficacité : coût en fonction de la probabilité de réussite",
+		"xAxis": "Coût",
+		"yAxis": "Réussite"
+	},
+	"filters": {
+		"allProviders": "Tous les fournisseurs",
+		"perTokenOnly": "Payés au token",
+		"searchPlaceholder": "Rechercher un LLM…",
+		"count": "{{count}} formules"
+	},
+	"table": {
+		"formula": "Fournisseur / LLM",
+		"effort": "Effort",
+		"tokens": "Tokens",
+		"cost": "Coût",
+		"success": "Réussite",
+		"more": "+{{count}} formules supplémentaires (affinez les filtres pour réduire)"
+	},
+	"badge": {
+		"estimate": "Estimer",
+		"estimateTooltip": "Estimer coût & réussite par Provider × LLM × Effort",
+		"appliedTooltip": "Formule appliquée — cliquer pour changer"
+	},
+	"toast": {
+		"appliedTitle": "Formule appliquée",
+		"appliedDesc": "{{model}} · {{effort}} sera utilisé pour chaque phase de cette tâche.",
+		"failedTitle": "Impossible d'appliquer la formule",
+		"failedDesc": "La configuration de la tâche n'a pas été enregistrée. Réessayez."
+	}
+}

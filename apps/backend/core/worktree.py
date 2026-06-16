@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -144,6 +145,20 @@ def _is_retryable_worktree_add_error(stderr: str) -> bool:
     if not text:
         return True
     return any(term in text for term in _WORKTREE_ADD_TRANSIENT_TERMS)
+
+
+# Windows NTSTATUS exit codes meaning the git process FAILED TO START (not a
+# git error): the loaded GitHub runner couldn't initialize the child process.
+# These conditions persist for tens of seconds, so the normal lock-retry
+# schedule (~7.5s total) times out before the runner recovers — they get a
+# slower, longer backoff schedule instead.
+_WINDOWS_SPAWN_FAILURE_EXIT_CODES = frozenset(
+    {
+        3221225794,  # 0xC0000142 STATUS_DLL_INIT_FAILED
+        3221225786,  # 0xC000013A STATUS_CONTROL_C_EXIT (host tearing processes down)
+        3221225781,  # 0xC0000135 STATUS_DLL_NOT_FOUND
+    }
+)
 
 
 def _with_retry(
@@ -429,6 +444,24 @@ class WorktreeManager:
     # the worktree root or inject git ref-name metacharacters.
     _SPEC_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
+    @staticmethod
+    def _sanitize_spec_name(spec_name: str) -> str:
+        """Map an accented/Unicode spec name to its ASCII-only equivalent.
+
+        Why: legacy spec folders created before the slug fix retain accented
+        names on disk (e.g. "002-limitation-du-numéro-de-tva-…"). The worktree
+        path and git branch must be ASCII to satisfy the strict whitelist and
+        avoid git ref-name issues. We strip diacritics via NFKD decomposition
+        (é -> e) and drop any remaining non-ASCII codepoint. The result is then
+        validated by the caller against ``_SPEC_NAME_RE``, so this NEVER relaxes
+        the security checks: dangerous ASCII (path separators, "..", ref
+        metacharacters) is untouched here and still rejected downstream.
+        """
+        normalized = unicodedata.normalize("NFKD", spec_name)
+        return "".join(
+            ch for ch in normalized if not unicodedata.combining(ch) and ch.isascii()
+        )
+
     @classmethod
     def _validate_spec_name(cls, spec_name: str) -> str:
         """Validate spec_name to prevent path traversal and ref-name injection.
@@ -436,15 +469,20 @@ class WorktreeManager:
         Why: spec_name is interpolated into filesystem paths and git branch
         refs (workpilot/{spec_name}). An unvalidated value like "../../etc"
         or "foo/..bar" could escape the worktree root or break git plumbing.
+
+        Accented characters are transliterated to ASCII first so that legacy
+        spec folders (named before the slug fix) remain buildable; the
+        transliterated value must still satisfy the strict whitelist.
         """
         if not isinstance(spec_name, str) or not spec_name:
             raise ValueError("spec_name must be a non-empty string")
-        if not cls._SPEC_NAME_RE.fullmatch(spec_name):
+        sanitized = cls._sanitize_spec_name(spec_name)
+        if not cls._SPEC_NAME_RE.fullmatch(sanitized):
             raise ValueError(
                 f"Invalid spec_name {spec_name!r}: must match "
                 f"{cls._SPEC_NAME_RE.pattern}"
             )
-        return spec_name
+        return sanitized
 
     def get_worktree_path(self, spec_name: str) -> Path:
         """Get the worktree path for a spec (checks new and legacy locations)."""
@@ -806,13 +844,23 @@ class WorktreeManager:
         branch_exists = self._branch_exists(branch_name)
 
         # Step 6: Fetch latest from remote to ensure we have the most up-to-date code
-        # GitHub/remote is the source of truth, not the local branch
-        fetch_result = self._run_git(["fetch", "origin", self.base_branch])
-        if fetch_result.returncode != 0:
-            print(
-                f"Warning: Could not fetch {self.base_branch} from origin: {fetch_result.stderr}"
-            )
-            print("Falling back to local branch...")
+        # GitHub/remote is the source of truth, not the local branch.
+        #
+        # Offline / local-branch mode: skip the remote fetch entirely. When the
+        # user opted into local-branch mode (useLocalBranch), the remote is not
+        # the source of truth and may be unreachable (air-gapped machine, expired
+        # credentials, VPN down...). Touching the network here only adds latency
+        # and a scary "403 / could not fetch" warning before the local fallback
+        # kicks in anyway, so we don't even try.
+        if self.use_local_branch:
+            print("Local-branch mode: skipping remote fetch (offline-friendly).")
+        else:
+            fetch_result = self._run_git(["fetch", "origin", self.base_branch])
+            if fetch_result.returncode != 0:
+                print(
+                    f"Warning: Could not fetch {self.base_branch} from origin: {fetch_result.stderr}"
+                )
+                print("Falling back to local branch...")
 
         # Step 7: Create the worktree
         if branch_exists:
@@ -882,28 +930,44 @@ class WorktreeManager:
         add_args: list[str],
         worktree_path: Path,
         created_branch: str | None,
-        max_attempts: int = 3,
+        max_attempts: int = 7,
     ) -> subprocess.CompletedProcess:
         """Run ``git worktree add``, retrying transient (often Windows) failures.
 
-        ``git worktree add`` intermittently fails on Windows with a momentary
-        filesystem lock (and, on CI, an empty stderr). Between attempts any
-        partially-created worktree directory and branch are removed so the retry
-        starts from a clean slate. Returns the final ``CompletedProcess`` -- the
-        success, or the last failure for the caller to report.
+        Two transient failure classes, with different retry schedules:
+
+        - Momentary filesystem locks (antivirus/indexer during checkout, often
+          an empty stderr on CI): short exponential backoff — the lock clears
+          in well under a second.
+        - Windows process-spawn failures (STATUS_DLL_INIT_FAILED 0xC0000142
+          etc. on loaded GitHub runners): the runner-wide condition persists
+          for tens of seconds, so these get a slower schedule capped at 15s —
+          the previous ~7.5s total window expired before the runner recovered
+          and the test failed after all attempts.
+
+        Between attempts any partially-created worktree directory and branch
+        are removed so the retry starts from a clean slate. Returns the final
+        ``CompletedProcess`` -- the success, or the last failure for the caller
+        to report.
         """
         result = self._run_git(add_args)
         for attempt in range(1, max_attempts):
             if result.returncode == 0:
                 return result
-            if not _is_retryable_worktree_add_error(result.stderr):
+            is_spawn_failure = result.returncode in _WINDOWS_SPAWN_FAILURE_EXIT_CODES
+            if not (
+                is_spawn_failure or _is_retryable_worktree_add_error(result.stderr)
+            ):
                 return result
             print(
                 f"Worktree add failed (attempt {attempt}/{max_attempts}, "
                 f"git exit {result.returncode}); cleaning up and retrying..."
             )
             self._cleanup_partial_worktree(worktree_path, created_branch)
-            time.sleep(0.5 * attempt)
+            if is_spawn_failure:
+                time.sleep(min(2.0 * (2 ** (attempt - 1)), 15.0))
+            else:
+                time.sleep(min(0.5 * (2 ** (attempt - 1)), 5.0))
             result = self._run_git(add_args)
         return result
 

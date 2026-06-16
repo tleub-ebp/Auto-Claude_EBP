@@ -39,7 +39,9 @@
 		"taskActions": "Actions de la tâche",
 		"selectTask": "Sélectionner la tâche : {{title}}",
 		"preview": "Aperçu",
-		"syncFromBranch": "Synchroniser depuis une branche"
+		"syncFromBranch": "Synchroniser depuis une branche",
+		"duplicate": "Dupliquer",
+		"duplicateSuffix": "(copie)"
 	},
 	"confirmDelete": {
 		"title": "Supprimer la tâche",
@@ -59,7 +61,17 @@
 		"recovering": "Récupération...",
 		"needsRecovery": "Récupération requise",
 		"needsResume": "Reprise requise",
-		"tdd": "TDD"
+		"tdd": "TDD",
+		"pipeline": "Pipeline",
+		"repairBuild": "Réparer le build",
+		"buildFailed": "Build rouge",
+		"openInTracker": "Ouvrir dans {{tracker}}",
+		"currentPhase": "Phase actuelle",
+		"compactedPhases": "{{count}} phases",
+		"sessionCompactionHint": "{{count}} phases d'exécution — cliquez pour voir le résumé compacté",
+		"sessionCompaction": "Compaction de session",
+		"criticalPhases": "Étapes clés",
+		"lastError": "Dernière erreur"
 	},
 	"warnings": {
 		"stuck": {
@@ -124,6 +136,7 @@
 		"in_progress": "En cours",
 		"ai_review": "Révision IA",
 		"human_review": "Révision humaine",
+		"build_failed": "Build rouge",
 		"done": "Terminé",
 		"pr_created": "PR créée",
 		"error": "Erreur"
@@ -133,6 +146,8 @@
 		"emptyBacklogHint": "Ajoutez une tâche pour commencer",
 		"emptyQueue": "La file d'attente est vide",
 		"emptyQueueHint": "Les tâches attendront ici lorsque la limite de tâches parallèles sera atteinte",
+		"emptyBuildFailed": "Aucun build rouge",
+		"emptyBuildFailedHint": "Les tâches arrivent ici quand leur pipeline CI/CD échoue — l'agent les répare automatiquement",
 		"emptyInProgress": "Rien en cours",
 		"emptyInProgressHint": "Démarrez une tâche depuis le Backlog",
 		"emptyAiReview": "Aucune tâche en révision",
@@ -175,6 +190,8 @@
 		"deleteError": "Échec de la suppression de certaines tâches",
 		"restoreSuccess": "Tâche restaurée avec succès",
 		"restoreError": "Échec de la restauration de la tâche",
+		"duplicateSuccess": "Tâche dupliquée avec succès",
+		"duplicateError": "Échec de la duplication de la tâche",
 		"undo": "Annuler",
 		"clearSelection": "Effacer la sélection",
 		"mixedColumnWarning": "Colonnes différentes — déplacement impossible",
@@ -197,6 +214,39 @@
 		"expandAll": "Développer toutes les colonnes",
 		"azureDevOpsNotConnected": "Azure DevOps non connecté — cliquez pour configurer",
 		"jiraNotConnected": "Jira non connecté — cliquez pour configurer",
+		"filter": {
+			"button": "Filtrer",
+			"title": "Filtres",
+			"clear": "Réinitialiser",
+			"clearSearch": "Effacer la recherche",
+			"searchPlaceholder": "Rechercher une tâche…",
+			"sourceLabel": "Source",
+			"categoryLabel": "Catégorie",
+			"priorityLabel": "Priorité",
+			"sources": {
+				"azure-devops": "Azure DevOps",
+				"jira": "Jira",
+				"linear": "Linear",
+				"github": "GitHub",
+				"gitlab": "GitLab",
+				"ideation": "Idéation",
+				"roadmap": "Roadmap",
+				"insights": "Insights",
+				"manual": "Manuelle"
+			}
+		},
+		"sort": {
+			"title": "Trier par",
+			"ascending": "Ordre croissant",
+			"descending": "Ordre décroissant",
+			"fields": {
+				"manual": "Ordre manuel",
+				"priority": "Priorité",
+				"created": "Date de création",
+				"updated": "Dernière mise à jour",
+				"title": "Titre"
+			}
+		},
 		"quickCommand": {
 			"placeholder": "Commande rapide (ex. /review, /help)",
 			"buttonLabel": "Exécuter",
@@ -243,20 +293,39 @@
 			"fixing": "Correction",
 			"validation": "Validation",
 			"complete": "Terminé",
-			"failed": "Échoué"
+			"failed": "Échoué",
+			"running": "En cours",
+			"pending": "En attente"
 		},
 		"labels": {
 			"interrupted": "Interrompu",
 			"progress": "Progression",
 			"entry": "entrée",
 			"entries": "entrées",
-			"step": "Étape {{current}}/{{total}}"
+			"step": "Étape {{current}}/{{total}}",
+			"stepScrollHint": "Cliquer pour remonter au début de cette étape",
+			"qaPass": "QA — vérification {{n}}",
+			"thinking": "Traitement en cours"
 		},
 		"shortPhases": {
 			"plan": "Plan",
 			"code": "Code",
 			"qa": "QA",
 			"planTooltip": "Voir le plan d'implémentation"
+		},
+		"activity": {
+			"discoveringContext": "Découverte du contexte du projet…",
+			"gatheringRequirements": "Collecte des exigences…",
+			"writingSpec": "Rédaction de la spécification…",
+			"validatingSpec": "Validation de la spécification…",
+			"specComplete": "Spécification terminée",
+			"creatingPlan": "Création du plan d'implémentation…",
+			"implementingCode": "Implémentation des modifications…",
+			"workingOnSubtask": "Traitement de la sous-tâche {{subtask}}…",
+			"subtaskCompleted": "Sous-tâche {{subtask}} terminée",
+			"fixingQa": "Correction des problèmes QA…",
+			"runningQa": "Revue QA en cours…",
+			"buildPaused": "Build en pause — sous-tâches encore en attente"
 		}
 	},
 	"files": {
@@ -273,6 +342,10 @@
 		"openInIDE": "Ouvrir dans l'IDE"
 	},
 	"visualProof": {
+		"apiSmoke": {
+			"title": "Smoke API —",
+			"summary": "{{passed}}/{{total}} endpoints OK"
+		},
 		"tab": "Preuves visuelles",
 		"title": "Preuve visuelle de la PR",
 		"emptyTitle": "Aucune preuve visuelle pour cette tâche",
@@ -412,6 +485,14 @@
 			"updateFailed": "Échec de la mise à jour de la tâche. Veuillez réessayer."
 		}
 	},
+	"duplicate": {
+		"title": "Dupliquer la tâche",
+		"description": "Ajustez les champs avant de créer la copie. La nouvelle tâche est créée dans le backlog avec sa propre spécification (les pièces jointes sont conservées).",
+		"createButton": "Créer la copie",
+		"errors": {
+			"createFailed": "Échec de la duplication de la tâche. Veuillez réessayer."
+		}
+	},
 	"form": {
 		"description": "Description",
 		"descriptionPlaceholder": "Décrivez la fonctionnalité, la correction de bug ou l'amélioration que vous souhaitez implémenter. Soyez aussi précis que possible sur les exigences, les contraintes et le comportement attendu.",
@@ -424,6 +505,15 @@
 		"requireReviewDescription": "Lorsque activé, vous serez invité à réviser la spécification et le plan d'implémentation avant le début de la phase de codage. Cela vous permet d'approuver, de demander des modifications ou de fournir des commentaires.",
 		"tddModeLabel": "Mode TDD strict (Red-Green-Refactor)",
 		"tddModeDescription": "Lorsque activé, l'agent suit un cycle TDD strict pour cette tâche : écrire d'abord un test qui échoue, puis le code minimal pour le faire passer, puis refactoriser. Remplace le réglage TDD du projet pour cette tâche uniquement.",
+		"stepDetails": "Détails",
+		"stepEngine": "Moteur",
+		"nextStep": "Suivant : moteur",
+		"previousStep": "Retour",
+		"engineStepTitle": "Moteur d'exécution",
+		"engineStepDescription": "Choisissez le provider, le modèle et l'effort pour cette tâche. Chaque phase (spéc., planification, codage, QA) peut utiliser un modèle différent.",
+		"providerLabel": "Provider",
+		"providerPlaceholder": "Sélectionner un provider",
+		"providerHelp": "Les modèles ci-dessous sont propres à ce provider. Enregistré uniquement sur la tâche — ne change pas votre provider global.",
 		"editor": {
 			"bold": "Gras",
 			"italic": "Italique",
@@ -482,8 +572,110 @@
 			}
 		}
 	},
+	"testGen": {
+		"title": "Tests pour les fichiers modifiés",
+		"description": "Génère des tests adaptés à chaque type de fichier, écrits dans le worktree et livrés avec la PR.",
+		"generate_one": "Générer ({{count}})",
+		"generate_other": "Générer ({{count}})",
+		"strategy": {
+			"unit": "Unitaire",
+			"api": "API",
+			"e2e-web": "E2E web",
+			"desktop-ui": "UI desktop"
+		},
+		"written": "Écrit",
+		"failed": "Échec",
+		"emptyResult": "Le générateur n'a produit aucun test.",
+		"doneTitle": "Tests générés",
+		"doneDescription_one": "{{count}} fichier de test écrit dans le worktree.",
+		"doneDescription_other": "{{count}} fichiers de test écrits dans le worktree."
+	},
+	"interview": {
+		"banner": "Clarifiez la spec avant de lancer : l'agent vous pose 3-5 questions ciblées.",
+		"openButton": "Interview de spec",
+		"title": "Interview de spec",
+		"description": "L'agent a analysé la spécification et pose les questions dont les réponses changeraient l'implémentation. Répondez à celles qui vous semblent utiles — les réponses sont ajoutées à la spec.",
+		"generating": "Analyse de la spec et génération des questions… (jusqu'à 1 min)",
+		"generationFailed": "Impossible de générer les questions. Vérifiez vos identifiants LLM puis réessayez.",
+		"retry": "Réessayer",
+		"answerPlaceholder": "Votre réponse (laissez vide pour ignorer cette question)",
+		"useSuggestion": "Utiliser la suggestion",
+		"answeredCount": "{{answered}}/{{total}} réponses",
+		"addToSpec": "Ajouter à la spec",
+		"addAndStart": "Ajouter et lancer",
+		"sectionTitle": "Clarifications (interview)",
+		"savedTitle": "Spec enrichie",
+		"savedDescription_one": "{{count}} réponse ajoutée à la spécification.",
+		"savedDescription_other": "{{count}} réponses ajoutées à la spécification.",
+		"saveErrorTitle": "Échec de l'enregistrement des clarifications"
+	},
+	"executionFormula": {
+		"bannerImported": "Tâche importée — choisissez le provider, le modèle et l'effort avant de la lancer.",
+		"bannerDuplicated": "Tâche dupliquée — choisissez le provider, le modèle et l'effort avant de la lancer.",
+		"chooseButton": "Choisir le moteur",
+		"dismiss": "Ignorer",
+		"appliedLabel": "Moteur :",
+		"editButton": "Modifier",
+		"gate": {
+			"title": "Choisir le provider/LLM/effort d'abord ?",
+			"body": "Cette tâche a été importée ou dupliquée et aucun provider, modèle ou effort n'a encore été choisi. Sélectionnez une formule dans le Formula Lab, ou démarrez maintenant avec les défauts actuels.",
+			"choose": "Choisir le moteur",
+			"startDefaults": "Démarrer avec les défauts",
+			"cancel": "Annuler"
+		}
+	},
+	"reset": {
+		"button": "Réinitialiser la tâche",
+		"confirmTitle": "Réinitialiser complètement la tâche ?",
+		"confirmDescription": "Le plan, les sous-tâches, le worktree et tous les artefacts d'exécution seront supprimés (le travail non commité est sauvegardé dans l'historique git). La spécification est conservée et la tâche retourne dans le backlog. Cette action est irréversible.",
+		"confirm": "Tout réinitialiser",
+		"cancel": "Annuler",
+		"resetting": "Réinitialisation…",
+		"successTitle": "Tâche réinitialisée",
+		"successDescription": "La tâche est revenue dans le backlog avec sa spécification intacte.",
+		"errorTitle": "Échec de la réinitialisation",
+		"errorDescription": "Impossible de réinitialiser la tâche. Consultez les logs pour plus de détails."
+	},
 	"subtasks": {
-		"untitled": "Sous-tâche sans titre"
+		"untitled": "Sous-tâche sans titre",
+		"completedCount": "{{completed}} sur {{total}} terminées",
+		"blockedCount_one": "{{count}} bloquée",
+		"blockedCount_other": "{{count}} bloquées",
+		"failedCount_one": "{{count}} échouée",
+		"failedCount_other": "{{count}} échouées",
+		"blockedReason": "Bloquée : {{reason}}",
+		"blockedGeneric": "Bloquée — intervention manuelle requise",
+		"changeRequest": "Modification demandée",
+		"requestedAt": "Demandée le {{date}}",
+		"filesViewer": {
+			"filesModified_one": "{{count}} fichier modifié",
+			"filesModified_other": "{{count}} fichiers modifiés",
+			"expandAll": "Tout déplier",
+			"collapseAll": "Tout replier",
+			"noFiles": "Aucun fichier modifié pour l'instant",
+			"noFilesHint": "Les fichiers apparaîtront ici au fil des modifications",
+			"loading": "Chargement des modifications…",
+			"loadError": "Impossible de charger les modifications de cette tâche",
+			"viewDiff": "Voir les modifications",
+			"hideDiff": "Masquer les modifications",
+			"noDiff": "Aucune modification enregistrée pour ce fichier",
+			"viewMode": {
+				"unified": "Vue unifiée",
+				"split": "Vue côte à côte"
+			},
+			"stats": {
+				"files": "Fichiers",
+				"folders": "Dossiers",
+				"additions": "Ajouts",
+				"deletions": "Suppressions"
+			},
+			"status": {
+				"added": "Ajouté",
+				"modified": "Modifié",
+				"deleted": "Supprimé",
+				"renamed": "Renommé"
+			}
+		}
 	},
 	"bulkPR": {
 		"selectAllInColumn": "Sélectionner toutes les tâches de la colonne",
@@ -517,12 +709,45 @@
 		"description": "Ajoutez des références visuelles comme des captures d'écran ou des conceptions pour aider l'IA à comprendre vos exigences."
 	},
 	"logs": {
+		"scrollToTop": "Remonter au début",
+		"scrollToTopHint": "Remonter au début (Origine)",
+		"scrollToBottom": "Aller au plus récent",
+		"scrollToBottomHint": "Aller au plus récent (Fin)",
+		"viewportAria": "Journaux de la tâche — Origine pour remonter, Fin pour descendre",
+		"empty": {
+			"title": "Aucun log pour l'instant",
+			"description": "Les logs apparaîtront ici lorsque la tâche s'exécutera"
+		},
+		"phaseEmpty": "Aucun log pour l'instant",
+		"hideOutput": "Masquer la sortie",
+		"showOutput": "Afficher la sortie",
+		"search": {
+			"placeholder": "Rechercher dans les logs…",
+			"ariaLabel": "Rechercher dans les logs",
+			"results_one": "{{count}} résultat",
+			"results_other": "{{count}} résultats",
+			"clear": "Effacer la recherche",
+			"noResults": "Aucun résultat",
+			"noResultsHint": "Aucune entrée de log ne correspond à « {{query}} »."
+		},
 		"thinking": {
 			"selectAria": "Niveau de réflexion pour cette phase",
 			"selectTooltip": "Changer le niveau de réflexion pour cette phase",
 			"updatedTitle": "Réflexion mise à jour",
 			"updatedDesc": "Le niveau de réflexion sera appliqué au démarrage de cette phase.",
 			"updateFailed": "Échec de la mise à jour"
+		},
+		"provider": {
+			"selectAria": "Fournisseur pour cette phase",
+			"selectTooltip": "Changer le fournisseur pour cette phase",
+			"updatedTitle": "Fournisseur mis à jour",
+			"updatedDesc": "Le fournisseur sera appliqué au démarrage de cette phase."
+		},
+		"model": {
+			"selectAria": "Modèle pour cette phase",
+			"selectTooltip": "Changer le modèle pour cette phase",
+			"updatedTitle": "Modèle mis à jour",
+			"updatedDesc": "Le modèle sera appliqué au démarrage de cette phase."
 		}
 	},
 	"modal": {
@@ -555,20 +780,32 @@
 			"syncFromBranch": "Synchroniser depuis une branche",
 			"taskControls": "Contrôles de la tâche",
 			"taskIsPaused": "Tâche en pause",
-			"providerSwitch": "Changement de provider LLM",
-			"providerSwitchDesc": "Met la tâche en pause à la fin de l'étape en cours, puis vous laisse choisir un autre LLM.",
+			"providerSwitch": "Changer de LLM en cours d'exécution",
+			"providerSwitchDesc": "Override à chaud : met la tâche en pause à la fin de l'étape en cours, puis la reprend avec un autre LLM. Pour les étapes non démarrées, utilisez plutôt les sélecteurs LLM de chaque phase ci-dessus.",
 			"providerSwitchPaused": "Tâche en pause",
-			"providerSwitchPausedDesc": "Choisissez un provider et un modèle, puis reprenez la tâche.",
+			"providerSwitchPausedDesc": "Choisissez un provider, un modèle et un niveau d'effort, puis reprenez la tâche.",
 			"pauseToSwitch": "Mettre en pause et changer de LLM",
+			"pauseToSwitchShort": "Mettre en pause",
+			"providerSwitchInfoAria": "Détails du changement de LLM",
 			"pauseToSwitchTooltip": "La tâche termine l'étape en cours puis s'arrête. Vous pourrez alors choisir un provider et un modèle, puis reprendre.",
-			"pauseRequestedTitle": "Pause demandée",
-			"pauseRequestedDesc": "La tâche s'arrêtera à la fin de l'étape en cours.",
+			"pauseUnavailableTooltip": "Le changement à chaud n'est possible que pendant l'exécution. Pour les étapes non démarrées, choisissez le LLM directement dans les sélecteurs de chaque phase ci-dessus.",
+			"pauseRequestedTitle": "Tâche en pause",
+			"pauseRequestedDesc": "Exécution interrompue immédiatement. Reprenez quand vous voulez depuis le dernier point de contrôle.",
 			"pauseFailed": "Échec de la mise en pause",
-			"pausingInProgress": "Pause en cours… fin de l'étape en cours",
+			"pausingInProgress": "Pause en cours…",
+			"pauseTask": "Mettre en pause",
+			"pausingShort": "Pause en cours…",
+			"pauseTooltip": "Met la tâche en pause immédiatement — reprenable à tout moment",
+			"resumeTooltip": "Reprendre l'exécution depuis le point de pause",
+			"stopTooltip": "Arrête complètement la tâche (le travail en cours n'est pas repris)",
+			"resumeRequestedTitle": "Reprise de la tâche",
+			"resumeRequestedDesc": "La tâche repart là où elle s'était arrêtée.",
+			"resumeFailed": "Échec de la reprise",
 			"loadingProviders": "Chargement des providers…",
 			"noConfiguredProviders": "Aucun provider configuré. Ajoutez une clé API dans les Paramètres.",
 			"chooseProvider": "Provider",
 			"chooseModel": "Modèle",
+			"chooseEffort": "Effort",
 			"resumeWithChosenLlm": "Reprendre avec ce LLM",
 			"resumeSameProvider": "Reprendre sans changer de LLM",
 			"previousTask": "Tâche précédente",
@@ -584,6 +821,13 @@
 			"approvePlan": "Approuver le plan",
 			"stopped": "Arrêté",
 			"qaIssues": "Problèmes QA"
+		},
+		"move": {
+			"trigger": "Déplacer la tâche vers une autre colonne",
+			"label": "Déplacer vers",
+			"successTitle": "Tâche déplacée",
+			"successDescription": "Tâche déplacée vers « {{status}} ».",
+			"worktreeBlocked": "Déplacement impossible : un worktree actif existe pour cette tâche. Confirmez le nettoyage du worktree depuis le tableau Kanban."
 		},
 		"progress": {
 			"subtasks": "{{completed}}/{{total}} sous-tâches"
@@ -635,7 +879,12 @@
 			"approving": "Approbation en cours...",
 			"rejecting": "Rejet en cours...",
 			"rejectionReason": "Raison des modifications (optionnel)",
-			"rejectionPlaceholder": "Décrivez ce qui doit être modifié dans le plan..."
+			"rejectionPlaceholder": "Décrivez ce qui doit être modifié dans le plan...",
+			"conflictsChecking": "Vérification des chevauchements de fichiers avec les tâches parallèles...",
+			"conflictsNone": "Aucun chevauchement de fichiers avec les autres tâches actives",
+			"conflictsTitle": "Conflits potentiels avec des tâches parallèles",
+			"conflictsDescription": "{{count}} fichier(s) de ce plan sont aussi modifiés par d'autres tâches actives. La fusion des deux worktrees provoquera probablement un conflit — terminez une tâche d'abord ou ajustez le plan.",
+			"conflictsMoreFiles": "+{{count}} autre(s) fichier(s)"
 		}
 	}
 }

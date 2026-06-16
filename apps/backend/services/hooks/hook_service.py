@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..notifications.channels import build_payload, build_text_payload, post_json
+from ..notifications.models import NotificationChannel, PRReadyNotification
 from .models import (
     Action,
     ActionType,
@@ -35,6 +37,76 @@ from .models import (
 from .templates import get_hook_templates, get_template_by_id
 
 logger = logging.getLogger(__name__)
+
+
+# ── Outbound channel actions (Slack / Teams / Discord / Google Chat) ─────────
+
+# Maps each send_* action type to its channel and the env var holding the
+# default webhook URL (action.config["url"] always wins).
+_CHANNEL_ACTION_MAP: dict[ActionType, tuple[NotificationChannel, str]] = {
+    ActionType.SEND_SLACK: (NotificationChannel.SLACK, "SLACK_WEBHOOK_URL"),
+    ActionType.SEND_TEAMS: (NotificationChannel.TEAMS, "TEAMS_WEBHOOK_URL"),
+    ActionType.SEND_DISCORD: (NotificationChannel.DISCORD, "DISCORD_WEBHOOK_URL"),
+    ActionType.SEND_GOOGLE_CHAT: (
+        NotificationChannel.GOOGLE_CHAT,
+        "GOOGLE_CHAT_WEBHOOK_URL",
+    ),
+}
+
+
+def _notification_from_event(event_data: dict[str, Any]) -> PRReadyNotification | None:
+    """Build a rich PR-ready notification from a pr_* event's data, if possible."""
+    if not event_data.get("pr_url") and event_data.get("event") != "pr_ready":
+        return None
+    return PRReadyNotification(
+        task_title=str(event_data.get("task_title") or event_data.get("title") or ""),
+        task_description=event_data.get("task_description") or None,
+        pr_url=event_data.get("pr_url") or None,
+        project_name=event_data.get("project_name") or None,
+        branch=event_data.get("branch") or None,
+        target_branch=event_data.get("target_branch") or None,
+        spec_id=event_data.get("spec_id") or None,
+    )
+
+
+async def _execute_channel_send(
+    action: Action, event: HookEvent, result: dict[str, Any]
+) -> None:
+    """Execute a send_slack/send_teams/send_discord/send_google_chat action.
+
+    Uses action.config["url"] (or the channel's env var) as webhook URL.
+    With an explicit config["message"], sends interpolated plain text;
+    otherwise, for PR events, sends the rich per-channel PR card.
+    """
+    channel, env_key = _CHANNEL_ACTION_MAP[action.type]
+    url = str(action.config.get("url") or os.environ.get(env_key, "")).strip()
+    if not url:
+        raise ValueError(
+            f"{action.type.value} requires config['url'] or the {env_key} env var"
+        )
+
+    message = _interpolate(str(action.config.get("message", "")), event.data)
+    if message:
+        payload = build_text_payload(channel, message)
+    else:
+        notif = _notification_from_event(event.data)
+        if notif is None:
+            raise ValueError(
+                f"{action.type.value} has no config['message'] and the event "
+                "carries no PR data to build a card from"
+            )
+        payload = build_payload(channel, notif)
+
+    success, status_code, error = await asyncio.to_thread(post_json, url, payload)
+    result["output"] = {
+        "action": action.type.value,
+        "channel": channel.value,
+        "status_code": status_code,
+        "status": "sent" if success else "failed",
+    }
+    if not success:
+        result["status"] = "failed"
+        result["error"] = error
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -269,21 +341,37 @@ async def _execute_action(
             logger.info("[HookEngine] Creating PR")
             result["output"] = {"action": "create_pr", "status": "created"}
 
-        elif action.type == ActionType.SEND_SLACK:
-            channel = action.config.get("channel", "#general")
-            message = _interpolate(action.config.get("message", ""), event.data)
-            logger.info("[HookEngine] Slack → %s: %s", channel, message[:100])
-            result["output"] = {
-                "action": "send_slack",
-                "channel": channel,
-                "message": message,
-                "status": "sent",
-            }
+        elif action.type in _CHANNEL_ACTION_MAP:
+            # send_slack / send_teams / send_discord / send_google_chat
+            logger.info("[HookEngine] %s → sending", action.type.value)
+            await _execute_channel_send(action, event, result)
 
         elif action.type == ActionType.SEND_WEBHOOK:
-            url = action.config.get("url", "")
+            url = str(action.config.get("url", "")).strip()
+            if not url:
+                raise ValueError("SEND_WEBHOOK requires config['url']")
+            # Custom payload (string values are interpolated) or raw event data
+            raw_payload = action.config.get("payload")
+            if isinstance(raw_payload, dict):
+                payload = {
+                    k: _interpolate(v, event.data) if isinstance(v, str) else v
+                    for k, v in raw_payload.items()
+                }
+            else:
+                payload = event.to_dict()
             logger.info("[HookEngine] Webhook → %s", url)
-            result["output"] = {"action": "send_webhook", "url": url, "status": "sent"}
+            success, status_code, error = await asyncio.to_thread(
+                post_json, url, payload
+            )
+            result["output"] = {
+                "action": "send_webhook",
+                "url": url,
+                "status_code": status_code,
+                "status": "sent" if success else "failed",
+            }
+            if not success:
+                result["status"] = "failed"
+                result["error"] = error
 
         elif action.type == ActionType.CHAIN_HOOK:
             target_hook_id = action.config.get("hook_id", "")

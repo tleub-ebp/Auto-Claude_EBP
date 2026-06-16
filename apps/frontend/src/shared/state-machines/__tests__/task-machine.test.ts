@@ -301,6 +301,38 @@ describe("taskMachine", () => {
 			const snapshot = runEvents(events);
 			expect(snapshot.value).toBe("done");
 		});
+
+		it("should re-enter planning from error on relaunch (PLANNING_STARTED)", () => {
+			// Relancer une tache en echec doit reprendre le pipeline actif,
+			// sinon le garde "settled-state" bloque la progression cote frontend.
+			const events: TaskEvent[] = [
+				{ type: "PLANNING_STARTED" },
+				{ type: "PLANNING_FAILED", error: "Test error", recoverable: false },
+				{ type: "PLANNING_STARTED" },
+			];
+
+			const snapshot = runEvents(events);
+			expect(snapshot.value).toBe("planning");
+			expect(snapshot.context.reviewReason).toBeUndefined();
+			expect(snapshot.context.error).toBeUndefined();
+		});
+
+		it("should re-enter coding from error on relaunch (CODING_STARTED)", () => {
+			const events: TaskEvent[] = [
+				{ type: "PLANNING_STARTED" },
+				{ type: "PLANNING_FAILED", error: "Test error", recoverable: false },
+				{
+					type: "CODING_STARTED",
+					subtaskId: "sub1",
+					subtaskDescription: "Implement feature",
+				},
+			];
+
+			const snapshot = runEvents(events);
+			expect(snapshot.value).toBe("coding");
+			expect(snapshot.context.reviewReason).toBeUndefined();
+			expect(snapshot.context.error).toBeUndefined();
+		});
 	});
 
 	describe("user stop/resume", () => {

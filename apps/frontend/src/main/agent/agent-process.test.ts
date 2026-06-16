@@ -267,7 +267,7 @@ import * as rateLimitDetector from "../rate-limit-detector";
 import * as profileService from "../services/profile";
 import { AgentEvents } from "./agent-events";
 // Import AFTER all mocks are set up
-import { AgentProcessManager } from "./agent-process";
+import { AgentProcessManager, resolveExitFailure } from "./agent-process";
 import { AgentState } from "./agent-state";
 
 describe("AgentProcessManager - API Profile Env Injection (Story 2.3)", () => {
@@ -1104,5 +1104,44 @@ describe("AgentProcessManager - API Profile Env Injection (Story 2.3)", () => {
 			expect(envArg.CLAUDE_CLI_PATH).toBe("/opt/homebrew/bin/claude");
 			expect(envArg.GITHUB_CLI_PATH).toBe("/opt/homebrew/bin/gh");
 		});
+	});
+});
+
+describe("resolveExitFailure - backend exit without terminal phase", () => {
+	it("retourne null lorsque le pipeline est terminé (complete)", () => {
+		expect(resolveExitFailure(0, "complete")).toBeNull();
+	});
+
+	it("retourne null lorsque le pipeline a déjà échoué (failed)", () => {
+		expect(resolveExitFailure(1, "failed")).toBeNull();
+	});
+
+	it("signale un échec quand le processus meurt en code 0 au milieu du coding", () => {
+		const result = resolveExitFailure(0, "coding");
+		expect(result).not.toBeNull();
+		expect(result?.message).toBe(
+			"Le processus backend s'est arrêté avant la fin du pipeline",
+		);
+	});
+
+	it("signale un échec quand le processus est tué (code null) en planning", () => {
+		const result = resolveExitFailure(null, "planning");
+		expect(result).not.toBeNull();
+		expect(result?.message).toBe(
+			"Le processus backend s'est arrêté avant la fin du pipeline",
+		);
+	});
+
+	it("conserve le code de sortie dans le message pour un échec non nul", () => {
+		const result = resolveExitFailure(137, "coding");
+		expect(result?.message).toBe("Process exited with code 137");
+	});
+
+	it("ne signale pas d'échec pour une phase en pause (rate limit)", () => {
+		expect(resolveExitFailure(0, "rate_limit_paused")).toBeNull();
+	});
+
+	it("ne signale pas d'échec pour une phase en pause (auth)", () => {
+		expect(resolveExitFailure(1, "auth_failure_paused")).toBeNull();
 	});
 });

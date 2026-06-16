@@ -569,3 +569,519 @@ class TestSessionProviderRouting:
         assert status == "complete"
         assert "Task implemented successfully" in text
         assert error_info == {}
+
+
+class TestCopilotWriteNowNudge:
+    """The planner/spec_writer turn-budget safeguard.
+
+    On large brownfield codebases the model can exhaust its turn budget on
+    read-only investigation and never call the Write tool, so the planning
+    phase fails with 'Did not create plan file'. ``receive_response`` must inject
+    a one-time 'write now' directive when the Write tool is still unused and few
+    turns remain — and must NOT inject it once the plan has been written.
+    """
+
+    def _make_client(self, max_turns: int):
+        client = CopilotAgentClient(
+            model="claude-sonnet-4.6",
+            cwd=".",
+            max_turns=max_turns,
+            github_token="ghp_test",
+            agent_type="spec_writer",
+        )
+        # Expose the Write tool, as get_tool_definitions does for spec_writer.
+        client._tool_definitions = [
+            {"name": "run_command", "description": "", "parameters": {}},
+            {"name": "Write", "description": "", "parameters": {}},
+        ]
+        # Avoid real network / token exchange.
+        client._get_copilot_token = AsyncMock(return_value="copilot-token")
+        client._tool_executor = MagicMock()
+        client._tool_executor.execute = AsyncMock(return_value="ok")
+        return client
+
+    def _fake_session(self, responses, captured):
+        """Build a fake aiohttp session whose .post replays queued responses.
+
+        ``responses`` is a list of (content, tool_calls, finish_reason) tuples,
+        one per turn. Each POST payload's messages are appended to ``captured``.
+        """
+
+        class _Resp:
+            def __init__(self, data):
+                self._data = data
+                self.status = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def json(self):
+                return self._data
+
+            async def text(self):
+                return ""
+
+        class _Session:
+            def __init__(self):
+                self._turn = 0
+
+            def post(self, url, json=None, headers=None):
+                captured.append([dict(m) for m in json["messages"]])
+                content, tool_calls, finish = responses[self._turn]
+                self._turn += 1
+                return _Resp(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": content,
+                                    "tool_calls": tool_calls,
+                                },
+                                "finish_reason": finish,
+                            }
+                        ]
+                    }
+                )
+
+        return _Session()
+
+    def _run_command_call(self, idx):
+        return [
+            {
+                "id": f"call_{idx}",
+                "function": {
+                    "name": "run_command",
+                    "arguments": '{"command": "dir"}',
+                },
+            }
+        ]
+
+    def test_nudge_injected_when_write_never_called(self):
+        """Endless investigation triggers a one-time 'write now' nudge."""
+        # Window opens when (max_turns - turn) <= 8, i.e. turn >= 12 here.
+        max_turns = 20
+        client = self._make_client(max_turns)
+
+        # Model keeps investigating every turn, never writing, well past the
+        # point the nudge window opens, then finally stops so the loop ends.
+        responses = [("", self._run_command_call(i), "tool_calls") for i in range(14)]
+        responses.append(("done", [], "stop"))
+
+        captured: list = []
+        client._get_http_client = lambda: self._fake_session(responses, captured)
+
+        async def _drive():
+            client._pending_query = "plan it"
+            async for _ in client.receive_response():
+                pass
+
+        asyncio.run(_drive())
+
+        nudge_seen = any(
+            msg.get("role") == "user"
+            and "STOP investigating" in msg.get("content", "")
+            for payload in captured
+            for msg in payload
+        )
+        assert nudge_seen, "Expected a 'write now' nudge to be injected"
+
+        # The directive must be ADDED only once: it is resent in later payloads
+        # (it lives in the message history) but never duplicated within one.
+        for payload in captured:
+            per_payload = sum(
+                1
+                for msg in payload
+                if msg.get("role") == "user"
+                and "STOP investigating" in msg.get("content", "")
+            )
+            assert per_payload <= 1
+
+    def test_no_nudge_when_write_tool_used(self):
+        """Once the model writes the plan, no nudge is injected."""
+        # Large budget so the nudge window (turn >= 12) is never reached before
+        # the model writes and stops on the first turns.
+        max_turns = 20
+        client = self._make_client(max_turns)
+
+        write_call = [
+            {
+                "id": "call_w",
+                "function": {
+                    "name": "Write",
+                    "arguments": '{"file_path": "implementation_plan.json", '
+                    '"CodeContent": "{}", "EmptyFile": false}',
+                },
+            }
+        ]
+        # Writes on the very first turn, then stops.
+        responses = [("", write_call, "tool_calls"), ("done", [], "stop")]
+
+        captured: list = []
+        client._get_http_client = lambda: self._fake_session(responses, captured)
+
+        async def _drive():
+            client._pending_query = "plan it"
+            async for _ in client.receive_response():
+                pass
+
+        asyncio.run(_drive())
+
+        nudge_seen = any(
+            msg.get("role") == "user"
+            and "STOP investigating" in msg.get("content", "")
+            for payload in captured
+            for msg in payload
+        )
+        assert not nudge_seen, "Nudge must not fire once the Write tool was used"
+
+    def test_early_stop_without_write_forces_retry(self):
+        """Model that 'finishes' in prose without writing is forced to retry.
+
+        This is the real-world failure: the planner explores briefly then stops
+        (finish_reason=stop, no tool_calls) describing the plan in text. The
+        client must refuse that early stop and push the model to call Write.
+        """
+        max_turns = 20
+        client = self._make_client(max_turns)
+
+        write_call = [
+            {
+                "id": "call_w",
+                "function": {
+                    "name": "Write",
+                    "arguments": '{"file_path": "implementation_plan.json", '
+                    '"CodeContent": "{}", "EmptyFile": false}',
+                },
+            }
+        ]
+        # Turn 1: stops early with prose, no tool calls (the bug).
+        # Turn 2 (after forced retry): finally writes the plan.
+        # Turn 3: stops cleanly now that the file exists.
+        responses = [
+            ("Here is the plan: phase 1 ... phase 2 ...", [], "stop"),
+            ("", write_call, "tool_calls"),
+            ("done", [], "stop"),
+        ]
+
+        captured: list = []
+        client._get_http_client = lambda: self._fake_session(responses, captured)
+
+        async def _drive():
+            client._pending_query = "plan it"
+            async for _ in client.receive_response():
+                pass
+
+        asyncio.run(_drive())
+
+        # The forced-write directive must have been injected after the early stop.
+        forced = any(
+            msg.get("role") == "user"
+            and "call the write tool now" in msg.get("content", "").lower()
+            for payload in captured
+            for msg in payload
+        )
+        assert forced, "Expected a forced-write retry after the early stop"
+
+        # And the Write tool must actually have been executed (turn 2 ran).
+        client._tool_executor.execute.assert_awaited()
+        executed_tools = [
+            call.args[0] for call in client._tool_executor.execute.await_args_list
+        ]
+        assert "Write" in executed_tools
+
+
+class TestCopilotRequestRetry:
+    """A hung/stalled Copilot API response must be retried, not hang forever.
+
+    Without a timeout + retry a single stalled HTTP response froze the whole
+    planning phase (the socket stayed open, the agent loop never advanced) and
+    the frontend appeared stuck. ``receive_response`` must retry transient
+    timeout/connection errors and recover once a good response arrives.
+    """
+
+    def _make_client(self, max_turns: int = 5):
+        client = CopilotAgentClient(
+            model="claude-sonnet-4.6",
+            cwd=".",
+            max_turns=max_turns,
+            github_token="ghp_test",
+            agent_type="spec_writer",
+        )
+        client._tool_definitions = [
+            {"name": "run_command", "description": "", "parameters": {}},
+        ]
+        client._get_copilot_token = AsyncMock(return_value="copilot-token")
+        client._tool_executor = MagicMock()
+        client._tool_executor.execute = AsyncMock(return_value="ok")
+        return client
+
+    def _flaky_session(self, fail_times: int, attempts_counter: list, exc=None):
+        """Session whose .post raises ``exc`` ``fail_times`` times, then returns
+        a clean 'stop' response. ``exc`` defaults to a TimeoutError factory."""
+
+        if exc is None:
+            exc = lambda: asyncio.TimeoutError("simulated stalled response")
+
+        class _Resp:
+            def __init__(self, data):
+                self._data = data
+                self.status = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def json(self):
+                return self._data
+
+            async def text(self):
+                return ""
+
+        class _Session:
+            def __init__(self):
+                self._calls = 0
+
+            def post(self, url, json=None, headers=None):
+                self._calls += 1
+                attempts_counter.append(self._calls)
+                if self._calls <= fail_times:
+                    raise exc()
+                return _Resp(
+                    {
+                        "choices": [
+                            {
+                                "message": {"content": "done", "tool_calls": []},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    }
+                )
+
+        return _Session()
+
+    def test_retries_then_recovers(self):
+        """Two stalled attempts, third succeeds — the session completes."""
+        client = self._make_client()
+        attempts: list = []
+        client._get_http_client = lambda: self._flaky_session(2, attempts)
+
+        texts: list = []
+
+        async def _drive():
+            client._pending_query = "plan it"
+            async for msg in client.receive_response():
+                for block in msg.content:
+                    if getattr(block, "text", None):
+                        texts.append(block.text)
+
+        with patch("asyncio.sleep", new=AsyncMock()):
+            asyncio.run(_drive())
+
+        # Three POST attempts total (2 failures + 1 success).
+        assert len(attempts) == 3
+        assert any("done" in t for t in texts)
+
+    def test_fails_after_exhausting_retries(self):
+        """All attempts stall — the loop gives up with an error, not a hang."""
+        client = self._make_client()
+        attempts: list = []
+        client._get_http_client = lambda: self._flaky_session(99, attempts)
+
+        texts: list = []
+
+        async def _drive():
+            client._pending_query = "plan it"
+            async for msg in client.receive_response():
+                for block in msg.content:
+                    if getattr(block, "text", None):
+                        texts.append(block.text)
+
+        with patch("asyncio.sleep", new=AsyncMock()):
+            asyncio.run(_drive())
+
+        # A full-duration timeout gets a tighter retry budget than a connection
+        # error (each timeout retry costs another full ceiling). With
+        # _COPILOT_TIMEOUT_MAX_RETRIES=2 that is 1 initial + 2 retries = 3
+        # attempts, then a terminal error message — not the connection-error
+        # budget of 4.
+        assert len(attempts) == 3
+        assert any("timeout/connection" in t.lower() for t in texts)
+
+    def test_connection_error_gets_larger_retry_budget(self):
+        """A transient CONNECTION error keeps the full (cheap) retry budget.
+
+        Unlike a full-duration timeout, a connection error fails fast, so it is
+        retried _COPILOT_REQUEST_MAX_RETRIES times: 1 initial + 3 retries = 4
+        attempts before giving up. This locks in the timeout-vs-connection
+        distinction so the two budgets can't silently collapse together.
+        """
+        import aiohttp
+
+        client = self._make_client()
+        attempts: list = []
+        client._get_http_client = lambda: self._flaky_session(
+            99, attempts, exc=lambda: aiohttp.ClientConnectionError("reset")
+        )
+
+        texts: list = []
+
+        async def _drive():
+            client._pending_query = "plan it"
+            async for msg in client.receive_response():
+                for block in msg.content:
+                    if getattr(block, "text", None):
+                        texts.append(block.text)
+
+        with patch("asyncio.sleep", new=AsyncMock()):
+            asyncio.run(_drive())
+
+        assert len(attempts) == 4
+        assert any("timeout/connection" in t.lower() for t in texts)
+
+
+class TestCopilotEmptyToolCallsGuard:
+    """Cap consecutive empty ``finish_reason=tool_calls`` responses.
+
+    Claude via the OpenAI-compatible Copilot API sometimes returns
+    ``finish_reason=tool_calls`` with an EMPTY tool_calls array. We re-prompt
+    and retry, which normally recovers — but a pathological model that never
+    emits a real call would otherwise spin through the entire turn budget. The
+    guard aborts after a bounded number of CONSECUTIVE empties, and the counter
+    must reset whenever a turn does real work.
+    """
+
+    def _make_client(self, max_turns: int = 50):
+        client = CopilotAgentClient(
+            model="claude-sonnet-4.6",
+            cwd=".",
+            max_turns=max_turns,
+            github_token="ghp_test",
+            agent_type="coder",
+        )
+        client._tool_definitions = [
+            {"name": "run_command", "description": "", "parameters": {}},
+        ]
+        client._get_copilot_token = AsyncMock(return_value="copilot-token")
+        client._tool_executor = MagicMock()
+        client._tool_executor.execute = AsyncMock(return_value="ok")
+        return client
+
+    def _fake_session(self, responses, attempts_counter):
+        """Replay queued (content, tool_calls, finish_reason) tuples per POST."""
+
+        class _Resp:
+            def __init__(self, data):
+                self._data = data
+                self.status = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def json(self):
+                return self._data
+
+            async def text(self):
+                return ""
+
+        class _Session:
+            def __init__(self):
+                self._turn = 0
+
+            def post(self, url, json=None, headers=None):
+                attempts_counter.append(self._turn)
+                content, tool_calls, finish = responses[self._turn]
+                self._turn += 1
+                return _Resp(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": content,
+                                    "tool_calls": tool_calls,
+                                },
+                                "finish_reason": finish,
+                            }
+                        ]
+                    }
+                )
+
+        return _Session()
+
+    def _run_command_call(self, idx):
+        return [
+            {
+                "id": f"call_{idx}",
+                "function": {
+                    "name": "run_command",
+                    "arguments": '{"command": "dir"}',
+                },
+            }
+        ]
+
+    def test_aborts_after_consecutive_empty_tool_calls(self):
+        """An endless stream of empty tool_calls stops well before max_turns."""
+        from core import agent_client as _ac
+
+        client = self._make_client(max_turns=50)
+        # Always return finish_reason=tool_calls with an empty array.
+        responses = [("thinking...", [], "tool_calls") for _ in range(50)]
+        attempts: list = []
+        client._get_http_client = lambda: self._fake_session(responses, attempts)
+
+        texts: list = []
+
+        async def _drive():
+            client._pending_query = "do it"
+            async for msg in client.receive_response():
+                for block in msg.content:
+                    if getattr(block, "text", None):
+                        texts.append(block.text)
+
+        asyncio.run(_drive())
+
+        # Guard fires after the cap is exceeded — far fewer than max_turns.
+        cap = _ac._COPILOT_MAX_CONSECUTIVE_EMPTY_TOOL_CALLS
+        assert len(attempts) == cap + 1
+        assert any("infinite loop" in t.lower() for t in texts)
+
+    def test_counter_resets_after_real_work(self):
+        """Intermittent empties never trip the guard when work happens between."""
+        from core import agent_client as _ac
+
+        cap = _ac._COPILOT_MAX_CONSECUTIVE_EMPTY_TOOL_CALLS
+        client = self._make_client(max_turns=50)
+
+        # Alternate: empty, real tool call, empty, real call... then stop. No run
+        # of empties ever reaches the cap, so the session must complete normally.
+        responses = []
+        for i in range(cap + 3):
+            responses.append(("thinking...", [], "tool_calls"))
+            responses.append(("", self._run_command_call(i), "tool_calls"))
+        responses.append(("all done", [], "stop"))
+
+        attempts: list = []
+        client._get_http_client = lambda: self._fake_session(responses, attempts)
+
+        texts: list = []
+
+        async def _drive():
+            client._pending_query = "do it"
+            async for msg in client.receive_response():
+                for block in msg.content:
+                    if getattr(block, "text", None):
+                        texts.append(block.text)
+
+        asyncio.run(_drive())
+
+        # Reached the natural 'stop', not the guard abort.
+        assert any("all done" in t for t in texts)
+        assert not any("infinite loop" in t.lower() for t in texts)
+

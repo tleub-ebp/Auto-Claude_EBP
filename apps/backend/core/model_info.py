@@ -51,6 +51,21 @@ def get_current_model_info() -> dict[str, str]:
 def _detect_provider_from_env() -> str | None:
     """Detect which provider is likely configured based on environment variables."""
 
+    # Highest priority: explicit provider signal injected by the frontend into the
+    # agent subprocess. `SELECTED_LLM_PROVIDER` is set by the credential manager and
+    # `AUTO_CLAUDE_PROVIDER` is the generic override. This MUST win over the API-key
+    # heuristics below, because GitHub Copilot authenticates with an
+    # Anthropic-compatible token (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY) and
+    # would otherwise be mislabelled as the "anthropic" provider in the logs.
+    explicit = (
+        (os.getenv("SELECTED_LLM_PROVIDER") or os.getenv("AUTO_CLAUDE_PROVIDER") or "")
+        .strip()
+        .lower()
+    )
+    if explicit:
+        # "claude" is an alias used by some frontend code paths for Anthropic.
+        return "anthropic" if explicit == "claude" else explicit
+
     # Check in order of preference
     if (
         os.getenv("ANTHROPIC_API_KEY")
@@ -200,11 +215,12 @@ def _get_model_info_for_provider(provider: str) -> dict[str, str]:
 def _format_anthropic_model_label(model: str) -> str:
     """Format Anthropic model label for display."""
     model_labels = {
+        "claude-fable-5": "Claude Fable 5",
         "claude-opus-4-8": "Claude Opus 4.8",
-        "claude-sonnet-4-8": "Claude Sonnet 4.8",
-        "claude-haiku-4-8": "Claude Haiku 4.8",
         "claude-opus-4-7": "Claude Opus 4.7",
         "claude-opus-4-6": "Claude Opus 4.6",
+        "claude-sonnet-4-8": "Claude Sonnet 4.8",
+        "claude-haiku-4-8": "Claude Haiku 4.8",
         "claude-sonnet-4-5-20250929": "Claude Sonnet 4.5",
         "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
         "claude-opus-4-5-20251101": "Claude Opus 4.5",

@@ -486,6 +486,196 @@ class TestCopilotAgentClient:
         assert "401" in messages[0].content[0].text
 
     @pytest.mark.asyncio
+    async def test_receive_response_429_retries_then_recovers(self):
+        """A 429 rate-limit must be retried (not aborted) and then recover.
+
+        Reproduces the "I still have tokens but get a 429" symptom: GitHub
+        Copilot's per-minute request rate limit returns 429 even with quota
+        left. The client should ride out the short window and continue
+        processing instead of surfacing a "Copilot API error (429)".
+        """
+        import core.agent_client as agent_client_module
+
+        client = CopilotAgentClient(github_token="ghp_test", max_turns=5)
+        await client.query("hello")
+
+        def make_429():
+            resp = MagicMock()
+            resp.status = 429
+            resp.headers = {"Retry-After": "1"}
+            resp.text = AsyncMock(
+                return_value='{"error":{"message":"rate-limited"}}'
+            )
+            resp.__aenter__ = AsyncMock(return_value=resp)
+            resp.__aexit__ = AsyncMock(return_value=None)
+            return resp
+
+        def make_ok():
+            resp = MagicMock()
+            resp.status = 200
+            resp.json = AsyncMock(
+                return_value={
+                    "choices": [
+                        {"message": {"content": "Recovered!", "tool_calls": []}}
+                    ]
+                }
+            )
+            resp.__aenter__ = AsyncMock(return_value=resp)
+            resp.__aexit__ = AsyncMock(return_value=None)
+            return resp
+
+        # Two 429s (transient per-minute limit), then a successful turn.
+        responses = iter([make_429(), make_429(), make_ok()])
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(side_effect=lambda *a, **k: next(responses))
+        client._http_client = mock_session
+
+        with patch.object(
+            client, "_get_copilot_token", return_value="mock_token"
+        ), patch.object(
+            agent_client_module, "_COPILOT_RATE_LIMIT_BACKOFF", 0.0
+        ), patch("asyncio.sleep", new=AsyncMock()):
+            messages = []
+            async for msg in client.receive_response():
+                messages.append(msg)
+
+        texts = [
+            b.text
+            for m in messages
+            for b in m.content
+            if b.type == ContentBlockType.TEXT
+        ]
+        assert "Recovered!" in texts
+        assert not any("429" in t for t in texts)
+
+    @pytest.mark.asyncio
+    async def test_receive_response_429_gives_up_after_cap(self):
+        """Persistent 429s eventually surface the error after the retry budget."""
+        import core.agent_client as agent_client_module
+
+        client = CopilotAgentClient(github_token="ghp_test", max_turns=5)
+        await client.query("hello")
+
+        def make_429():
+            resp = MagicMock()
+            resp.status = 429
+            resp.headers = {}
+            resp.text = AsyncMock(return_value="rate-limited")
+            resp.__aenter__ = AsyncMock(return_value=resp)
+            resp.__aexit__ = AsyncMock(return_value=None)
+            return resp
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(side_effect=lambda *a, **k: make_429())
+        client._http_client = mock_session
+
+        with patch.object(
+            client, "_get_copilot_token", return_value="mock_token"
+        ), patch.object(
+            agent_client_module, "_COPILOT_RATE_LIMIT_MAX_RETRIES", 2
+        ), patch.object(
+            agent_client_module, "_COPILOT_RATE_LIMIT_BACKOFF", 0.0
+        ), patch("asyncio.sleep", new=AsyncMock()) as mock_sleep:
+            messages = []
+            async for msg in client.receive_response():
+                messages.append(msg)
+
+        # Retried exactly the budgeted number of times before giving up.
+        assert mock_sleep.await_count == 2
+        assert messages[-1].role == MessageRole.SYSTEM
+        assert "429" in messages[-1].content[0].text
+
+    def test_init_normalizes_anthropic_versioned_model_for_copilot(self):
+        """Dash-versioned Anthropic ids are converted to Copilot dotted notation.
+
+        Copilot rejects "claude-sonnet-4-5" with 400 model_not_supported; the
+        client must send "claude-sonnet-4.5" instead.
+        """
+        client = CopilotAgentClient(
+            model="claude-sonnet-4-5-20250929", github_token="ghp_test"
+        )
+        assert client.model == "claude-sonnet-4.5"
+
+        client2 = CopilotAgentClient(model="claude-opus-4-6", github_token="ghp_test")
+        assert client2.model == "claude-opus-4.6"
+
+        # Already-dotted / non-Claude ids are left untouched.
+        assert (
+            CopilotAgentClient(
+                model="claude-opus-4.8", github_token="ghp_test"
+            ).model
+            == "claude-opus-4.8"
+        )
+        assert (
+            CopilotAgentClient(model="gpt-5.5", github_token="ghp_test").model
+            == "gpt-5.5"
+        )
+
+    @pytest.mark.asyncio
+    async def test_receive_response_400_model_not_supported_falls_back(self):
+        """A 400 model_not_supported swaps the model and retries (no phase fail).
+
+        Reproduces the QA validation failure where Copilot rejected the model
+        with `{"code":"model_not_supported"}`. The client must fall back to a
+        supported model and recover instead of surfacing the 400 error.
+        """
+        client = CopilotAgentClient(
+            model="claude-opus-4.8", github_token="ghp_test", max_turns=5
+        )
+        await client.query("hello")
+
+        def make_400():
+            resp = MagicMock()
+            resp.status = 400
+            resp.headers = {}
+            resp.text = AsyncMock(
+                return_value=(
+                    '{"error":{"message":"The requested model is not '
+                    'supported.","code":"model_not_supported","param":"model",'
+                    '"type":"invalid_request_error"}}'
+                )
+            )
+            resp.__aenter__ = AsyncMock(return_value=resp)
+            resp.__aexit__ = AsyncMock(return_value=None)
+            return resp
+
+        def make_ok():
+            resp = MagicMock()
+            resp.status = 200
+            resp.json = AsyncMock(
+                return_value={
+                    "choices": [
+                        {"message": {"content": "Recovered!", "tool_calls": []}}
+                    ]
+                }
+            )
+            resp.__aenter__ = AsyncMock(return_value=resp)
+            resp.__aexit__ = AsyncMock(return_value=None)
+            return resp
+
+        # First call rejects the model, second (after fallback) succeeds.
+        responses = iter([make_400(), make_ok()])
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(side_effect=lambda *a, **k: next(responses))
+        client._http_client = mock_session
+
+        with patch.object(client, "_get_copilot_token", return_value="mock_token"):
+            messages = []
+            async for msg in client.receive_response():
+                messages.append(msg)
+
+        texts = [
+            b.text
+            for m in messages
+            for b in m.content
+            if b.type == ContentBlockType.TEXT
+        ]
+        assert "Recovered!" in texts
+        assert not any("model_not_supported" in t for t in texts)
+        # Model was swapped to the supported fallback before retrying.
+        assert client.model == "claude-sonnet-4.5"
+
+    @pytest.mark.asyncio
     async def test_receive_response_with_tool_calls(self):
         """Test response with function-calling tool_calls."""
         client = CopilotAgentClient(github_token="ghp_test", max_turns=1)
@@ -541,6 +731,103 @@ class TestCopilotAgentClient:
         ]
         assert len(result_blocks) == 1
         assert "Tool executor not available" in result_blocks[0].result_content
+
+    @pytest.mark.asyncio
+    async def test_receive_response_empty_choices_retries_then_recovers(self):
+        """A transient empty-choices response should be retried, not abort the session."""
+        import core.agent_client as agent_client_module
+
+        client = CopilotAgentClient(github_token="ghp_test", max_turns=5)
+        await client.query("hello")
+
+        def make_response(payload):
+            resp = MagicMock()
+            resp.status = 200
+            resp.json = AsyncMock(return_value=payload)
+            resp.__aenter__ = AsyncMock(return_value=resp)
+            resp.__aexit__ = AsyncMock(return_value=None)
+            return resp
+
+        # First two turns return empty choices (transient hiccup), third succeeds.
+        responses = iter(
+            [
+                make_response({"choices": []}),
+                make_response({"choices": []}),
+                make_response(
+                    {"choices": [{"message": {"content": "Recovered!"}}]}
+                ),
+            ]
+        )
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(side_effect=lambda *a, **k: next(responses))
+        client._http_client = mock_session
+
+        with patch.object(client, "_get_copilot_token", return_value="mock_token"), \
+            patch.object(
+                agent_client_module,
+                "_COPILOT_EMPTY_RESPONSE_BACKOFF",
+                0.0,
+            ), \
+            patch("asyncio.sleep", new=AsyncMock()):
+            messages = []
+            async for msg in client.receive_response():
+                messages.append(msg)
+
+        # Session must NOT have surfaced "(Empty response from Copilot)" — it
+        # retried and recovered with the real content instead.
+        texts = [
+            b.text
+            for m in messages
+            for b in m.content
+            if b.type == ContentBlockType.TEXT
+        ]
+        assert "Recovered!" in texts
+        assert "(Empty response from Copilot)" not in texts
+
+    @pytest.mark.asyncio
+    async def test_receive_response_empty_choices_gives_up_after_cap(self):
+        """Persistent empty choices eventually surface the empty-response message."""
+        import core.agent_client as agent_client_module
+
+        client = CopilotAgentClient(github_token="ghp_test", max_turns=20)
+        await client.query("hello")
+
+        def make_empty():
+            resp = MagicMock()
+            resp.status = 200
+            resp.json = AsyncMock(return_value={"choices": []})
+            resp.__aenter__ = AsyncMock(return_value=resp)
+            resp.__aexit__ = AsyncMock(return_value=None)
+            return resp
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(side_effect=lambda *a, **k: make_empty())
+        client._http_client = mock_session
+
+        with patch.object(client, "_get_copilot_token", return_value="mock_token"), \
+            patch.object(
+                agent_client_module,
+                "_COPILOT_MAX_CONSECUTIVE_EMPTY_RESPONSES",
+                2,
+            ), \
+            patch.object(
+                agent_client_module,
+                "_COPILOT_EMPTY_RESPONSE_BACKOFF",
+                0.0,
+            ), \
+            patch("asyncio.sleep", new=AsyncMock()):
+            messages = []
+            async for msg in client.receive_response():
+                messages.append(msg)
+
+        texts = [
+            b.text
+            for m in messages
+            for b in m.content
+            if b.type == ContentBlockType.TEXT
+        ]
+        assert "(Empty response from Copilot)" in texts
 
     @pytest.mark.asyncio
     async def test_run_subagents_parallel(self):

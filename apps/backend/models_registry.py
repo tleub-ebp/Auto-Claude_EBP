@@ -38,6 +38,17 @@ class ModelEntry:
 # =============================================================================
 
 _ANTHROPIC_MODELS = [
+    # Claude Fable 5 — « Mythos-class » (GA 2026-06-09), au-dessus d'Opus 4.8.
+    ModelEntry(
+        "anthropic",
+        "claude-fable-5",
+        "Claude Fable 5",
+        "flagship",
+        supports_thinking=True,
+        price_input=10.0,
+        price_output=50.0,
+        is_default=False,
+    ),
     # Flagship
     ModelEntry(
         "anthropic",
@@ -187,7 +198,7 @@ _OPENAI_MODELS = [
         supports_thinking=True,
         price_input=6.0,
         price_output=24.0,
-        is_default=False,
+        is_default=True,
     ),
     ModelEntry(
         "openai",
@@ -254,7 +265,7 @@ _OPENAI_MODELS = [
         "standard",
         price_input=2.50,
         price_output=10.0,
-        is_default=True,
+        is_default=False,
     ),
     ModelEntry(
         "openai",
@@ -369,7 +380,7 @@ _GOOGLE_MODELS = [
         supports_thinking=True,
         price_input=7.50,
         price_output=30.0,
-        is_default=False,
+        is_default=True,
     ),
     ModelEntry(
         "google",
@@ -398,7 +409,7 @@ _GOOGLE_MODELS = [
         "standard",
         price_input=1.25,
         price_output=5.0,
-        is_default=True,
+        is_default=False,
     ),
     ModelEntry(
         "google",
@@ -433,7 +444,7 @@ _MISTRAL_MODELS = [
         "flagship",
         price_input=2.0,
         price_output=6.0,
-        is_default=False,
+        is_default=True,
     ),
     ModelEntry(
         "mistral",
@@ -472,7 +483,7 @@ _MISTRAL_MODELS = [
         "standard",
         price_input=2.0,
         price_output=6.0,
-        is_default=True,
+        is_default=False,
     ),
     # Code
     ModelEntry(
@@ -567,7 +578,7 @@ _GROK_MODELS = [
         supports_thinking=True,
         price_input=5.0,
         price_output=15.0,
-        is_default=False,
+        is_default=True,
     ),
     ModelEntry(
         "grok",
@@ -597,7 +608,7 @@ _GROK_MODELS = [
         "standard",
         price_input=2.0,
         price_output=10.0,
-        is_default=True,
+        is_default=False,
     ),
     ModelEntry(
         "grok",
@@ -686,38 +697,80 @@ _OLLAMA_MODELS = [
 # WINDSURF / CODEIUM MODELS
 # =============================================================================
 
+# Model IDs are the friendly slugs resolved by integrations/windsurf_proxy/models.py
+# (MODEL_NAME_TO_ENUM). The previous values were internal MODEL_<ENUM> placeholder
+# names which are NOT valid model identifiers and broke the Windsurf provider.
 _WINDSURF_MODELS = [
-    ModelEntry("windsurf", "swe-1.6-fast", "SWE 1.6 Fast", "standard", is_default=True),
-    ModelEntry("windsurf", "MODEL_SWE_1_6", "SWE 1.6", "flagship", is_default=False),
+    ModelEntry("windsurf", "swe-1.6-fast", "SWE 1.6 Fast", "fast", is_default=True),
+    ModelEntry("windsurf", "swe-1.6", "SWE 1.6", "flagship", is_default=False),
+    ModelEntry("windsurf", "swe-1.5", "SWE 1.5", "flagship", is_default=False),
     ModelEntry(
         "windsurf",
-        "MODEL_CLAUDE_OPUS_4_8",
-        "Claude Opus 4.8",
+        "swe-1.5-thinking",
+        "SWE 1.5 Thinking",
         "flagship",
+        supports_thinking=True,
         is_default=False,
     ),
     ModelEntry(
         "windsurf",
-        "MODEL_CLAUDE_OPUS_4_7",
-        "Claude Opus 4.7",
+        "claude-opus-4",
+        "Claude Opus 4 (Windsurf)",
         "flagship",
+        supports_thinking=True,
         is_default=False,
     ),
     ModelEntry(
         "windsurf",
-        "MODEL_CLAUDE_SONNET_4_6",
-        "Claude Sonnet 4.6",
+        "claude-sonnet-4",
+        "Claude Sonnet 4 (Windsurf)",
+        "flagship",
+        supports_thinking=True,
+        is_default=False,
+    ),
+    ModelEntry(
+        "windsurf",
+        "claude-3.7-sonnet",
+        "Claude 3.7 Sonnet (Windsurf)",
+        "standard",
+        supports_thinking=True,
+        is_default=False,
+    ),
+    ModelEntry(
+        "windsurf", "gpt-4.1", "GPT-4.1 (Windsurf)", "standard", is_default=False
+    ),
+    ModelEntry("windsurf", "gpt-4o", "GPT-4o (Windsurf)", "standard", is_default=False),
+    ModelEntry(
+        "windsurf",
+        "gemini-2.5-pro",
+        "Gemini 2.5 Pro (Windsurf)",
+        "standard",
+        supports_thinking=True,
+        is_default=False,
+    ),
+    ModelEntry(
+        "windsurf",
+        "deepseek-r1",
+        "DeepSeek R1 (Windsurf)",
+        "standard",
+        supports_thinking=True,
+        is_default=False,
+    ),
+    ModelEntry(
+        "windsurf",
+        "deepseek-v3",
+        "DeepSeek V3 (Windsurf)",
         "standard",
         is_default=False,
     ),
-    ModelEntry("windsurf", "MODEL_GPT_5_5", "GPT-5.5", "flagship", is_default=False),
     ModelEntry(
         "windsurf",
-        "MODEL_GEMINI_3_1_PRO",
-        "Gemini 3.1 Pro",
-        "flagship",
+        "gemini-2.0-flash",
+        "Gemini 2.0 Flash (Windsurf)",
+        "fast",
         is_default=False,
     ),
+    ModelEntry("windsurf", "swe-1.5-fast", "SWE 1.5 Fast", "fast", is_default=False),
 ]
 
 # =============================================================================
@@ -743,6 +796,16 @@ _AWS_MODELS = [
         supports_thinking=True,
         price_input=15.0,
         price_output=75.0,
+        is_default=True,
+    ),
+    ModelEntry(
+        "aws",
+        "anthropic.claude-fable-5",
+        "Claude Fable 5 (Bedrock)",
+        "flagship",
+        supports_thinking=True,
+        price_input=10.0,
+        price_output=50.0,
         is_default=False,
     ),
     ModelEntry(
@@ -761,7 +824,7 @@ _AWS_MODELS = [
         "flagship",
         price_input=15.0,
         price_output=75.0,
-        is_default=True,
+        is_default=False,
     ),
     ModelEntry(
         "aws",

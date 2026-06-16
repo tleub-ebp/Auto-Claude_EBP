@@ -26,6 +26,7 @@ import type {
 	Task,
 	TaskMetadata,
 } from "../../shared/types";
+import { slugifySpecTitle } from "../../shared/utils/spec-slug";
 import { debugError } from "../../shared/utils/debug-logger";
 import { insightsService } from "../insights-service";
 import { projectStore } from "../project-store";
@@ -228,11 +229,7 @@ export function registerInsightsHandlers(
 				}
 
 				// Create spec ID with zero-padded number and slugified title
-				const slugifiedTitle = title
-					.toLowerCase()
-					.replaceAll(/[^\p{L}\p{N}]+/gu, "-")
-					.replaceAll(/^-|-$/g, "")
-					.substring(0, 50);
+				const slugifiedTitle = slugifySpecTitle(title);
 				const specId = `${String(specNumber).padStart(3, "0")}-${slugifiedTitle}`;
 
 				// Create spec directory

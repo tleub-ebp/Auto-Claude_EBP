@@ -31,11 +31,11 @@ def create_cross_encoder(
     Returns:
         Cross-encoder instance, or None if not applicable
     """
-    # Only create for Ollama provider currently
+    # Only create for Ollama provider currently. For other providers we keep
+    # graphiti-core's default (OpenAI reranker via OPENAI_API_KEY). Without
+    # this, Graphiti's default reranker requires an OpenAI key even on a
+    # fully local Ollama setup, and initialization fails.
     if config.llm_provider != "ollama":
-        return None
-
-    if llm_client is None:
         return None
 
     try:
@@ -59,7 +59,11 @@ def create_cross_encoder(
             base_url=base_url,
         )
 
-        return OpenAIRerankerClient(client=llm_client, config=llm_config)
+        # Reuse the underlying AsyncOpenAI client (already pointed at Ollama)
+        # when available. OpenAIRerankerClient expects a raw AsyncOpenAI-style
+        # client, not graphiti's LLMClient wrapper.
+        raw_client = getattr(llm_client, "client", None)
+        return OpenAIRerankerClient(client=raw_client, config=llm_config)
     except Exception as e:
         logger.warning(f"Could not create cross-encoder: {e}")
         return None

@@ -16,6 +16,7 @@ import type {
 	MultiRepoStatus,
 	RepoExecutionState,
 } from "../../shared/types";
+import { slugifySpecTitle } from "../../shared/utils/spec-slug";
 import { debugError, debugLog } from "../../shared/utils/debug-logger";
 import type { AgentManager } from "../agent";
 import { projectStore } from "../project-store";
@@ -168,12 +169,7 @@ export function registerMultiRepoHandlers(
 					}
 				}
 
-				const slug = config.taskDescription
-					.toLowerCase()
-					.replace(/[^\w\s-]/g, "")
-					.replace(/\s+/g, "-")
-					.slice(0, 50)
-					.replace(/-+$/, "");
+				const slug = slugifySpecTitle(config.taskDescription);
 				const specName = `${String(maxNum + 1).padStart(3, "0")}-multi-repo-${slug}`;
 				const specDir = path.join(specsDir, specName);
 				mkdirSync(specDir, { recursive: true });

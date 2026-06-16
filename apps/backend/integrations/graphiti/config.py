@@ -632,13 +632,28 @@ def get_graphiti_status() -> dict:
     try:
         # Attempt to import the main graphiti_memory module
         import graphiti_core  # noqa: F401
-        from graphiti_core.driver.falkordb_driver import FalkorDriver  # noqa: F401
-
-        # If we got here, packages are importable
-        status["available"] = True
     except ImportError as e:
         status["available"] = False
         status["reason"] = f"Graphiti packages not installed: {e}"
+        return status
+
+    # The embedded graph database is LadybugDB (real_ladybug), with native
+    # kuzu as a fallback — same resolution order as GraphitiClient.
+    try:
+        import real_ladybug  # noqa: F401
+
+        status["available"] = True
+    except ImportError:
+        try:
+            import kuzu  # noqa: F401
+
+            status["available"] = True
+        except ImportError:
+            status["available"] = False
+            status["reason"] = (
+                "Embedded graph database not installed. "
+                "Install with: pip install real_ladybug (requires Python 3.12+)"
+            )
 
     return status
 

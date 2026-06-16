@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { isSubtaskDone } from "../../shared/progress";
 
 /**
  * Utility function to merge Tailwind CSS classes
@@ -9,14 +10,54 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
- * Calculate progress percentage from subtasks
+ * Calculate progress percentage from subtasks. A subtask counts as done when
+ * completed OR blocked (see {@link isSubtaskDone}), matching the backend so a
+ * finished build with a blocked subtask shows 100%, not e.g. 67%.
  * @param subtasks Array of subtasks with status
  * @returns Progress percentage (0-100)
  */
 export function calculateProgress(subtasks: { status: string }[]): number {
 	if (subtasks.length === 0) return 0;
-	const completed = subtasks.filter((s) => s.status === "completed").length;
-	return Math.round((completed / subtasks.length) * 100);
+	const done = subtasks.filter((s) => isSubtaskDone(s.status)).length;
+	return Math.round((done / subtasks.length) * 100);
+}
+
+/**
+ * Détermine le pourcentage d'avancement à afficher dans l'en-tête d'une tâche.
+ *
+ * Pendant une exécution active, l'avancement par sous-tâches terminées ne bouge
+ * qu'au passage d'une sous-tâche à « completed », ce qui fige visuellement la
+ * barre. On privilégie alors la progression temps réel pondérée par phase
+ * (overallProgress) émise par le backend, avec repli sur l'avancement par
+ * sous-tâches. Le max évite toute régression visuelle si overallProgress n'a pas
+ * encore été reçu.
+ *
+ * Le pourcentage doit refléter le **travail réellement fait**. Dès qu'une tâche
+ * possède des sous-tâches de code, leur part terminée EST cet avancement réel :
+ * on ne laisse pas la progression pondérée par phase (`overallProgress`, qui
+ * crédite toute la phase de codage à l'instant où la QA démarre) le gonfler
+ * au-delà du travail effectif (p.ex. 94% affiché alors que 2/3 sous-tâches sont
+ * faites). Tant qu'aucune sous-tâche n'existe (création de spec / planning), on
+ * retombe sur la progression de phase pour que la barre bouge quand même.
+ *
+ * @param subtaskProgress Pourcentage calculé depuis les sous-tâches (0-100)
+ * @param overallProgress Progression temps réel du backend (0-100), optionnelle
+ * @param hasActiveExecution Indique si une phase d'exécution est en cours
+ * @param hasSubtasks `true` si la tâche a des sous-tâches (leur avancement fait
+ *   alors foi) ; `false`/`undefined` → repli sur la progression de phase
+ * @returns Pourcentage à afficher (0-100)
+ */
+export function getDisplayProgress(
+	subtaskProgress: number,
+	overallProgress: number | undefined,
+	hasActiveExecution: boolean,
+	hasSubtasks?: boolean,
+): number {
+	if (!hasActiveExecution) return subtaskProgress;
+	// Real work = completed subtasks. Don't let phase weighting overstate it.
+	if (hasSubtasks) return subtaskProgress;
+	// No subtasks yet (spec/planning): use the phase-weighted progress.
+	return Math.max(overallProgress ?? 0, subtaskProgress);
 }
 
 /**

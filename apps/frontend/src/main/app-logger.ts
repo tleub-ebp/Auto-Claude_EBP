@@ -36,10 +36,13 @@ try {
 log.transports.file.maxSize = 10 * 1024 * 1024; // 10MB max file size
 log.transports.file.fileName = "main.log";
 
-// Console transport - always show warnings and errors, debug only in dev mode
-log.transports.console.level =
-	process.env.NODE_ENV === "development" ? "debug" : "warn";
-log.transports.console.format = "[{h}:{i}:{s}] [{level}] {text}";
+// Console transport désactivé : la sortie console colorée est entièrement gérée
+// par `frontendLog` (voir `appLog` plus bas). Laisser le transport console
+// d'electron-log actif provoquait une DOUBLE écriture de chaque message dans la
+// console (une ligne `[FRONTEND] [DEBUG] ...` via frontendLog + une ligne
+// `[hh:mm:ss] [debug] ...` via electron-log). On conserve uniquement le
+// transport fichier pour la persistance des logs.
+log.transports.console.level = false;
 
 /**
  * Get current LLM model and provider information for logging

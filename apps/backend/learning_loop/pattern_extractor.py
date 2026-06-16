@@ -88,6 +88,35 @@ class PatternExtractor:
         data["had_escalation"] = (spec_dir / "QA_ESCALATION.md").exists()
         data["had_manual_test_plan"] = (spec_dir / "MANUAL_TEST_PLAN.md").exists()
 
+        # CI/CD failure report (written by the pipeline watcher on red builds)
+        build_failure_file = spec_dir / "BUILD_FAILURE.md"
+        if build_failure_file.exists():
+            try:
+                data["build_failure"] = build_failure_file.read_text(encoding="utf-8")[
+                    :3000
+                ]
+            except Exception as e:
+                logger.warning(f"Failed to read BUILD_FAILURE.md: {e}")
+
+        # Task outcome (human verdict from review, or recorded CI failure)
+        outcome_file = spec_dir / "task_outcome.json"
+        if outcome_file.exists():
+            try:
+                outcome = json.loads(outcome_file.read_text(encoding="utf-8"))
+                data["task_outcome"] = {
+                    "verdict": outcome.get("verdict", ""),
+                    "details": outcome.get("details", ""),
+                    "history": [
+                        {
+                            "verdict": entry.get("verdict", ""),
+                            "details": (entry.get("details") or "")[:300],
+                        }
+                        for entry in outcome.get("history", [])[-5:]
+                    ],
+                }
+            except Exception as e:
+                logger.warning(f"Failed to read task_outcome.json: {e}")
+
         return data
 
     def gather_all_builds_data(self, limit: int = 20) -> list[dict[str, Any]]:

@@ -645,3 +645,93 @@ class TestSimpleClientAPIProfileAuthentication:
 
             # Verify SDK client was created successfully
             assert client is mock_sdk_client
+
+
+class TestClaudeOptionsEffortGuard:
+    """Tests for the 'effort' kwarg compatibility guard.
+
+    Older claude_agent_sdk builds lack the ``effort`` field on
+    ``ClaudeAgentOptions``. Passing it raised
+    ``TypeError: __init__() got an unexpected keyword argument 'effort'`` and
+    aborted the agent run. ``_claude_options_supports`` gates the kwarg.
+    """
+
+    def test_supports_returns_false_when_field_absent(self):
+        import dataclasses
+
+        import core.client as client_module
+
+        @dataclasses.dataclass
+        class FakeOptions:
+            model: str = ""
+            allowed_tools: list | None = None
+
+        with patch.object(client_module, "ClaudeAgentOptions", FakeOptions):
+            assert client_module._claude_options_supports("effort") is False
+
+    def test_supports_returns_true_when_field_present(self):
+        import dataclasses
+
+        import core.client as client_module
+
+        @dataclasses.dataclass
+        class FakeOptions:
+            model: str = ""
+            effort: str = "high"
+
+        with patch.object(client_module, "ClaudeAgentOptions", FakeOptions):
+            assert client_module._claude_options_supports("effort") is True
+
+    def test_supports_returns_false_when_sdk_missing(self):
+        import core.client as client_module
+
+        with patch.object(client_module, "ClaudeAgentOptions", None):
+            assert client_module._claude_options_supports("effort") is False
+
+    def test_supports_true_for_var_keyword_constructor(self):
+        import core.client as client_module
+
+        class FakeOptions:
+            def __init__(self, **kwargs):
+                pass
+
+        with patch.object(client_module, "ClaudeAgentOptions", FakeOptions):
+            assert client_module._claude_options_supports("effort") is True
+
+    def test_create_client_skips_effort_when_unsupported(self, tmp_path, monkeypatch):
+        """create_client() with an Opus model must NOT raise when the installed
+        SDK's ClaudeAgentOptions does not accept 'effort'."""
+        import dataclasses
+
+        import core.client as client_module
+
+        valid_token = "sk-ant-oat01-valid-plaintext-token"
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", valid_token)
+        monkeypatch.setattr(
+            "core.auth.get_token_from_keychain", lambda _config_dir=None: None
+        )
+
+        captured = {}
+
+        @dataclasses.dataclass
+        class StrictOptions:
+            """Mimics an old SDK: accepts arbitrary known kwargs but NOT 'effort'."""
+
+            def __init__(self, **kwargs):
+                if "effort" in kwargs:
+                    raise TypeError(
+                        "__init__() got an unexpected keyword argument 'effort'"
+                    )
+                captured.update(kwargs)
+
+        mock_sdk_client = MagicMock()
+        with patch.object(client_module, "ClaudeAgentOptions", StrictOptions), patch(
+            "core.client.ClaudeSDKClient", return_value=mock_sdk_client
+        ):
+            from core.client import create_client
+
+            # Opus model would normally trigger options_kwargs["effort"].
+            client = create_client(tmp_path, tmp_path, "claude-opus-4-8", "coder")
+
+        assert client is mock_sdk_client
+        assert "effort" not in captured

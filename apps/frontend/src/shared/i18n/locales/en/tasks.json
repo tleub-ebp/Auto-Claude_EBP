@@ -39,7 +39,9 @@
 		"taskActions": "Task actions",
 		"selectTask": "Select task: {{title}}",
 		"preview": "Preview",
-		"syncFromBranch": "Sync from branch"
+		"syncFromBranch": "Sync from branch",
+		"duplicate": "Duplicate",
+		"duplicateSuffix": "(copy)"
 	},
 	"confirmDelete": {
 		"title": "Delete Task",
@@ -59,7 +61,17 @@
 		"recovering": "Recovering...",
 		"needsRecovery": "Needs Recovery",
 		"needsResume": "Needs Resume",
-		"tdd": "TDD"
+		"tdd": "TDD",
+		"pipeline": "Pipeline",
+		"repairBuild": "Repair build",
+		"buildFailed": "Red build",
+		"openInTracker": "Open in {{tracker}}",
+		"currentPhase": "Current phase",
+		"compactedPhases": "{{count}} phases",
+		"sessionCompactionHint": "{{count}} execution phases — click to see the compacted summary",
+		"sessionCompaction": "Session Compaction",
+		"criticalPhases": "Key steps",
+		"lastError": "Last error"
 	},
 	"warnings": {
 		"stuck": {
@@ -124,6 +136,7 @@
 		"in_progress": "In Progress",
 		"ai_review": "AI Review",
 		"human_review": "Human Review",
+		"build_failed": "Red Build",
 		"done": "Done",
 		"pr_created": "PR Created",
 		"error": "Error"
@@ -133,6 +146,8 @@
 		"emptyBacklogHint": "Add a task to get started",
 		"emptyQueue": "Queue is empty",
 		"emptyQueueHint": "Tasks will wait here when parallel task limit is reached",
+		"emptyBuildFailed": "No red builds",
+		"emptyBuildFailedHint": "Tasks land here when their CI/CD pipeline fails — the agent repairs them automatically",
 		"emptyInProgress": "Nothing running",
 		"emptyInProgressHint": "Start a task from Planning",
 		"emptyAiReview": "No tasks in review",
@@ -175,6 +190,8 @@
 		"deleteError": "Failed to delete some tasks",
 		"restoreSuccess": "Task restored successfully",
 		"restoreError": "Failed to restore task",
+		"duplicateSuccess": "Task duplicated successfully",
+		"duplicateError": "Failed to duplicate task",
 		"undo": "Undo",
 		"clearSelection": "Clear Selection",
 		"mixedColumnWarning": "Different columns — move unavailable",
@@ -197,6 +214,39 @@
 		"expandAll": "Expand all columns",
 		"azureDevOpsNotConnected": "Azure DevOps not connected — click to configure",
 		"jiraNotConnected": "Jira not connected — click to configure",
+		"filter": {
+			"button": "Filter",
+			"title": "Filters",
+			"clear": "Reset",
+			"clearSearch": "Clear search",
+			"searchPlaceholder": "Search tasks…",
+			"sourceLabel": "Source",
+			"categoryLabel": "Category",
+			"priorityLabel": "Priority",
+			"sources": {
+				"azure-devops": "Azure DevOps",
+				"jira": "Jira",
+				"linear": "Linear",
+				"github": "GitHub",
+				"gitlab": "GitLab",
+				"ideation": "Ideation",
+				"roadmap": "Roadmap",
+				"insights": "Insights",
+				"manual": "Manual"
+			}
+		},
+		"sort": {
+			"title": "Sort by",
+			"ascending": "Ascending",
+			"descending": "Descending",
+			"fields": {
+				"manual": "Manual order",
+				"priority": "Priority",
+				"created": "Created date",
+				"updated": "Last updated",
+				"title": "Title"
+			}
+		},
 		"quickCommand": {
 			"placeholder": "Quick command (e.g. /review, /help)",
 			"buttonLabel": "Run command",
@@ -243,20 +293,39 @@
 			"fixing": "Fixing",
 			"validation": "Validation",
 			"complete": "Complete",
-			"failed": "Failed"
+			"failed": "Failed",
+			"running": "Running",
+			"pending": "Pending"
 		},
 		"labels": {
 			"interrupted": "Interrupted",
 			"progress": "Progress",
 			"entry": "entry",
 			"entries": "entries",
-			"step": "Step {{current}}/{{total}}"
+			"step": "Step {{current}}/{{total}}",
+			"stepScrollHint": "Click to jump to the start of this step",
+			"qaPass": "QA — check {{n}}",
+			"thinking": "Processing in progress"
 		},
 		"shortPhases": {
 			"plan": "Plan",
 			"code": "Code",
 			"qa": "QA",
 			"planTooltip": "View implementation plan"
+		},
+		"activity": {
+			"discoveringContext": "Discovering project context…",
+			"gatheringRequirements": "Gathering requirements…",
+			"writingSpec": "Writing specification…",
+			"validatingSpec": "Validating specification…",
+			"specComplete": "Specification complete",
+			"creatingPlan": "Creating implementation plan…",
+			"implementingCode": "Implementing code changes…",
+			"workingOnSubtask": "Working on subtask {{subtask}}…",
+			"subtaskCompleted": "Subtask {{subtask}} completed",
+			"fixingQa": "Fixing QA issues…",
+			"runningQa": "Running QA review…",
+			"buildPaused": "Build paused — subtasks still pending"
 		}
 	},
 	"files": {
@@ -273,6 +342,10 @@
 		"openInIDE": "Open in IDE"
 	},
 	"visualProof": {
+		"apiSmoke": {
+			"title": "API smoke —",
+			"summary": "{{passed}}/{{total}} endpoints OK"
+		},
 		"tab": "Visual proofs",
 		"title": "PR visual proof",
 		"emptyTitle": "No visual proof for this task",
@@ -412,6 +485,14 @@
 			"updateFailed": "Failed to update task. Please try again."
 		}
 	},
+	"duplicate": {
+		"title": "Duplicate Task",
+		"description": "Adjust the fields before creating the copy. The new task is created in the backlog with its own spec (attachments are preserved).",
+		"createButton": "Create copy",
+		"errors": {
+			"createFailed": "Failed to duplicate task. Please try again."
+		}
+	},
 	"form": {
 		"description": "Description",
 		"descriptionPlaceholder": "Describe the feature, bug fix, or improvement you want to implement. Be as specific as possible about requirements, constraints, and expected behavior.",
@@ -424,6 +505,15 @@
 		"requireReviewDescription": "When enabled, you'll be prompted to review the spec and implementation plan before the coding phase begins. This allows you to approve, request changes, or provide feedback.",
 		"tddModeLabel": "Strict TDD mode (Red-Green-Refactor)",
 		"tddModeDescription": "When enabled, the agent follows a strict TDD cycle for this task: write a failing test first, then the minimal code to make it pass, then refactor. Overrides the project TDD setting for this task only.",
+		"stepDetails": "Details",
+		"stepEngine": "Engine",
+		"nextStep": "Next: engine",
+		"previousStep": "Back",
+		"engineStepTitle": "Execution engine",
+		"engineStepDescription": "Choose the provider, model and effort for this task. Each phase (spec, planning, coding, QA) can use a different model.",
+		"providerLabel": "Provider",
+		"providerPlaceholder": "Select a provider",
+		"providerHelp": "The models below are scoped to this provider. Saved on the task only — it does not change your global provider.",
 		"editor": {
 			"bold": "Bold",
 			"italic": "Italic",
@@ -482,8 +572,110 @@
 			}
 		}
 	},
+	"testGen": {
+		"title": "Tests for changed files",
+		"description": "Generates tests suited to each file type, written into the worktree and shipped with the PR.",
+		"generate_one": "Generate ({{count}})",
+		"generate_other": "Generate ({{count}})",
+		"strategy": {
+			"unit": "Unit",
+			"api": "API",
+			"e2e-web": "Web E2E",
+			"desktop-ui": "Desktop UI"
+		},
+		"written": "Written",
+		"failed": "Failed",
+		"emptyResult": "The generator produced no tests.",
+		"doneTitle": "Tests generated",
+		"doneDescription_one": "{{count}} test file written into the worktree.",
+		"doneDescription_other": "{{count}} test files written into the worktree."
+	},
+	"interview": {
+		"banner": "Clarify the spec before starting: the agent asks you 3-5 targeted questions.",
+		"openButton": "Spec interview",
+		"title": "Spec interview",
+		"description": "The agent analyzed the specification and asks the questions whose answers would change the implementation. Answer the ones you find useful — answers are appended to the spec.",
+		"generating": "Analyzing the spec and generating questions… (up to 1 min)",
+		"generationFailed": "Could not generate questions. Check your LLM credentials and try again.",
+		"retry": "Retry",
+		"answerPlaceholder": "Your answer (leave empty to skip this question)",
+		"useSuggestion": "Use suggestion",
+		"answeredCount": "{{answered}}/{{total}} answered",
+		"addToSpec": "Add to spec",
+		"addAndStart": "Add and start",
+		"sectionTitle": "Clarifications (interview)",
+		"savedTitle": "Spec enriched",
+		"savedDescription_one": "{{count}} answer added to the specification.",
+		"savedDescription_other": "{{count}} answers added to the specification.",
+		"saveErrorTitle": "Failed to save clarifications"
+	},
+	"executionFormula": {
+		"bannerImported": "Imported task — pick the provider, model and effort before running it.",
+		"bannerDuplicated": "Duplicated task — pick the provider, model and effort before running it.",
+		"chooseButton": "Choose engine",
+		"dismiss": "Ignore",
+		"appliedLabel": "Engine:",
+		"editButton": "Change",
+		"gate": {
+			"title": "Choose the provider/LLM/effort first?",
+			"body": "This task was imported or duplicated and has no provider, model or effort chosen yet. Pick a formula in the Formula Lab, or start now with the current defaults.",
+			"choose": "Choose engine",
+			"startDefaults": "Start with defaults",
+			"cancel": "Cancel"
+		}
+	},
+	"reset": {
+		"button": "Reset task",
+		"confirmTitle": "Fully reset this task?",
+		"confirmDescription": "The plan, subtasks, worktree and all execution artifacts will be deleted (uncommitted work is auto-saved in git history). The spec is kept and the task goes back to the backlog. This action cannot be undone.",
+		"confirm": "Reset everything",
+		"cancel": "Cancel",
+		"resetting": "Resetting…",
+		"successTitle": "Task reset",
+		"successDescription": "The task is back in the backlog with its spec intact.",
+		"errorTitle": "Reset failed",
+		"errorDescription": "Could not reset the task. Check the logs for details."
+	},
 	"subtasks": {
-		"untitled": "Untitled subtask"
+		"untitled": "Untitled subtask",
+		"completedCount": "{{completed}} of {{total}} completed",
+		"blockedCount_one": "{{count}} blocked",
+		"blockedCount_other": "{{count}} blocked",
+		"failedCount_one": "{{count}} failed",
+		"failedCount_other": "{{count}} failed",
+		"blockedReason": "Blocked: {{reason}}",
+		"blockedGeneric": "Blocked — needs manual attention",
+		"changeRequest": "Change requested",
+		"requestedAt": "Requested on {{date}}",
+		"filesViewer": {
+			"filesModified_one": "{{count}} file modified",
+			"filesModified_other": "{{count}} files modified",
+			"expandAll": "Expand all",
+			"collapseAll": "Collapse all",
+			"noFiles": "No files modified yet",
+			"noFilesHint": "Files will appear here as changes are made",
+			"loading": "Loading changes…",
+			"loadError": "Unable to load changes for this task",
+			"viewDiff": "View changes",
+			"hideDiff": "Hide changes",
+			"noDiff": "No recorded changes for this file",
+			"viewMode": {
+				"unified": "Unified view",
+				"split": "Side-by-side view"
+			},
+			"stats": {
+				"files": "Files",
+				"folders": "Folders",
+				"additions": "Additions",
+				"deletions": "Deletions"
+			},
+			"status": {
+				"added": "Added",
+				"modified": "Modified",
+				"deleted": "Deleted",
+				"renamed": "Renamed"
+			}
+		}
 	},
 	"bulkPR": {
 		"selectAllInColumn": "Select all tasks in column",
@@ -517,12 +709,45 @@
 		"description": "Add visual references like screenshots or designs to help the AI understand your requirements."
 	},
 	"logs": {
+		"scrollToTop": "Back to top",
+		"scrollToTopHint": "Back to top (Home)",
+		"scrollToBottom": "Jump to latest",
+		"scrollToBottomHint": "Jump to latest (End)",
+		"viewportAria": "Task logs — press Home to jump to top, End to jump to bottom",
+		"empty": {
+			"title": "No logs yet",
+			"description": "Logs will appear here when the task runs"
+		},
+		"phaseEmpty": "No logs yet",
+		"hideOutput": "Hide output",
+		"showOutput": "Show output",
+		"search": {
+			"placeholder": "Search logs…",
+			"ariaLabel": "Search logs",
+			"results_one": "{{count}} result",
+			"results_other": "{{count}} results",
+			"clear": "Clear search",
+			"noResults": "No results",
+			"noResultsHint": "No log entry matches “{{query}}”."
+		},
 		"thinking": {
 			"selectAria": "Thinking effort for this phase",
 			"selectTooltip": "Change the thinking effort for this phase",
 			"updatedTitle": "Thinking effort updated",
 			"updatedDesc": "The thinking effort will be applied when this phase starts.",
 			"updateFailed": "Update failed"
+		},
+		"provider": {
+			"selectAria": "Provider for this phase",
+			"selectTooltip": "Change the provider for this phase",
+			"updatedTitle": "Provider updated",
+			"updatedDesc": "The provider will be applied when this phase starts."
+		},
+		"model": {
+			"selectAria": "Model for this phase",
+			"selectTooltip": "Change the model for this phase",
+			"updatedTitle": "Model updated",
+			"updatedDesc": "The model will be applied when this phase starts."
 		}
 	},
 	"modal": {
@@ -555,20 +780,32 @@
 			"syncFromBranch": "Sync from branch",
 			"taskControls": "Task controls",
 			"taskIsPaused": "Task is paused",
-			"providerSwitch": "Switch LLM Provider",
-			"providerSwitchDesc": "Pauses the task after the current step finishes, then lets you pick a different LLM.",
+			"providerSwitch": "Switch LLM while running",
+			"providerSwitchDesc": "Hot override: pauses the task after the current step finishes, then resumes it with a different LLM. For steps that haven't started, use the per-phase LLM selectors above instead.",
 			"providerSwitchPaused": "Task is paused",
-			"providerSwitchPausedDesc": "Choose a provider and model, then resume the task.",
+			"providerSwitchPausedDesc": "Choose a provider, model and effort level, then resume the task.",
 			"pauseToSwitch": "Pause and switch LLM",
+			"pauseToSwitchShort": "Pause & switch",
+			"providerSwitchInfoAria": "About switching the LLM",
 			"pauseToSwitchTooltip": "The task finishes the current step, then stops. You can then pick a provider and model and resume.",
-			"pauseRequestedTitle": "Pause requested",
-			"pauseRequestedDesc": "The task will stop once the current step finishes.",
+			"pauseUnavailableTooltip": "Hot switching is only available while the task is running. For steps that haven't started, pick the LLM directly in each phase's selectors above.",
+			"pauseRequestedTitle": "Task paused",
+			"pauseRequestedDesc": "Execution stopped immediately. Resume anytime to continue from the last checkpoint.",
 			"pauseFailed": "Failed to pause",
-			"pausingInProgress": "Pausing… finishing the current step",
+			"pausingInProgress": "Pausing…",
+			"pauseTask": "Pause",
+			"pausingShort": "Pausing…",
+			"pauseTooltip": "Pauses the task immediately — resumable anytime",
+			"resumeTooltip": "Resume execution from the pause checkpoint",
+			"stopTooltip": "Stops the task completely (in-progress work is not resumed)",
+			"resumeRequestedTitle": "Resuming task",
+			"resumeRequestedDesc": "The task picks up right where it left off.",
+			"resumeFailed": "Failed to resume",
 			"loadingProviders": "Loading providers…",
 			"noConfiguredProviders": "No provider configured. Add an API key in Settings.",
 			"chooseProvider": "Provider",
 			"chooseModel": "Model",
+			"chooseEffort": "Effort",
 			"resumeWithChosenLlm": "Resume with this LLM",
 			"resumeSameProvider": "Resume without changing LLM",
 			"previousTask": "Previous task",
@@ -584,6 +821,13 @@
 			"approvePlan": "Approve Plan",
 			"stopped": "Stopped",
 			"qaIssues": "QA Issues"
+		},
+		"move": {
+			"trigger": "Move task to another column",
+			"label": "Move to",
+			"successTitle": "Task moved",
+			"successDescription": "Task moved to “{{status}}”.",
+			"worktreeBlocked": "Can't move: an active worktree exists for this task. Confirm worktree cleanup from the Kanban board."
 		},
 		"progress": {
 			"subtasks": "{{completed}}/{{total}} subtasks"
@@ -635,7 +879,12 @@
 			"approving": "Approving...",
 			"rejecting": "Rejecting...",
 			"rejectionReason": "Reason for changes (optional)",
-			"rejectionPlaceholder": "Describe what needs to be changed in the plan..."
+			"rejectionPlaceholder": "Describe what needs to be changed in the plan...",
+			"conflictsChecking": "Checking for file overlaps with parallel tasks...",
+			"conflictsNone": "No file overlap with other active tasks",
+			"conflictsTitle": "Potential conflicts with parallel tasks",
+			"conflictsDescription": "{{count}} file(s) in this plan are also touched by other active tasks. Merging both worktrees will likely conflict — consider finishing one task first or re-scoping the plan.",
+			"conflictsMoreFiles": "+{{count}} more file(s)"
 		}
 	}
 }

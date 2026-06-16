@@ -42,9 +42,8 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
@@ -206,7 +205,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-limiter = Limiter(key_func=get_remote_address)
+# --- Multi-user server mode (no-op unless WORKPILOT_SERVER_MODE is enabled) ---
+try:
+    from server.integration import mount_server_mode
+
+    mount_server_mode(app)
+except Exception as e:  # noqa: BLE001 — never block local-mode boot on this
+    logging.getLogger(__name__).warning("Could not initialize server mode: %s", e)
+
+# Single shared limiter instance (also imported by server.routers.* so all
+# rate-limit decorators share one backend).
+from server.ratelimit import limiter  # noqa: E402
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -1212,17 +1222,22 @@ async def _validate_key_http(provider: str, api_key: str, spec: dict[str, Any]) 
     auth_style = spec["auth_style"]
     ok_statuses = spec["ok_statuses"]
     headers: dict[str, str] = dict(spec.get("extra_headers", {}))
+    params: dict[str, str] = {}
 
     if auth_style == "bearer":
         headers["Authorization"] = f"Bearer {api_key}"
     elif auth_style == "x-api-key":
         headers["x-api-key"] = api_key
     elif auth_style == "query":
-        url = f"{url}?key={api_key}"
+        # Pass the key as a real query parameter so httpx percent-encodes it.
+        # Interpolating it into the URL string lets a crafted key inject extra
+        # query/fragment components (CodeQL py/partial-ssrf); the host stays the
+        # provider's hardcoded endpoint either way.
+        params["key"] = api_key
 
     try:
         async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-            resp = await client.get(url, headers=headers, timeout=10)
+            resp = await client.get(url, headers=headers, params=params, timeout=10)
         if resp.status_code not in ok_statuses:
             set_validated(provider, api_key, False)
             raise HTTPException(
@@ -1894,6 +1909,14 @@ try:
     app.include_router(event_hooks_router)
 except ImportError as e:
     print(f"Warning: Could not import event_hooks router: {e}")
+
+# --- Channel Notifications API (webhook test endpoint) ---
+try:
+    from services.notifications.api import router as notifications_router
+
+    app.include_router(notifications_router)
+except ImportError as e:
+    print(f"Warning: Could not import notifications router: {e}")
 
 if __name__ == "__main__":
     import uvicorn
