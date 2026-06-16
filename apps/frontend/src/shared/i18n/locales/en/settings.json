@@ -850,7 +850,30 @@
 			"connectionString": "https://api.github.com/graphql",
 			"personalAccessToken": "YOUR_GITHUB_PERSONAL_ACCESS_TOKEN",
 			"enableGitHubIssues": "Enable GitHub Issues",
-			"syncIssuesFromGitHubAndCreateTasksAutomatically": "Sync issues from GitHub and create tasks automatically"
+			"syncIssuesFromGitHubAndCreateTasksAutomatically": "Sync issues from GitHub and create tasks automatically",
+			"githubAuthentication": "GitHub Authentication",
+			"useManualToken": "Use Manual Token",
+			"patLabel": "Personal Access Token",
+			"useOAuthInstead": "Use OAuth Instead",
+			"patHelpBefore": "Create a token with",
+			"patHelpAfter": "scope from",
+			"githubSettingsLink": "GitHub Settings",
+			"repository": "Repository",
+			"repositoryFormatPrefix": "Format:",
+			"repositoryFormatExample": "(e.g., facebook/react)",
+			"repositoryPlaceholder": "owner/repository",
+			"loadingRepositories": "Loading repositories...",
+			"selectRepository": "Select a repository...",
+			"enterManually": "Enter Manually",
+			"searchRepositories": "Search repositories...",
+			"noMatchingRepositories": "No matching repositories",
+			"noRepositoriesFound": "No repositories found",
+			"selectedLabel": "Selected",
+			"checkingConnection": "Checking connection...",
+			"connectedToGitHub": "Connected to GitHub",
+			"notConnectedToGitHub": "Not connected to GitHub",
+			"failedToLoadBranches": "Failed to load branches",
+			"failedToLoadRepositories": "Failed to load repositories"
 		},
 		"gitlab": {
 			"title": "GitLab",
@@ -982,6 +1005,25 @@
 			"profileCreatedAuthFailed": "Profile created but failed to prepare authentication: {{error}}",
 			"authPrepareFailed": "Failed to prepare authentication: {{error}}",
 			"authStartFailedMessage": "Failed to start authentication. Please try again."
+		},
+		"linear": {
+			"enableLinearSync": "Enable Linear Sync",
+			"enableLinearSyncDescription": "Create and update Linear issues automatically",
+			"apiKey": "API Key",
+			"apiKeyDescription": "Get your API key from",
+			"apiKeyLink": "Linear Settings",
+			"realtimeSync": "Real-time Sync",
+			"realtimeSyncDescription": "Automatically import new tasks created in Linear",
+			"realtimeSyncWarning": "When enabled, new Linear issues will be automatically imported into AutoBuild. Make sure to configure your team/project filters below to control which issues are imported.",
+			"importTasksTitle": "Import Existing Tasks",
+			"importTasksDescription": "Select which Linear issues to import into AutoBuild as tasks.",
+			"importTasksButton": "Import Tasks from Linear",
+			"teamId": "Team ID (Optional)",
+			"teamIdDescription": "The unique identifier of your Linear team",
+			"teamIdPlaceholder": "Auto-detected",
+			"projectId": "Project ID (Optional)",
+			"projectIdDescription": "The unique identifier of the Linear project to sync",
+			"projectIdPlaceholder": "Auto-created"
 		}
 	},
 	"accounts": {
@@ -1597,6 +1639,7 @@
 		"selectThinkingLevel": "Select thinking level",
 		"autoLabel": "Auto (Optimized)",
 		"autoDescription": "Uses Opus across all phases with optimized thinking levels",
+		"autoDescriptionModel": "Uses {{model}} across all phases with optimized thinking levels",
 		"phaseConfiguration": "Phase Configuration",
 		"phaseConfigurationDescription": "Configure models and thinking levels for each development pipeline phase",
 		"phases": {
@@ -1814,23 +1857,78 @@
 		"required": "*",
 		"fillAllFields": "Please fill in all required fields (Instance URL, Email, API Token)"
 	},
-	"teams": {
-		"title": "Microsoft Teams",
-		"description": "Receive notifications in Teams when tasks are done and PRs are created",
-		"initGuardDescription": "Initialize WorkPilot AI for this project to configure Teams notifications",
-		"enableNotifications": "Enable Teams notifications",
-		"enableNotificationsHint": "Send a message to your Teams channel when a task completes and a PR is created",
-		"webhookUrl": "Incoming Webhook URL",
-		"webhookUrlHint": "Paste the Incoming Webhook URL from your Teams channel connector",
+	"channelNotifications": {
+		"navLabel": "Notifications (Teams, Slack…)",
+		"title": "Channel notifications",
+		"description": "Announce on your channels (Teams, Slack, Discord, Google Chat…) when a task is done and its PR is ready",
+		"initGuardDescription": "Initialize WorkPilot AI for this project to configure channel notifications",
 		"testWebhook": "Send test message",
 		"testSuccess": "Message sent!",
 		"testError": "Failed to reach webhook",
-		"testMessage": "WorkPilot AI — Test notification",
-		"testMessageBody": "This is a test message from WorkPilot AI. Your Teams notifications are configured correctly.",
 		"howToCreate": "How to create a webhook",
 		"triggers": "Notification triggers",
 		"triggerTaskDone": "When a Kanban task reaches 'Done' and a PR is created",
-		"triggerPrCreated": "When a PR is automatically created for human review"
+		"triggerPrCreated": "When a PR is automatically created for human review",
+		"channels": {
+			"teams": {
+				"name": "Microsoft Teams",
+				"hint": "Incoming Webhook of a Teams channel (connector or Workflows flow)"
+			},
+			"slack": {
+				"name": "Slack",
+				"hint": "Slack Incoming Webhook (\"Incoming Webhooks\" app)"
+			},
+			"discord": {
+				"name": "Discord",
+				"hint": "Discord channel webhook (Channel settings → Integrations)"
+			},
+			"googleChat": {
+				"name": "Google Chat",
+				"hint": "Google Chat space webhook (Space settings → Webhooks)"
+			},
+			"webhook": {
+				"name": "Generic webhook",
+				"hint": "Raw JSON POST to any HTTP endpoint (custom integrations)"
+			}
+		}
+	},
+	"cicd": {
+		"title": "CI/CD Pipeline",
+		"description": "Show pipeline status on kanban cards and let the agent repair red builds",
+		"initGuardDescription": "Initialize WorkPilot AI for this project to configure the CI/CD pipeline loop",
+		"introDescription": "The latest pipeline run of each task branch is displayed on its kanban card. When a build goes red, the task moves to the âRed Buildâ column and the agent can repair it automatically.",
+		"providerLabel": "CI/CD provider",
+		"providerDescription": "Pick a provider explicitly, or let WorkPilot auto-detect it from the access tokens configured for this project",
+		"providerAuto": "Auto-detect (Azure â GitHub â GitLab â Jenkins)",
+		"providerNone": "Disabled",
+		"reusedCredentials": "Uses the access tokens from the {{section}} integration section. Configure them there first if needed.",
+		"autoDetectNote": "The first provider with a complete configuration is used, in this order: Azure DevOps, GitHub, GitLab, Jenkins.",
+		"jenkinsUrlLabel": "Jenkins URL",
+		"jenkinsJobLabel": "Job (multibranch pipeline)",
+		"jenkinsJobDescription": "Name of the multibranch pipeline job that contains one sub-job per branch",
+		"jenkinsUserLabel": "User",
+		"jenkinsTokenLabel": "API Token",
+		"autoFixLabel": "Automatic repair",
+		"autoFixDescription": "When a build goes red, launch the agent automatically to fix it",
+		"pollLabel": "Polling interval (seconds)",
+		"pollDescription": "How often the pipeline status is checked (minimum 15s, default 60s)"
+	},
+	"invitationsAdmin": {
+		"navLabel": "Invitations (team)",
+		"title": "Invitations",
+		"description": "Invite new members. Account creation is invitation-only.",
+		"email": "New user's email",
+		"role": "Role",
+		"roleMember": "Member",
+		"roleViewer": "Viewer",
+		"roleAdmin": "Administrator",
+		"create": "Invite",
+		"emailSent": "Invitation sent by email. You can also share the link:",
+		"emailNotSent": "Email not sent (SMTP not configured). Share this single-use link:",
+		"pending": "Pending invitations",
+		"none": "No pending invitations.",
+		"expires": "expires",
+		"revoke": "Revoke"
 	},
 	"jiraImport": {
 		"title": "Import Jira Issues",

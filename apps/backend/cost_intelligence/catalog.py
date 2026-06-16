@@ -54,13 +54,31 @@ class ModelPricing:
 # Built-in pricing catalog (can be overridden by a JSON/YAML file)
 _DEFAULT_CATALOG: dict[str, dict[str, dict[str, float]]] = {
     "anthropic": {
-        # 4.8 (current latest) — alias to 4.6 pricing pending public price sheet.
+        # 4.8 (current latest) — public price sheet $5/$25 per MTok (Opus-tier),
+        # cache at the standard Anthropic multipliers (1.25× / 0.1× input).
         "claude-opus-4-8": {
-            "input": 15.0,
-            "output": 75.0,
-            "cache_write": 18.75,
-            "cache_read": 1.50,
-            "thinking": 75.0,
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write": 6.25,
+            "cache_read": 0.50,
+            "thinking": 25.0,
+        },
+        # Fable 5 — « Mythos-class » (GA 2026-06-09). Prix public $10/$50 ; cache
+        # aux multiplicateurs standard Anthropic (1.25× / 0.1× l'entrée).
+        "claude-fable-5": {
+            "input": 10.0,
+            "output": 50.0,
+            "cache_write": 12.50,
+            "cache_read": 1.00,
+            "thinking": 50.0,
+        },
+        # Mythos 5 — same capabilities/pricing as Fable 5 (Project Glasswing only).
+        "claude-mythos-5": {
+            "input": 10.0,
+            "output": 50.0,
+            "cache_write": 12.50,
+            "cache_read": 1.00,
+            "thinking": 50.0,
         },
         "claude-sonnet-4-8": {
             "input": 3.0,
@@ -68,14 +86,14 @@ _DEFAULT_CATALOG: dict[str, dict[str, dict[str, float]]] = {
             "cache_write": 3.75,
             "cache_read": 0.30,
         },
-        "claude-haiku-4-8": {"input": 0.80, "output": 4.0},
+        "claude-haiku-4-8": {"input": 1.0, "output": 5.0},
         # 4.7
         "claude-opus-4-7": {
-            "input": 15.0,
-            "output": 75.0,
-            "cache_write": 18.75,
-            "cache_read": 1.50,
-            "thinking": 75.0,
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write": 6.25,
+            "cache_read": 0.50,
+            "thinking": 25.0,
         },
         "claude-sonnet-4-7": {
             "input": 3.0,
@@ -83,14 +101,14 @@ _DEFAULT_CATALOG: dict[str, dict[str, dict[str, float]]] = {
             "cache_write": 3.75,
             "cache_read": 0.30,
         },
-        "claude-haiku-4-7": {"input": 0.80, "output": 4.0},
+        "claude-haiku-4-7": {"input": 1.0, "output": 5.0},
         # 4.6
         "claude-opus-4-6": {
-            "input": 15.0,
-            "output": 75.0,
-            "cache_write": 18.75,
-            "cache_read": 1.50,
-            "thinking": 75.0,
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write": 6.25,
+            "cache_read": 0.50,
+            "thinking": 25.0,
         },
         "claude-sonnet-4-6": {
             "input": 3.0,
@@ -98,21 +116,21 @@ _DEFAULT_CATALOG: dict[str, dict[str, dict[str, float]]] = {
             "cache_write": 3.75,
             "cache_read": 0.30,
         },
-        "claude-haiku-4-6": {"input": 0.80, "output": 4.0},
+        "claude-haiku-4-6": {"input": 1.0, "output": 5.0},
         # 4.5 (the date-stamped IDs DEFAULT_PHASE_MODELS resolves to today).
         "claude-opus-4-5": {
-            "input": 15.0,
-            "output": 75.0,
-            "cache_write": 18.75,
-            "cache_read": 1.50,
-            "thinking": 75.0,
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write": 6.25,
+            "cache_read": 0.50,
+            "thinking": 25.0,
         },
         "claude-opus-4-5-20251101": {
-            "input": 15.0,
-            "output": 75.0,
-            "cache_write": 18.75,
-            "cache_read": 1.50,
-            "thinking": 75.0,
+            "input": 5.0,
+            "output": 25.0,
+            "cache_write": 6.25,
+            "cache_read": 0.50,
+            "thinking": 25.0,
         },
         "claude-sonnet-4-5": {
             "input": 3.0,
@@ -126,18 +144,25 @@ _DEFAULT_CATALOG: dict[str, dict[str, dict[str, float]]] = {
             "cache_write": 3.75,
             "cache_read": 0.30,
         },
-        "claude-haiku-4-5": {"input": 0.80, "output": 4.0},
-        "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
+        "claude-haiku-4-5": {"input": 1.0, "output": 5.0},
+        "claude-haiku-4-5-20251001": {"input": 1.0, "output": 5.0},
         # 4.0 (older snapshots kept for replay reproducibility).
         "claude-opus-4-20250514": {"input": 15.0, "output": 75.0},
         "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
     },
+    # NOTE: non-Anthropic prices below are best-effort estimates (no authoritative
+    # price sheet in-repo) — verify against each provider's public pricing.
     "openai": {
+        "gpt-5.1": {"input": 1.25, "output": 10.0},
+        "gpt-5": {"input": 1.25, "output": 10.0},
+        "gpt-5-mini": {"input": 0.25, "output": 2.0},
         "gpt-4.1": {"input": 2.50, "output": 10.0},
         "gpt-4o": {"input": 2.50, "output": 10.0},
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
     },
     "google": {
+        "gemini-3-pro": {"input": 2.0, "output": 12.0},
+        "gemini-3-flash": {"input": 0.30, "output": 1.20},
         "gemini-2.5-pro": {"input": 1.25, "output": 5.0},
         "gemini-2.5-flash": {"input": 0.15, "output": 0.60},
     },
@@ -160,9 +185,10 @@ _DEFAULT_CATALOG: dict[str, dict[str, dict[str, float]]] = {
     },
     # AWS Bedrock — pass-through pricing that mirrors underlying foundation models.
     "aws": {
-        "anthropic.claude-opus-4-8": {"input": 15.0, "output": 75.0},
-        "anthropic.claude-opus-4-8-v1": {"input": 15.0, "output": 75.0},
-        "anthropic.claude-opus-4-6": {"input": 15.0, "output": 75.0},
+        "anthropic.claude-opus-4-8": {"input": 5.0, "output": 25.0},
+        "anthropic.claude-opus-4-8-v1": {"input": 5.0, "output": 25.0},
+        "anthropic.claude-fable-5": {"input": 10.0, "output": 50.0},
+        "anthropic.claude-opus-4-6": {"input": 5.0, "output": 25.0},
         "anthropic.claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
         "meta.llama-3.3-70b": {"input": 0.72, "output": 0.72},
     },

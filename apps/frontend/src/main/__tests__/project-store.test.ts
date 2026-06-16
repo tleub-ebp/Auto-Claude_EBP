@@ -360,6 +360,203 @@ describe("ProjectStore", () => {
 			expect(tasks[0].status).toBe("in_progress"); // Some completed, some pending
 		});
 
+		// Regression: anciens imports Azure DevOps (US/RsD) sans
+		// requirements.display_title. Leur spec.md a un titre H1 dérivé de la
+		// description (« # Specification: Description :En tant qu'utilisateur… »),
+		// ce qui affichait « Description : » comme titre de carte. On doit
+		// retomber sur un libellé propre dérivé du nom de dossier.
+		it("derives a clean title from the folder name when spec title is description boilerplate", async () => {
+			const specsDir = path.join(
+				TEST_PROJECT_PATH,
+				".workpilot",
+				"specs",
+				"002-limitation-du-numero-de-tva-intracommunautaire-du",
+			);
+			mkdirSync(specsDir, { recursive: true });
+			writeFileSync(
+				path.join(specsDir, "spec.md"),
+				"# Specification: Description :En tant qu'utilisateur du DMS, lorsque je renseigne le numero de TVA\n\n## Overview\n\nStuff.\n",
+			);
+			writeFileSync(
+				path.join(specsDir, "requirements.json"),
+				JSON.stringify({
+					task_description: "Description :\n\nEn tant qu'utilisateur du DMS...",
+					workflow_type: "feature",
+				}),
+			);
+
+			const { ProjectStore } = await import("../project-store");
+			const store = new ProjectStore();
+			const project = store.addProject(TEST_PROJECT_PATH);
+			const tasks = store.getTasks(project.id);
+
+			expect(tasks).toHaveLength(1);
+			expect(tasks[0].title).toBe(
+				"Limitation du numero de tva intracommunautaire du",
+			);
+			expect(tasks[0].title.toLowerCase()).not.toContain("description");
+		});
+
+		// Same legacy-import bug, but the boilerplate H1 does NOT start with
+		// "Description :" — here it begins with "N° de version" (a RsD work item).
+		// The title must still fall back to the folder name, proving detection is
+		// based on matching the task_description, not a hardcoded prefix.
+		it("derives a clean title when boilerplate H1 starts with arbitrary text", async () => {
+			const specsDir = path.join(
+				TEST_PROJECT_PATH,
+				".workpilot",
+				"specs",
+				"003-fenetre-d-avertissement-a-la-saisie-du-19eme-carac",
+			);
+			mkdirSync(specsDir, { recursive: true });
+			writeFileSync(
+				path.join(specsDir, "spec.md"),
+				"# Specification: N° de versionConditions de reproduction :Ouvrir la fiche\n\n## Overview\n\nStuff.\n",
+			);
+			writeFileSync(
+				path.join(specsDir, "requirements.json"),
+				JSON.stringify({
+					task_description:
+						"N° de version\n\nConditions de reproduction :\n\nOuvrir la fiche d'un client",
+					workflow_type: "documentation",
+				}),
+			);
+
+			const { ProjectStore } = await import("../project-store");
+			const store = new ProjectStore();
+			const project = store.addProject(TEST_PROJECT_PATH);
+			const tasks = store.getTasks(project.id);
+
+			expect(tasks).toHaveLength(1);
+			expect(tasks[0].title).toBe(
+				"Fenetre d avertissement a la saisie du 19eme carac",
+			);
+			expect(tasks[0].title).not.toContain("N° de version");
+		});
+
+		// When requirements.display_title IS present (new imports), it wins over
+		// everything else — the real accented Azure title is shown verbatim.
+		it("prefers requirements.display_title when present", async () => {
+			const specsDir = path.join(
+				TEST_PROJECT_PATH,
+				".workpilot",
+				"specs",
+				"002-limitation-du-numero",
+			);
+			mkdirSync(specsDir, { recursive: true });
+			writeFileSync(
+				path.join(specsDir, "spec.md"),
+				"# Specification: Description :Garbage\n\n## Overview\n\nStuff.\n",
+			);
+			writeFileSync(
+				path.join(specsDir, "requirements.json"),
+				JSON.stringify({
+					display_title:
+						"Limitation du numéro de TVA intracommunautaire du vendeur à 18 caractères",
+					task_description: "Description :...",
+				}),
+			);
+
+			const { ProjectStore } = await import("../project-store");
+			const store = new ProjectStore();
+			const project = store.addProject(TEST_PROJECT_PATH);
+			const tasks = store.getTasks(project.id);
+
+			expect(tasks).toHaveLength(1);
+			expect(tasks[0].title).toBe(
+				"Limitation du numéro de TVA intracommunautaire du vendeur à 18 caractères",
+			);
+		});
+
+		// Regression (kanban title "s'inspire du dossier du worktree"): a legacy
+		// import has no display_title and a boilerplate spec.md H1, but the planner
+		// produced a real, accented plan.feature. We must serve that title AND
+		// persist it as display_title so a later scan that reads the plan mid-write
+		// (plan === null) can't regress the card to the slugified folder name.
+		it("backfills requirements.display_title from a meaningful plan feature", async () => {
+			const specsDir = path.join(
+				TEST_PROJECT_PATH,
+				".workpilot",
+				"specs",
+				"004-limitation-du-num-ro-de-tva-intracommunautaire-18-",
+			);
+			mkdirSync(specsDir, { recursive: true });
+			writeFileSync(
+				path.join(specsDir, "spec.md"),
+				"# Specification: Description :En tant qu'utilisateur\n\n## Overview\n\nStuff.\n",
+			);
+			writeFileSync(
+				path.join(specsDir, "requirements.json"),
+				JSON.stringify({
+					task_description: "Description :\n\nEn tant qu'utilisateur",
+					workflow_type: "feature",
+				}),
+			);
+			writeFileSync(
+				path.join(specsDir, "implementation_plan.json"),
+				JSON.stringify({
+					feature:
+						"Limitation du numéro de TVA intracommunautaire à 18 caractères",
+					workflow_type: "feature",
+					phases: [],
+				}),
+			);
+
+			const { ProjectStore } = await import("../project-store");
+			const store = new ProjectStore();
+			const project = store.addProject(TEST_PROJECT_PATH);
+
+			const tasks = store.getTasks(project.id);
+			expect(tasks[0].title).toBe(
+				"Limitation du numéro de TVA intracommunautaire à 18 caractères",
+			);
+
+			// The title is now durable in requirements.json.
+			const persisted = JSON.parse(
+				readFileSync(path.join(specsDir, "requirements.json"), "utf-8"),
+			);
+			expect(persisted.display_title).toBe(
+				"Limitation du numéro de TVA intracommunautaire à 18 caractères",
+			);
+
+			// Simulate the transient mid-write state: remove the plan, re-scan, the
+			// title must hold instead of regressing to the folder name.
+			rmSync(path.join(specsDir, "implementation_plan.json"));
+			store.invalidateTasksCache(project.id);
+			const tasksAfter = store.getTasks(project.id);
+			expect(tasksAfter[0].title).toBe(
+				"Limitation du numéro de TVA intracommunautaire à 18 caractères",
+			);
+		});
+
+		// A plan.feature that is itself the spec-folder slug (written by the backend
+		// auto-fixer when no real feature exists) must NOT be shown verbatim — it is
+		// the worktree directory name. We fall back to a readable folder label.
+		it("ignores a plan feature that is a spec-folder slug", async () => {
+			const specsDir = path.join(
+				TEST_PROJECT_PATH,
+				".workpilot",
+				"specs",
+				"005-add-upstream-connection-test",
+			);
+			mkdirSync(specsDir, { recursive: true });
+			writeFileSync(
+				path.join(specsDir, "implementation_plan.json"),
+				JSON.stringify({
+					feature: "005-add-upstream-connection-test",
+					workflow_type: "feature",
+					phases: [],
+				}),
+			);
+
+			const { ProjectStore } = await import("../project-store");
+			const store = new ProjectStore();
+			const project = store.addProject(TEST_PROJECT_PATH);
+			const tasks = store.getTasks(project.id);
+
+			expect(tasks[0].title).toBe("Add upstream connection test");
+		});
+
 		// Regression: when implementation_plan.json is missing OR empty we used
 		// to flag the task as "JSON parse error", which replaced the User Story
 		// description with a scary "malformed JSON" banner. Missing/empty file

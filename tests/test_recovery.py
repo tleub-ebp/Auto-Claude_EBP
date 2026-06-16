@@ -269,6 +269,62 @@ def test_mark_subtask_stuck(test_env):
     assert history["status"] == "stuck", "Chunk status not updated to stuck"
 
 
+def test_mark_subtask_stuck_blocks_in_plan(test_env):
+    """A stuck subtask must be marked "blocked" in implementation_plan.json.
+
+    Regression test: previously mark_subtask_stuck only updated
+    attempt_history.json, leaving the subtask "pending" in the plan. That froze
+    the build — progress % never advanced and get_next_subtask kept returning the
+    same subtask, so the coder retried it forever.
+    """
+    _temp_dir, spec_dir, project_dir = test_env
+
+    plan = {
+        "feature": "demo",
+        "workflow_type": "feature",
+        "phases": [
+            {
+                "id": "phase-1",
+                "name": "Implementation",
+                "subtasks": [
+                    {"id": "subtask-1", "description": "do thing", "status": "pending"},
+                    {"id": "subtask-2", "description": "other", "status": "pending"},
+                ],
+            }
+        ],
+    }
+    plan_file = spec_dir / "implementation_plan.json"
+    with open(plan_file, "w", encoding="utf-8") as f:
+        json.dump(plan, f)
+
+    manager = RecoveryManager(spec_dir, project_dir)
+    manager.mark_subtask_stuck("subtask-1", "Failed after 5 attempts")
+
+    with open(plan_file, encoding="utf-8") as f:
+        updated = json.load(f)
+
+    subtasks = {s["id"]: s for s in updated["phases"][0]["subtasks"]}
+    assert subtasks["subtask-1"]["status"] == "blocked", (
+        "Stuck subtask not marked blocked in plan — build would freeze"
+    )
+    assert subtasks["subtask-1"]["blocked_reason"] == "Failed after 5 attempts"
+    # Untouched subtask must stay pending so the build can continue with it.
+    assert subtasks["subtask-2"]["status"] == "pending"
+
+
+def test_mark_subtask_stuck_no_plan_file(test_env):
+    """mark_subtask_stuck must not crash when implementation_plan.json is absent."""
+    _temp_dir, spec_dir, project_dir = test_env
+
+    manager = RecoveryManager(spec_dir, project_dir)
+    # Should be a no-op for the plan, and still record the stuck entry.
+    manager.mark_subtask_stuck("subtask-x", "no plan present")
+
+    assert any(
+        s["subtask_id"] == "subtask-x" for s in manager.get_stuck_subtasks()
+    )
+
+
 def test_recovery_hints(test_env):
     """Test recovery hints generation."""
     temp_dir, spec_dir, project_dir = test_env

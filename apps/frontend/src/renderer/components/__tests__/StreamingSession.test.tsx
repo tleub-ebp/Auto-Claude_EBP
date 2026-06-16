@@ -105,7 +105,9 @@ vi.mock("react-i18next", () => ({
 				"streaming:codeView.waitingForChanges": "Waiting for code changes...",
 				"streaming:tabs.chat": "Chat",
 				"streaming:tabs.events": "Events",
+				"streaming:tabs.files": "Files",
 				"streaming:tabs.timeline": "Timeline",
+				"streaming:files.empty": "No files changed yet",
 				"streaming:chat.placeholder": "Type your message...",
 				"streaming:chat.send": "Send",
 				"streaming:timeline.comingSoon": "Timeline coming soon",
@@ -325,6 +327,51 @@ describe("StreamingSession", () => {
 				screen.getByText((content) => content.includes("Events (1)")),
 			).toBeInTheDocument();
 		});
+	});
+
+	it("lists distinct changed files and dedupes repeated edits", async () => {
+		render(<StreamingSession {...mockProps} />);
+
+		MockWebSocket.triggerConnection();
+
+		await waitFor(() => {
+			expect(screen.getByText("Live")).toBeInTheDocument();
+		});
+
+		const ws = MockWebSocket.instances[0];
+		const fileEvent = (filePath: string, type = "file_update") => ({
+			event_type: type,
+			timestamp: Date.now(),
+			data: {
+				file_path: filePath,
+				content: "x",
+				session_id: "test-session-123",
+			},
+			session_id: "test-session-123",
+		});
+
+		// Two edits to the same file + one create on another => 2 distinct files
+		for (const evt of [
+			fileEvent("/p/a.ts"),
+			fileEvent("/p/a.ts"),
+			fileEvent("/p/b.ts", "file_create"),
+		]) {
+			ws.onmessage?.(new MessageEvent("message", { data: JSON.stringify(evt) }));
+		}
+
+		// The Files tab badge reflects the distinct count (2), not 3 events
+		await waitFor(() => {
+			expect(
+				screen.getByText((content) => content.includes("Files (2)")),
+			).toBeInTheDocument();
+		});
+
+		// Switch to the Files tab and verify both paths are listed.
+		// (b.ts is also echoed in the left-panel header as the latest file, so
+		// it can appear more than once — assert "at least one".)
+		fireEvent.mouseDown(screen.getByText((content) => content.includes("Files (2)")));
+		expect(screen.getAllByText("/p/a.ts").length).toBeGreaterThan(0);
+		expect(screen.getAllByText("/p/b.ts").length).toBeGreaterThan(0);
 	});
 
 	it("handles command events", async () => {

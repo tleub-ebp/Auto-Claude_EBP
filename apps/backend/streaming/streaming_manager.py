@@ -36,6 +36,14 @@ class EventType(str, Enum):
     TOOL_USE = "tool_use"
     SESSION_CONFIRMED = "session_confirmed"
     FILE_OPERATION = "file_operation"
+    # Multi-user board sync (server mode): broadcast on the "project:{id}"
+    # channel so every connected client of a project sees changes live.
+    PROJECT_UPDATED = "project_updated"
+    SPEC_CREATED = "spec_created"
+    SPEC_CLAIMED = "spec_claimed"
+    SPEC_RELEASED = "spec_released"
+    SPEC_STATUS_CHANGED = "spec_status_changed"
+    MEMBER_PRESENCE = "member_presence"
 
 
 @dataclass

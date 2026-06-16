@@ -51,6 +51,7 @@ import { registerCopilotCliHandlers } from "./copilot-cli-handlers";
 import { registerCopilotOAuthHandlers } from "./copilot-oauth-handlers";
 import { registerCostHandlers } from "./cost-handlers";
 import { registerCostPredictorHandlers } from "./cost-predictor-handlers";
+import { registerFormulaMatrixHandlers } from "./formula-matrix-handlers";
 import { registerCredentialHandlers } from "./credential-handlers";
 import { registerCrossLanguageTranslationHandlers } from "./cross-language-translation-handlers";
 import { registerDebugHandlers } from "./debug-handlers";
@@ -107,6 +108,7 @@ import { setupQualityHandlers } from "./quality-handlers";
 import { registerRoadmapHandlers } from "./roadmap-handlers";
 import { registerScreenshotHandlers } from "./screenshot-handlers";
 import { registerSelfHealingHandlers } from "./self-healing-handlers";
+import { registerServerAuthHandlers } from "./server-auth-handlers";
 import { registerSettingsHandlers } from "./settings-handlers";
 import { setupSmartEstimationHandlers } from "./smart-estimation-handlers";
 import { registerAgentCoachHandlers } from "./agent-coach-handlers";
@@ -118,6 +120,7 @@ import { registerInjectionGuardHandlers } from "./injection-guard-handlers";
 import { registerSpecApprovalHandlers } from "./spec-approval-handlers";
 import { registerSpecRefinementHandlers } from "./spec-refinement-handlers";
 import { registerPhase35FeatureHandlers } from "./phase35-features-handlers";
+import { registerPipelineHandlers } from "./pipeline-handlers";
 import { registerTaskHandlers } from "./task-handlers";
 import { registerTeamSyncHandlers } from "./team-sync-handlers";
 import { registerTerminalWorktreeIpcHandlers } from "./terminal";
@@ -270,6 +273,9 @@ export function setupIpcHandlers(
 	// Task handlers
 	registerTaskHandlers(agentManager, pythonEnvManager, getMainWindow);
 
+	// CI/CD pipeline loop (kanban pipeline badge + « Build rouge » auto-repair) — any provider
+	registerPipelineHandlers(agentManager, getMainWindow);
+
 	// Terminal and Claude profile handlers
 	registerTerminalHandlers(terminalManager, getMainWindow);
 
@@ -281,6 +287,9 @@ export function setupIpcHandlers(
 
 	// Settings and dialog handlers
 	registerSettingsHandlers(agentManager, getMainWindow);
+
+	// Multi-user server mode: connection + login (local / Entra ID)
+	registerServerAuthHandlers(getMainWindow);
 
 	// File explorer handlers
 	registerFileHandlers();
@@ -525,6 +534,9 @@ export function setupIpcHandlers(
 
 	// Cost Predictor handlers (ex-ante spec cost prediction)
 	registerCostPredictorHandlers();
+
+	// Formula Matrix handlers (Provider × LLM × Effort comparator — Formula Lab)
+	registerFormulaMatrixHandlers();
 
 	// Agent Debugger handlers (Feature 1)
 	registerAgentDebuggerHandlers();

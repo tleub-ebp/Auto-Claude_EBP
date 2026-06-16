@@ -16,6 +16,7 @@ import type {
 	TaskMetadata,
 	TaskPriority,
 } from "../../../shared/types";
+import { slugifySpecTitle } from "../../../shared/utils/spec-slug";
 import { projectStore } from "../../project-store";
 import { withSpecNumberLock } from "../../utils/spec-number-lock";
 import {
@@ -29,11 +30,7 @@ import type { RawIdea } from "./types";
  * Create a slugified version of a title for use in directory names
  */
 function slugifyTitle(title: string): string {
-	return title
-		.toLowerCase()
-		.replace(/[^\p{L}\p{N}]+/gu, "-")
-		.replace(/^-|-$/g, "")
-		.substring(0, 50);
+	return slugifySpecTitle(title);
 }
 
 /**

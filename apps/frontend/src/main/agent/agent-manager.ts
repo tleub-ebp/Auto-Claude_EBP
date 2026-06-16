@@ -594,6 +594,27 @@ export class AgentManager extends EventEmitter {
 	}
 
 	/**
+	 * Fully halt a task the USER explicitly paused or stopped.
+	 *
+	 * Unlike {@link killTask} (also used by {@link restartTask}, which MUST keep
+	 * the task registered so it can respawn it), this ALSO unregisters the task
+	 * from the OperationRegistry and drops its execution context. Without this,
+	 * the proactive profile-swap / usage monitor would later restart the paused
+	 * or stopped task when a token limit is hit on its profile — making Pause
+	 * "stick" (the process respawns) and Stop look like it did nothing.
+	 */
+	haltTask(taskId: string): boolean {
+		const killed = this.killTask(taskId);
+		try {
+			getOperationRegistry().unregisterOperation(taskId);
+		} catch (err) {
+			console.warn("[AgentManager] haltTask: unregisterOperation failed", err);
+		}
+		this.taskExecutionContext.delete(taskId);
+		return killed;
+	}
+
+	/**
 	 * Stop ideation generation for a project
 	 */
 	stopIdeation(projectId: string): boolean {

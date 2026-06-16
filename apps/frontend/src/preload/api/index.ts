@@ -133,6 +133,10 @@ import {
 	type CostPredictorAPI,
 	createCostPredictorAPI,
 } from "./modules/cost-predictor-api";
+import {
+	createFormulaMatrixAPI,
+	type FormulaMatrixAPI,
+} from "./modules/formula-matrix-api";
 import { createDebugAPI, type DebugAPI } from "./modules/debug-api";
 import type { DecisionLoggerAPI } from "./modules/decision-logger-api";
 import { createDecisionLoggerAPI } from "./modules/decision-logger-api";
@@ -190,6 +194,10 @@ import { createProfileAPI, type ProfileAPI } from "./profile-api";
 import { createProjectAPI, type ProjectAPI } from "./project-api";
 import { createQueueAPI, type QueueAPI } from "./queue-api";
 import { createScreenshotAPI, type ScreenshotAPI } from "./screenshot-api";
+import {
+	createServerAuthAPI,
+	type ServerAuthAPI,
+} from "./modules/server-auth-api";
 import { createSettingsAPI, type SettingsAPI } from "./settings-api";
 import { createTaskAPI, type TaskAPI } from "./task-api";
 import { createTerminalAPI, type TerminalAPI } from "./terminal-api";
@@ -236,6 +244,7 @@ export interface ElectronAPI
 		TestGenerationAPI,
 		CostAPI,
 		CostPredictorAPI,
+		FormulaMatrixAPI,
 		AccessibilityAPI,
 		I18nAgentAPI,
 		DocDriftAPI,
@@ -264,6 +273,8 @@ export interface ElectronAPI
 		OfflineModeAPI,
 		VisualProgrammingAPI {
 	github: GitHubAPI;
+	/** Multi-user server mode: connection + login (local / Entra ID) */
+	serverAuth: ServerAuthAPI;
 	/** Queue routing API for rate limit recovery */
 	queue: QueueAPI;
 	/** Code quality analysis API */
@@ -364,6 +375,7 @@ export const createElectronAPI = (): ElectronAPI => {
 		...createTestGenerationAPI(),
 		...createCostAPI(),
 		...createCostPredictorAPI(),
+		...createFormulaMatrixAPI(),
 		...createAccessibilityAPI(),
 		...createI18nAgentAPI(),
 		...createDocDriftAPI(),
@@ -392,6 +404,7 @@ export const createElectronAPI = (): ElectronAPI => {
 		...createOfflineModeAPI(),
 		...createVisualProgrammingAPI(),
 		github: createGitHubAPI(),
+		serverAuth: createServerAuthAPI(), // Multi-user server mode
 		queue: createQueueAPI(), // Queue routing for rate limit recovery
 		quality: createQualityAPI(), // Code quality analysis
 		selfHealing: createSelfHealingAPI(),

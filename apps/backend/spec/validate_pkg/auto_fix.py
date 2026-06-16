@@ -182,7 +182,12 @@ def auto_fix_plan(spec_dir: Path) -> bool:
 
     # Fix missing top-level fields
     if "feature" not in plan:
-        plan["feature"] = plan.get("title") or plan.get("spec_id") or "Unnamed Feature"
+        # Never fall back to spec_id: it is the slugified spec-folder name
+        # (e.g. "001-limitation-du-num-ro-…"), which the frontend would surface
+        # verbatim as the kanban card title. The "Unnamed Feature" placeholder is
+        # recognized as a non-title downstream, so the UI keeps resolving the real
+        # US/RsD title from requirements.display_title / spec.md instead.
+        plan["feature"] = plan.get("title") or "Unnamed Feature"
         fixed = True
 
     if "workflow_type" not in plan:

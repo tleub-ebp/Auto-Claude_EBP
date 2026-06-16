@@ -34,10 +34,12 @@ import type {
 import type {
 	PhaseModelConfig,
 	PhaseThinkingConfig,
+	ThinkingLevel,
 } from "../../../shared/types/settings";
 import type { AgentManager } from "../../agent";
 import { getAppLanguage } from "../../app-language";
 import { appLog } from "../../app-logger";
+import { learningLoopService } from "../../learning-loop-service";
 import {
 	type ClaudeProfileManager,
 	initializeClaudeProfileManager,
@@ -57,8 +59,8 @@ import {
 	getPlanPath,
 	persistPlanStatus,
 	updatePlanSubtasks,
-	getModifiedFilesFromWorktree,
-	generateSubtasksFromModifiedFiles,
+	buildChangeRequestSubtask,
+	addChangeRequestSubtaskToPlan,
 } from "./plan-file-utils";
 import { findTaskAndProject } from "./shared";
 
@@ -77,6 +79,50 @@ function requiresClaudeAuth(): boolean {
 		selectedProvider === "claude" ||
 		selectedProvider === "anthropic"
 	);
+}
+
+/**
+ * Feed the learning loop with a human review verdict, inferred from a kanban
+ * status transition. Fire-and-forget — never blocks the status change.
+ *
+ * - Approved: a reviewed task moves forward to done/pr_created.
+ * - Rejected: a task in human_review is sent back to an earlier column
+ *   (the reviewer wants rework).
+ */
+function recordReviewVerdictForLearning(
+	previousStatus: TaskStatus,
+	newStatus: TaskStatus,
+	project: Project,
+	task: Task,
+): void {
+	try {
+		const movingForwardToDone =
+			(newStatus === "done" || newStatus === "pr_created") &&
+			(previousStatus === "human_review" || previousStatus === "ai_review");
+
+		const sentBackFromReview =
+			previousStatus === "human_review" &&
+			(newStatus === "backlog" ||
+				newStatus === "queue" ||
+				newStatus === "in_progress");
+
+		if (movingForwardToDone) {
+			learningLoopService.recordTaskOutcome(
+				project.path,
+				task.specId,
+				"approved",
+			);
+		} else if (sentBackFromReview) {
+			learningLoopService.recordTaskOutcome(
+				project.path,
+				task.specId,
+				"rejected",
+				"Human reviewer sent the task back for rework.",
+			);
+		}
+	} catch (err) {
+		console.warn("[TASK_UPDATE_STATUS] Learning outcome recording failed:", err);
+	}
 }
 
 /**
@@ -426,6 +472,13 @@ function determineStartEvent(
 	}
 
 	if (currentXState === "human_review" || currentXState === "error") {
+		// Une tache en echec pendant la planification n'a pas de plan/sous-taches :
+		// il faut relancer la planification, pas sauter au codage. Sinon XState
+		// reste sur un etat incoherent et le garde "settled-state" peut bloquer la
+		// progression cote frontend.
+		if (currentXState === "error" && (task.subtasks?.length ?? 0) === 0) {
+			return { type: "PLANNING_STARTED" };
+		}
 		return { type: "USER_RESUMED" };
 	}
 
@@ -450,6 +503,9 @@ function determineStartEvent(
 	}
 
 	if (task.status === "human_review" || task.status === "error") {
+		if (task.status === "error" && (task.subtasks?.length ?? 0) === 0) {
+			return { type: "PLANNING_STARTED" };
+		}
 		return { type: "USER_RESUMED" };
 	}
 
@@ -805,13 +861,37 @@ export function registerTaskExecutionHandlers(
 	 * Stop a task
 	 */
 	ipcMain.on(IPC_CHANNELS.TASK_STOP, (_, taskId: string) => {
-		agentManager.killTask(taskId);
+		// haltTask (not killTask) also unregisters the task from the
+		// OperationRegistry so a proactive profile-swap can't resurrect it after
+		// the user stopped it.
+		agentManager.haltTask(taskId);
 		fileWatcher.unwatch(taskId);
 
 		// Find task and project to emit USER_STOPPED with plan context
 		const { task, project } = findTaskAndProject(taskId);
 
 		if (!task || !project) return;
+
+		// Clear any cooperative-pause flag so a stopped task isn't left looking
+		// "paused" after it transitions out (e.g. to human_review).
+		try {
+			const planPaths = getPlanPaths(getSpecPaths(task, project), project);
+			for (const planFile of planPaths.all) {
+				if (!existsSync(planFile)) continue;
+				const plan = JSON.parse(readFileSync(planFile, "utf-8"));
+				if (plan.paused?.enabled) {
+					plan.paused = {
+						...plan.paused,
+						enabled: false,
+						paused_at: null,
+						paused_subtask_id: null,
+					};
+					writeFileSync(planFile, JSON.stringify(plan, null, 2));
+				}
+			}
+		} catch (err) {
+			appLog.warn(`[TASK_STOP] Could not clear pause flag for ${taskId}:`, err);
+		}
 
 		let hasPlan = false;
 		try {
@@ -1060,126 +1140,121 @@ export function registerTaskExecutionHandlers(
 					};
 				}
 
-				// Generate subtasks from modified files and feedback
-				// This creates new subtasks in the implementation plan with the modified files attached
-				if (hasWorktree && worktreePath) {
-					try {
-						console.warn("[TASK_REVIEW] Generating subtasks from modified files...");
+				// Record the requested change as a single, traceable subtask so the
+				// Subtasks tab keeps a visible history of every modification the user
+				// asked for. It is rendered with a distinct colour in the UI
+				// (origin: "change_request"). This is created unconditionally — even
+				// when there is no worktree or no files have changed yet — so a request
+				// always leaves a trace.
+				try {
+					const changeRequestSubtask = buildChangeRequestSubtask(
+						feedback || "Needs fixes based on user feedback",
+					);
 
-						// Get modified files from the worktree
-						const modifiedFiles = getModifiedFilesFromWorktree(worktreePath);
+					// Write the trace to BOTH plans:
+					//  - the worktree plan, which the agent actually reads/updates;
+					//  - the MAIN project plan, which the Subtasks tab watches. The
+					//    worktree plan is only synced back to the main one after QA, so
+					//    without this second write the new subtask would not appear in
+					//    the UI until much later (the reported "no new coloured subtask").
+					// The subtask carries no files at creation — its real changes are
+					// captured in files_changed by the backend once the agent runs.
+					const worktreePlanPath = path.join(
+						hasWorktree && worktreeSpecDir ? worktreeSpecDir : specDir,
+						AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
+					);
+					const mainPlanPath = path.join(
+						specDir,
+						AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
+					);
 
-						if (modifiedFiles.length > 0) {
-							// Generate subtasks grouped by directory
-							const newSubtasks = generateSubtasksFromModifiedFiles(
-								modifiedFiles,
-								feedback || "Needs fixes based on user feedback",
-							);
-
-							// Load the current implementation plan
-							const planPath = path.join(
-								worktreeSpecDir || specDir,
-								AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
-							);
-
-							try {
-								const planContent = readFileSync(planPath, "utf-8");
-								const plan = JSON.parse(planContent);
-
-								// Add new subtasks to the Implementation phase or create it
-								if (!plan.phases) {
-									plan.phases = [];
-								}
-
-								let implPhase = plan.phases.find(
-									(p: Record<string, unknown>) => p.name === "Implementation",
-								);
-								if (!implPhase) {
-									implPhase = { name: "Implementation", subtasks: [] };
-									plan.phases.push(implPhase);
-								}
-
-								// Add the new subtasks
-								if (!Array.isArray(implPhase.subtasks)) {
-									implPhase.subtasks = [];
-								}
-								implPhase.subtasks.push(...newSubtasks);
-
-								// Update the plan file
-								writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf-8");
-
-								console.warn(
-									`[TASK_REVIEW] Added ${newSubtasks.length} new subtasks to implementation plan`,
-								);
-								appLog.info(
-									`[TASK_REVIEW] Generated ${newSubtasks.length} subtasks from ${modifiedFiles.length} modified files`,
-								);
-							} catch (planError) {
-								console.warn(
-									"[TASK_REVIEW] Could not update implementation plan with subtasks:",
-									planError,
-								);
-								// Log but don't fail - the QA process will still run
-								appLog.warn(
-									`[TASK_REVIEW] Failed to generate subtasks from modified files: ${planError instanceof Error ? planError.message : String(planError)}`,
-								);
-							}
-						} else {
-							console.warn(
-								"[TASK_REVIEW] No modified files detected in worktree",
-							);
-						}
-					} catch (subtaskError) {
-						console.warn(
-							"[TASK_REVIEW] Error generating subtasks:",
-							subtaskError,
-						);
-						// Don't fail the review - continue with QA process
-						appLog.warn(
-							`[TASK_REVIEW] Failed to generate subtasks: ${subtaskError instanceof Error ? subtaskError.message : String(subtaskError)}`,
-						);
+					const wrote = addChangeRequestSubtaskToPlan(
+						worktreePlanPath,
+						changeRequestSubtask,
+					);
+					if (path.resolve(mainPlanPath) !== path.resolve(worktreePlanPath)) {
+						addChangeRequestSubtaskToPlan(mainPlanPath, changeRequestSubtask);
 					}
+
+					appLog.info(
+						`[TASK_REVIEW] Recorded change-request subtask (${changeRequestSubtask.id}, written=${wrote})`,
+					);
+				} catch (subtaskError) {
+					// Don't fail the review - continue with QA process
+					appLog.warn(
+						`[TASK_REVIEW] Failed to record change-request subtask: ${subtaskError instanceof Error ? subtaskError.message : String(subtaskError)}`,
+					);
 				}
 
-				// Reset existing subtasks to "pending" in the implementation plan
-				// so the full pipeline (planning → coding → QA) will re-process them
-				const resetPlanPath = path.join(
-					hasWorktree && worktreeSpecDir ? worktreeSpecDir : specDir,
-					AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
-				);
-				try {
-					const resetPlanContent = readFileSync(resetPlanPath, "utf-8");
-					const resetPlan = JSON.parse(resetPlanContent);
-					if (resetPlan.phases) {
-						for (const phase of resetPlan.phases) {
-							if (Array.isArray(phase.subtasks)) {
-								for (const subtask of phase.subtasks) {
-									// Only reset completed/failed subtasks back to pending
-									if (subtask.status === "completed" || subtask.status === "failed") {
-										subtask.status = "pending";
+				// Re-open the plan for another pass WITHOUT re-running work that
+				// already passed. A "Request Changes" is a follow-up: the agent should
+				// pick up the new change-request subtask (pending) and retry any
+				// genuinely failed ones, but COMPLETED subtasks stay completed —
+				// otherwise every modification re-executes the whole task and floods
+				// the logs with the other subtasks (matches the follow-up planner's
+				// "never change the status of completed subtasks" rule).
+				//
+				// Reset BOTH plans: the MAIN plan is authoritative on restart (run.py
+				// is launched with the main project dir and copy_spec_to_worktree
+				// overwrites the worktree copy from it) AND it is the plan the UI
+				// watches — so it must carry the change-request + in-progress status.
+				const resetPlanPaths = [
+					path.join(specDir, AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN),
+					...(hasWorktree && worktreeSpecDir
+						? [path.join(worktreeSpecDir, AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN)]
+						: []),
+				];
+				for (const resetPlanPath of resetPlanPaths) {
+					if (!existsSync(resetPlanPath)) continue;
+					try {
+						const resetPlan = JSON.parse(readFileSync(resetPlanPath, "utf-8"));
+						if (resetPlan.phases) {
+							for (const phase of resetPlan.phases) {
+								if (Array.isArray(phase.subtasks)) {
+									for (const subtask of phase.subtasks) {
+										// Retry failed subtasks; preserve completed ones.
+										if (subtask.status === "failed") {
+											subtask.status = "pending";
+										}
 									}
 								}
 							}
 						}
+						// Reset QA signoff so QA re-validates the task after the change.
+						if (resetPlan.qa_signoff) {
+							resetPlan.qa_signoff.status = "pending";
+						}
+						resetPlan.status = "in_progress";
+						resetPlan.planStatus = "in_progress";
+						resetPlan.updated_at = new Date().toISOString();
+						writeFileSync(
+							resetPlanPath,
+							JSON.stringify(resetPlan, null, 2),
+							"utf-8",
+						);
+					} catch (resetError) {
+						appLog.warn(
+							`[TASK_REVIEW] Could not reset plan ${resetPlanPath}: ${resetError instanceof Error ? resetError.message : String(resetError)}`,
+						);
 					}
-					// Reset QA signoff so the full pipeline runs again
-					if (resetPlan.qa_signoff) {
-						resetPlan.qa_signoff.status = "pending";
-					}
-					resetPlan.status = "in_progress";
-					resetPlan.planStatus = "in_progress";
-					resetPlan.updated_at = new Date().toISOString();
-					writeFileSync(resetPlanPath, JSON.stringify(resetPlan, null, 2), "utf-8");
-					appLog.info("[TASK_REVIEW] Reset subtasks to pending for full pipeline re-execution");
-				} catch (resetError) {
-					appLog.warn(
-						`[TASK_REVIEW] Could not reset subtasks in plan: ${resetError instanceof Error ? resetError.message : String(resetError)}`,
-					);
 				}
+				appLog.info(
+					"[TASK_REVIEW] Re-opened plan(s) for change request (completed subtasks preserved)",
+				);
 
 				// Start full pipeline (planning → coding → QA) instead of QA-only
-				// This ensures changes requested by the user go through the complete workflow
-				const qaProjectPath = hasWorktree ? worktreePath : project.path;
+				// This ensures changes requested by the user go through the complete workflow.
+				//
+				// IMPORTANT: pass the MAIN project path (never the worktree path) as the
+				// project dir. The WorktreeManager then reuses the EXISTING worktree
+				// idempotently instead of trying to `git worktree add` a branch that is
+				// already checked out (which fails with "branch already used by worktree",
+				// git exit 128). Keeping worktree isolation (not --direct) also preserves
+				// the worktree→main progress sync (run.py sets source_spec_dir), so the
+				// kanban/modal percentage actually reaches 100% once the change-request
+				// completes — running --direct skips that sync and leaves the main plan
+				// (which the UI watches) stuck on the "pending" change-request subtask.
+				const qaProjectPath = project.path;
 				const baseBranch =
 					task.metadata?.baseBranch || project.settings?.mainBranch;
 				console.warn(
@@ -1472,6 +1547,24 @@ print(json.dumps(result))
 			const specDir = path.join(project.path, specsBaseDir, task.specId);
 			const planPath = getPlanPath(project, task);
 
+			// Validate status transition - 'ai_review' relaunches the QA validation,
+			// which needs a spec and an implementation plan to validate against.
+			// Validated BEFORE persisting: otherwise the task would be stored as
+			// ai_review with no process and immediately flagged as stuck.
+			if (status === "ai_review" && !agentManager.isRunning(taskId)) {
+				const specFileForQa = path.join(specDir, AUTO_BUILD_PATHS.SPEC_FILE);
+				if (!existsSync(specFileForQa) || task.subtasks.length === 0) {
+					console.warn(
+						`[TASK_UPDATE_STATUS] Blocked attempt to set status 'ai_review' for task ${taskId}. No spec or implementation plan to validate.`,
+					);
+					return {
+						success: false,
+						error:
+							"Cannot start AI review - the task has no spec or implementation plan yet. The task must be implemented before QA validation.",
+					};
+				}
+			}
+
 			try {
 				const handledByMachine = taskStateManager.handleManualStatusChange(
 					taskId,
@@ -1495,6 +1588,10 @@ print(json.dumps(result))
 					}
 				}
 
+				// Feed the learning loop with the human verdict on a reviewed task.
+				// `task.status` is still the pre-change status here.
+				recordReviewVerdictForLearning(task.status, status, project, task);
+
 				// Auto-stop task when status changes AWAY from 'in_progress' and process IS running
 				// This handles the case where user drags a running task back to Planning/backlog
 				if (status !== "in_progress" && agentManager.isRunning(taskId)) {
@@ -1503,6 +1600,98 @@ print(json.dumps(result))
 						taskId,
 					);
 					agentManager.killTask(taskId);
+				}
+
+				// Auto-start QA validation when status changes to 'ai_review' and no
+				// process is running. Without this, moving a task to "AI Review" only
+				// persists the status while the renderer's stuck-detection expects a
+				// live process — the task would show as "needs recovery" after 60s.
+				// (killTask above removes process tracking synchronously, so a task
+				// dragged straight from in_progress lands here with isRunning false.)
+				if (status === "ai_review" && !agentManager.isRunning(taskId)) {
+					const mainWindow = getMainWindow();
+
+					// Check git status before auto-starting
+					const gitStatusCheckForQa = checkGitStatus(project.path);
+					if (!gitStatusCheckForQa.isGitRepo || !gitStatusCheckForQa.hasCommits) {
+						console.warn(
+							"[TASK_UPDATE_STATUS] Git check failed, cannot start QA validation",
+						);
+						if (mainWindow) {
+							mainWindow.webContents.send(
+								IPC_CHANNELS.TASK_ERROR,
+								taskId,
+								gitStatusCheckForQa.error ||
+									"Git repository with commits required to run tasks.",
+							);
+						}
+						return {
+							success: false,
+							error: gitStatusCheckForQa.error || "Git repository required",
+						};
+					}
+
+					// Check authentication before auto-starting
+					const initResultForQa = await ensureProfileManagerInitialized();
+					if (!initResultForQa.success) {
+						if (mainWindow) {
+							mainWindow.webContents.send(
+								IPC_CHANNELS.TASK_ERROR,
+								taskId,
+								initResultForQa.error,
+							);
+						}
+						return { success: false, error: initResultForQa.error };
+					}
+					if (
+						requiresClaudeAuth() &&
+						!initResultForQa.profileManager.hasValidAuth()
+					) {
+						console.warn(
+							"[TASK_UPDATE_STATUS] No valid authentication for active profile",
+						);
+						if (mainWindow) {
+							mainWindow.webContents.send(
+								IPC_CHANNELS.TASK_ERROR,
+								taskId,
+								"Claude authentication required. Please go to Settings > Claude Profiles and authenticate your account, or set an OAuth token.",
+							);
+						}
+						return { success: false, error: "Claude authentication required" };
+					}
+
+					console.warn(
+						"[TASK_UPDATE_STATUS] Starting QA validation for:",
+						task.specId,
+					);
+
+					// Start file watcher for this task
+					fileWatcher.watch(taskId, specDir);
+
+					// Synchronise le provider avec le projet (permet le switch de provider entre deux runs)
+					const prevProviderForQa = syncTaskProvider(task, project, specDir);
+					if (prevProviderForQa) {
+						console.warn(
+							`[TASK_UPDATE_STATUS] Provider switched: ${prevProviderForQa} -> ${task.metadata?.provider}`,
+						);
+					}
+
+					await agentManager.startQAProcess(
+						taskId,
+						project.path,
+						task.specId,
+						project.id,
+					);
+
+					// Notify renderer about status change
+					if (mainWindow) {
+						mainWindow.webContents.send(
+							IPC_CHANNELS.TASK_STATUS_CHANGE,
+							taskId,
+							"ai_review",
+							project.id,
+						);
+					}
 				}
 
 				// Auto-start task when status changes to 'in_progress' and no process is running
@@ -1749,6 +1938,7 @@ print(json.dumps(result))
 			taskId: string,
 			providerName: string,
 			model?: string,
+			effort?: string,
 		): Promise<IPCResult> => {
 			const { task, project } = findTaskAndProject(taskId);
 			if (!task || !project) {
@@ -1763,6 +1953,13 @@ print(json.dumps(result))
 
 			const provider = providerName.trim();
 			const chosenModel = model?.trim() || undefined;
+			// Validate the effort against the known thinking levels; ignore garbage
+			// so a malformed value never poisons task_metadata.json.
+			const VALID_EFFORTS = ["none", "low", "medium", "high", "ultrathink"];
+			const chosenEffort =
+				effort && VALID_EFFORTS.includes(effort.trim())
+					? effort.trim()
+					: undefined;
 			const specPaths = getSpecPaths(task, project);
 
 			// Distinct spec dirs (worktree + main) that may hold a backend copy.
@@ -1814,6 +2011,16 @@ print(json.dumps(result))
 							existing.model = chosenModel;
 							existing.isAutoProfile = false;
 						}
+						if (chosenEffort) {
+							// Apply the chosen effort to the whole resumed run. The backend
+							// (phase_config.get_phase_thinking) honours a per-phase
+							// `phaseThinking[phase]` over the single `thinkingLevel`, so we
+							// must drop the stale per-phase config for the single effort to
+							// actually win — mirroring how a chosen model sets
+							// isAutoProfile:false to force the single model.
+							existing.thinkingLevel = chosenEffort;
+							delete existing.phaseThinking;
+						}
 						atomicWriteFileSync(
 							metadataPath,
 							JSON.stringify(existing, null, 2),
@@ -1831,6 +2038,7 @@ print(json.dumps(result))
 				const markerPayload = JSON.stringify({
 					provider,
 					...(chosenModel ? { model: chosenModel } : {}),
+					...(chosenEffort ? { effort: chosenEffort } : {}),
 				});
 				for (const dir of specDirs) {
 					writeFileSync(
@@ -1844,12 +2052,17 @@ print(json.dumps(result))
 				if (!task.metadata) task.metadata = {};
 				task.metadata.provider = provider;
 				if (chosenModel) task.metadata.model = chosenModel;
+				if (chosenEffort) {
+					task.metadata.thinkingLevel = chosenEffort as ThinkingLevel;
+					task.metadata.phaseThinking = undefined;
+				}
 				if (task.metadata.paused) task.metadata.paused.enabled = false;
 				projectStore.invalidateTasksCache(project.id);
 
 				appLog.info(
 					`[TASK_RESUME_WITH_PROVIDER] Resuming task ${taskId} with ` +
-						`provider=${provider}${chosenModel ? `, model=${chosenModel}` : ""} ` +
+						`provider=${provider}${chosenModel ? `, model=${chosenModel}` : ""}` +
+						`${chosenEffort ? `, effort=${chosenEffort}` : ""} ` +
 						`(${specDirs.length} spec dir(s)). Conversation log will be replayed.`,
 				);
 			} catch (err) {
@@ -2825,10 +3038,21 @@ print(json.dumps(result))
 				// UI uses that to switch the controls into the paused state.
 				projectStore.invalidateTasksCache(project.id);
 
+				// Immediate pause: stop the running subprocess NOW rather than waiting
+				// for the backend to reach the next cooperative checkpoint (end of the
+				// current step). haltTask marks the spawn as killed (its exit handler
+				// returns early WITHOUT emitting "exit" — no PROCESS_EXITED/USER_STOPPED,
+				// so the card keeps its current column) AND unregisters the task from the
+				// OperationRegistry so the proactive profile-swap / usage monitor can't
+				// resurrect the paused process when a token limit is hit. The paused flag
+				// written above drives the UI and a clean resume (the in-flight step
+				// re-runs, re-registering the task).
+				const wasRunning = agentManager.haltTask(taskId);
+
 				appLog.info(
-					`[TASK_PAUSE] Pause requested for task ${taskId} at subtask ` +
-						`${subtaskId || "none"} (${written} plan cop[y/ies]). The backend ` +
-						`finishes the current step, then stops.`,
+					`[TASK_PAUSE] Task ${taskId} paused immediately at subtask ` +
+						`${subtaskId || "none"} (${written} plan cop[y/ies]); ` +
+						`subprocess ${wasRunning ? "killed" : "was not running"}.`,
 				);
 
 				return {

@@ -9,6 +9,7 @@
 		"libs/*"
 	],
 	"scripts": {
+		"prepare": "git config core.hooksPath .husky",
 		"install:backend": "node scripts/install-backend.js",
 		"install:frontend": "cd apps/frontend && pnpm install",
 		"install:all": "pnpm run install:backend && pnpm run install:frontend",

@@ -36,6 +36,7 @@ function emptyTaskOrder(): TaskOrderState {
 		in_progress: [],
 		ai_review: [],
 		human_review: [],
+		build_failed: [],
 		done: [],
 		pr_created: [],
 		error: [],

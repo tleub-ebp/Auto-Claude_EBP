@@ -22,6 +22,7 @@ export * from "./copilot-oauth-api";
 export * from "./cost-api";
 export * from "./cost-predictor-api";
 export * from "./debug-api";
+export * from "./formula-matrix-api";
 export * from "./documentation-agent-api";
 export * from "./github-api";
 export * from "./gitlab-api";

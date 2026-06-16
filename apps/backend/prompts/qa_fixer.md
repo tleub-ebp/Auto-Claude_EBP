@@ -280,6 +280,23 @@ After all fixes are applied:
 
 **All tests must pass before proceeding.**
 
+### Coverage gap fixes (if the fix request mentions coverage)
+
+If `QA_FIX_REQUEST.md` reports **insufficient coverage**, you MUST add the missing
+tests so that **unit + integration coverage reaches {{MIN_COVERAGE}}%** (lines and
+branches). Then re-run with coverage and update
+`implementation_plan.json` → `qa_signoff.coverage`:
+
+```bash
+# Run the suites WITH coverage (use the project's own tooling), e.g.:
+# Python:        pytest --cov=. --cov-branch --cov-report=term-missing
+# JS/TS (vitest): vitest run --coverage
+# Go:            go test ./... -cover
+```
+
+A task will be rejected again automatically while unit or integration coverage
+stays below {{MIN_COVERAGE}}%.
+
 ---
 
 ## PHASE 5: SELF-VERIFICATION

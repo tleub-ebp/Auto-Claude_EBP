@@ -13,15 +13,14 @@ Workflow:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
 from core.worktree import WorktreeManager
+from services.notifications import NotificationService, PRReadyNotification
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +45,7 @@ _PR_STRINGS: dict[str, dict[str, str]] = {
         "checklist_section": "Review checklist",
         "check_standards": "Code follows project standards",
         "check_tests": "Tests pass (if applicable)",
+        "check_coverage": "Unit + integration test coverage meets the required threshold (100%)",
         "check_docs": "Documentation is up to date",
         "check_coherent": "Changes are consistent with the task",
         "check_regression": "No regression detected",
@@ -66,6 +66,7 @@ _PR_STRINGS: dict[str, dict[str, str]] = {
         "checklist_section": "Checklist de vérification",
         "check_standards": "Le code respecte les standards du projet",
         "check_tests": "Les tests passent (si applicables)",
+        "check_coverage": "La couverture des tests unitaires + intégration atteint le seuil requis (100%)",
         "check_docs": "La documentation est à jour",
         "check_coherent": "Les changements sont cohérents avec la tâche",
         "check_regression": "Aucune régression détectée",
@@ -83,117 +84,34 @@ def _t(key: str, lang: str | None = None) -> str:
     return strings.get(key, _PR_STRINGS["en"].get(key, key))
 
 
-# ── Teams notification strings ─────────────────────────────────────────────
-_TEAMS_STRINGS: dict[str, dict[str, str]] = {
-    "en": {
-        "task_done_title": "✅ Task completed",
-        "task_done_body": "The task has been completed and a PR has been created for human review.",
-        "pr_label": "Pull Request",
-        "review_prompt": "Click below to review the changes.",
-        "review_button": "Open PR",
-        "project_label": "Project",
-        "footer": "WorkPilot AI",
-    },
-    "fr": {
-        "task_done_title": "✅ Tâche terminée",
-        "task_done_body": "La tâche est terminée et une PR a été créée pour validation humaine.",
-        "pr_label": "Pull Request",
-        "review_prompt": "Cliquez ci-dessous pour examiner les changements.",
-        "review_button": "Ouvrir la PR",
-        "project_label": "Projet",
-        "footer": "WorkPilot AI",
-    },
-}
+def _announce_pr_ready(notif: PRReadyNotification, project_path: Path) -> None:
+    """Announce a finished task / created PR on every configured channel.
 
-
-def _send_teams_notification(
-    task_title: str,
-    pr_url: str | None,
-    project_path: Path,
-) -> None:
-    """Send a Teams Incoming Webhook notification when a task is done."""
-    webhook_url = os.environ.get("TEAMS_WEBHOOK_URL", "").strip()
-    if (
-        not webhook_url
-        or os.environ.get("TEAMS_NOTIFICATIONS_ENABLED", "").lower() != "true"
-    ):
-        return
-
-    lang = _get_app_language()
-    s = _TEAMS_STRINGS.get(lang, _TEAMS_STRINGS["en"])
-    project_name = project_path.name
-
-    body: list[dict] = [
-        {
-            "type": "TextBlock",
-            "text": s["task_done_title"],
-            "weight": "bolder",
-            "size": "large",
-        },
-        {"type": "TextBlock", "text": task_title, "weight": "bolder", "wrap": True},
-        {
-            "type": "TextBlock",
-            "text": s["task_done_body"],
-            "wrap": True,
-            "spacing": "small",
-        },
-        {
-            "type": "FactSet",
-            "facts": [{"title": s["project_label"], "value": project_name}],
-            "spacing": "medium",
-        },
-    ]
-
-    actions: list[dict] = []
-    if pr_url:
-        body.append(
-            {
-                "type": "TextBlock",
-                "text": s["review_prompt"],
-                "wrap": True,
-                "spacing": "small",
-            }
-        )
-        actions.append(
-            {
-                "type": "Action.OpenUrl",
-                "title": s["review_button"],
-                "url": pr_url,
-            }
-        )
-
-    payload = {
-        "type": "message",
-        "attachments": [
-            {
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "type": "AdaptiveCard",
-                    "version": "1.4",
-                    "body": body,
-                    "actions": actions,
-                    "msteams": {"width": "Full"},
-                },
-            }
-        ],
-    }
-
+    Dispatches to the multi-channel notification service (Teams, Slack,
+    Discord, Google Chat, generic webhook) and emits a ``pr_opened`` event so
+    user-defined hooks can react too. Never raises.
+    """
     try:
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            webhook_url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status not in (200, 202):
-                logger.warning(f"[Teams] Webhook returned HTTP {resp.status}")
-            else:
-                logger.info("[Teams] Notification sent successfully")
+        service = NotificationService.from_env(project_path)
+        if service.is_configured:
+            service.send_pr_ready(notif)
     except Exception as exc:
-        logger.warning(f"[Teams] Failed to send notification: {exc}")
+        logger.warning(f"[Notifications] Failed to send PR-ready notification: {exc}")
+
+    # Emit hook event (user-defined hooks with a pr_opened trigger)
+    try:
+        from services.hooks.hook_service import HookService
+        from services.hooks.models import HookEvent, TriggerType
+
+        HookService.get_instance().emit_event_sync(
+            HookEvent(
+                type=TriggerType.PR_OPENED,
+                data=notif.to_event_data(),
+                source="task_completion",
+            )
+        )
+    except Exception as exc:
+        logger.warning(f"[Notifications] Failed to emit pr_opened hook event: {exc}")
 
 
 class TaskCompletionResult(TypedDict):
@@ -323,9 +241,20 @@ class TaskCompletionService:
         else:
             logger.info(f"[TaskCompletionService] PR créée avec succès: {pr_url}")
 
-        # Send Teams notification (no-op if not configured)
+        # Announce on configured channels + emit hook event (no-op if not configured)
         if not pr_already_exists:
-            _send_teams_notification(task_title, pr_url, self.project_path)
+            _announce_pr_ready(
+                PRReadyNotification(
+                    task_title=task_title,
+                    task_description=task_description,
+                    pr_url=pr_url,
+                    project_name=self.project_path.name,
+                    branch=push_result.get("branch"),
+                    target_branch=target,
+                    spec_id=spec_id,
+                ),
+                self.project_path,
+            )
 
         return TaskCompletionResult(
             success=True,
@@ -380,6 +309,7 @@ class TaskCompletionService:
             f"### ✅ {_t('checklist_section')}",
             f"- [ ] {_t('check_standards')}",
             f"- [ ] {_t('check_tests')}",
+            f"- [ ] {_t('check_coverage')}",
             f"- [ ] {_t('check_docs')}",
             f"- [ ] {_t('check_coherent')}",
             f"- [ ] {_t('check_regression')}",

@@ -39,6 +39,12 @@ class StreamingAgentWrapper:
     through it.
     """
 
+    # Minimum delay between reconnect attempts. Without throttling, a session
+    # that emits many events while the server is unreachable would try to
+    # reconnect on every single event (each attempt costing up to a few
+    # seconds of connect timeout), stalling the agent's message loop.
+    _RECONNECT_THROTTLE_S = 3.0
+
     def __init__(
         self,
         session_id: str,
@@ -54,6 +60,10 @@ class StreamingAgentWrapper:
         self._ws_port = ws_port
         self._ws: Any | None = None
         self._connected = False
+        # Remember the address that worked so reconnects don't re-probe every
+        # IPv4/IPv6 variant (host/port don't change within a session).
+        self._connected_url: str | None = None
+        self._last_reconnect_attempt = 0.0
 
     async def _connect(self) -> bool:
         """Connect to the WebSocket server, trying multiple addresses."""
@@ -61,12 +71,23 @@ class StreamingAgentWrapper:
             logger.warning("websockets package not installed, streaming unavailable")
             return False
 
-        # Try multiple URLs in case of IPv4/IPv6 issues
-        urls_to_try = [
-            f"ws://{self._ws_host}:{self._ws_port}/stream/{self.session_id}",
-            f"ws://127.0.0.1:{self._ws_port}/stream/{self.session_id}",
-            f"ws://[::1]:{self._ws_port}/stream/{self.session_id}",
-        ]
+        # On reconnect, go straight back to the address that worked before.
+        # Otherwise probe multiple URLs in case of IPv4/IPv6 issues.
+        # Server mode: the run manager injects WORKPILOT_WS_TOKEN into the
+        # agent's environment; the WS server requires it on the handshake.
+        import os
+
+        ws_token = os.environ.get("WORKPILOT_WS_TOKEN", "")
+        token_suffix = f"?token={ws_token}" if ws_token else ""
+
+        if self._connected_url:
+            urls_to_try = [self._connected_url]
+        else:
+            urls_to_try = [
+                f"ws://{self._ws_host}:{self._ws_port}/stream/{self.session_id}{token_suffix}",
+                f"ws://127.0.0.1:{self._ws_port}/stream/{self.session_id}{token_suffix}",
+                f"ws://[::1]:{self._ws_port}/stream/{self.session_id}{token_suffix}",
+            ]
 
         for url in urls_to_try:
             try:
@@ -90,6 +111,7 @@ class StreamingAgentWrapper:
                     )
                 )
                 self._connected = True
+                self._connected_url = url
                 return True
             except asyncio.TimeoutError:
                 # Log at debug — silently dropping made misconfigured ports
@@ -115,9 +137,29 @@ class StreamingAgentWrapper:
             self._ws = None
             self._connected = False
 
+    async def _ensure_connected(self) -> bool:
+        """Return True if connected, lazily reconnecting (throttled) if not.
+
+        The wrapper previously connected only once in ``start_session``. If that
+        initial connect lost the race against the WebSocket server starting up —
+        or the connection later dropped (ping timeout during a long LLM/tool
+        step, server restart) — every subsequent ``_send_event`` silently
+        early-returned and the live "Streaming Development" view showed zero
+        events for the rest of the session (stuck on "waiting for code
+        changes"). Reconnect on demand so a transient failure self-heals.
+        """
+        if self._connected and self._ws is not None:
+            return True
+
+        now = time.time()
+        if now - self._last_reconnect_attempt < self._RECONNECT_THROTTLE_S:
+            return False
+        self._last_reconnect_attempt = now
+        return await self._connect()
+
     async def _send_event(self, event_type: str, data: dict[str, Any]):
         """Send an event to the WebSocket server for broadcasting."""
-        if not self._connected or not self._ws:
+        if not await self._ensure_connected():
             return
 
         try:
@@ -133,7 +175,10 @@ class StreamingAgentWrapper:
             await self._ws.send(json.dumps(message))
         except Exception as e:
             logger.warning(f"Failed to send streaming event: {e}")
+            # Drop the dead socket so the next event triggers a reconnect
+            # instead of silently no-op'ing for the rest of the session.
             self._connected = False
+            self._ws = None
 
     async def start_session(self, metadata: dict[str, Any]):
         """Start a streaming session."""

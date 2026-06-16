@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -186,9 +187,17 @@ def generate_spec_name(task_description: str) -> str:
         "from",
     }
 
-    # Clean and tokenize
-    text = task_description.lower()
-    text = "".join(c if c.isalnum() or c == " " else " " for c in text)
+    # Clean and tokenize. Strip accents/diacritics first (é → e, ç → c, …):
+    # str.isalnum() is Unicode-aware and keeps accented letters, which would
+    # produce folder names rejected by the backend spec_name whitelist
+    # (^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$). NFKD + dropping combining marks
+    # transliterates to ASCII so the resulting slug is always valid.
+    normalized = unicodedata.normalize("NFKD", task_description)
+    normalized = "".join(c for c in normalized if not unicodedata.combining(c))
+    text = normalized.lower()
+    text = "".join(
+        c if (c.isascii() and c.isalnum()) or c == " " else " " for c in text
+    )
     words = text.split()
 
     # Filter out skip words and short words

@@ -21,11 +21,10 @@ import {
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-	AVAILABLE_MODELS,
 	DEFAULT_AGENT_PROFILES,
 	DEFAULT_PHASE_MODELS,
 	DEFAULT_PHASE_THINKING,
-	getDefaultModelForProvider,
+	resolveModelForProviderCatalog,
 	THINKING_LEVELS,
 } from "../../shared/constants";
 import type { ThinkingLevel } from "../../shared/types";
@@ -145,41 +144,46 @@ export function AgentProfileSelector({
 	const currentPhaseThinking = phaseThinking || DEFAULT_PHASE_THINKING;
 
 	// When the active provider changes, migrate any phase model that is not
-	// available in the (live + static) catalog to the provider's flagship.
-	// Without this the Select trigger would render empty for stale values
-	// (e.g. "opus" left over from Anthropic when switching to OpenAI).
-	// We wait until the live catalog has loaded so we don't migrate against
-	// the static fallback only to migrate again once the live list arrives.
+	// available in the (live + static, deduplicated) catalog. A stored value is
+	// first kept as-is or resolved to its canonical catalog entry — so a legacy
+	// alias ("opus") or hidden dated snapshot maps onto the explicit versioned id
+	// ("claude-opus-4-6"). Only values the provider does not offer at all (e.g.
+	// "sonnet" left over from Anthropic when switching to OpenAI) are remapped,
+	// by capability tier, onto the provider's equivalent (a *standard* OpenAI
+	// model for "sonnet", not the flagship) — see resolveModelForProviderCatalog.
+	// We wait until the live catalog has loaded so we don't migrate against the
+	// static fallback only to migrate again once the live list arrives.
 	useEffect(() => {
 		if (!onPhaseModelsChange) return;
 		if (liveCatalog.loading) return;
 		if (providerModels.length === 0) return;
-		const validValues = new Set(providerModels.map((m) => m.value));
-		const hasInvalid = (
-			Object.keys(currentPhaseModels) as Array<keyof PhaseModelConfig>
-		).some((phase) => !validValues.has(currentPhaseModels[phase]));
-		if (!hasInvalid) return;
-		const fallback =
-			providerModels.find(
-				(m) => (m as { tier?: string }).tier === "flagship",
-			)?.value ||
-			providerModels[0]?.value ||
-			getDefaultModelForProvider(activeProvider);
-		if (!fallback) return;
-		onPhaseModelsChange({
-			spec: validValues.has(currentPhaseModels.spec)
-				? currentPhaseModels.spec
-				: fallback,
-			planning: validValues.has(currentPhaseModels.planning)
-				? currentPhaseModels.planning
-				: fallback,
-			coding: validValues.has(currentPhaseModels.coding)
-				? currentPhaseModels.coding
-				: fallback,
-			qa: validValues.has(currentPhaseModels.qa)
-				? currentPhaseModels.qa
-				: fallback,
-		});
+		const next: PhaseModelConfig = {
+			spec: resolveModelForProviderCatalog(
+				currentPhaseModels.spec,
+				providerModels,
+				activeProvider,
+			),
+			planning: resolveModelForProviderCatalog(
+				currentPhaseModels.planning,
+				providerModels,
+				activeProvider,
+			),
+			coding: resolveModelForProviderCatalog(
+				currentPhaseModels.coding,
+				providerModels,
+				activeProvider,
+			),
+			qa: resolveModelForProviderCatalog(
+				currentPhaseModels.qa,
+				providerModels,
+				activeProvider,
+			),
+		};
+		const changed = (
+			Object.keys(next) as Array<keyof PhaseModelConfig>
+		).some((phase) => next[phase] !== currentPhaseModels[phase]);
+		if (!changed) return;
+		onPhaseModelsChange(next);
 	}, [
 		activeProvider,
 		liveCatalog.loading,
@@ -188,21 +192,18 @@ export function AgentProfileSelector({
 		onPhaseModelsChange,
 	]);
 
-	// Same migration for the custom-mode single model.
+	// Same tier-aware migration for the custom-mode single model.
 	useEffect(() => {
 		if (!isCustom) return;
 		if (!model) return;
 		if (liveCatalog.loading) return;
 		if (providerModels.length === 0) return;
-		const validValues = new Set(providerModels.map((m) => m.value));
-		if (validValues.has(model)) return;
-		const fallback =
-			providerModels.find(
-				(m) => (m as { tier?: string }).tier === "flagship",
-			)?.value ||
-			providerModels[0]?.value ||
-			getDefaultModelForProvider(activeProvider);
-		if (fallback) onModelChange(fallback);
+		const resolved = resolveModelForProviderCatalog(
+			model,
+			providerModels,
+			activeProvider,
+		);
+		if (resolved !== model) onModelChange(resolved);
 	}, [
 		activeProvider,
 		isCustom,
@@ -256,6 +257,19 @@ export function AgentProfileSelector({
 		}
 	};
 
+	// Label of a preset's representative model as offered by the active provider.
+	// Presets encode Anthropic aliases (opus/sonnet/haiku); this resolves them to
+	// the provider's equivalent so the dropdown never shows a Claude model while
+	// OpenAI (or any other provider) is selected.
+	const profileModelLabel = (profileModel: string): string => {
+		const resolved = resolveModelForProviderCatalog(
+			profileModel,
+			providerModels,
+			activeProvider,
+		);
+		return providerModels.find((m) => m.value === resolved)?.label ?? resolved;
+	};
+
 	// Get profile display info
 	const getProfileDisplay = () => {
 		if (isCustom) {
@@ -270,14 +284,24 @@ export function AgentProfileSelector({
 			return {
 				icon: iconMap[profile.icon || "Scale"] || Scale,
 				label: profile.name,
-				description: profile.description,
+				// The "auto" profile description names its model ("Uses Opus…");
+				// make it reflect the provider-resolved model so it can't claim
+				// Opus while the phases run on, e.g., GPT-5.5 Pro.
+				description:
+					profile.id === "auto"
+						? t("agentProfile.autoDescriptionModel", {
+								model: profileModelLabel(profile.model),
+							})
+						: profile.description,
 			};
 		}
 		// Default to auto profile (the actual default)
 		return {
 			icon: Sparkles,
 			label: t("agentProfile.autoLabel"),
-			description: t("agentProfile.autoDescription"),
+			description: t("agentProfile.autoDescriptionModel", {
+				model: profileModelLabel("opus"),
+			}),
 		};
 	};
 
@@ -309,9 +333,7 @@ export function AgentProfileSelector({
 					<SelectContent>
 						{DEFAULT_AGENT_PROFILES.map((profile) => {
 							const ProfileIcon = iconMap[profile.icon || "Scale"] || Scale;
-							const modelLabel = AVAILABLE_MODELS.find(
-								(m) => m.value === profile.model,
-							)?.label;
+							const modelLabel = profileModelLabel(profile.model);
 							return (
 								<SelectItem key={profile.id} value={profile.id}>
 									<div className="flex items-center gap-2">

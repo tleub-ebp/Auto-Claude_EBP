@@ -186,99 +186,35 @@ Fixes #N (if applicable)"""
     return prompt
 
 
-async def _call_claude(prompt: str) -> str:
-    """Call Claude for commit message generation.
+async def _call_llm(
+    prompt: str,
+    project_dir: Path | None = None,
+    spec_dir: Path | None = None,
+) -> str:
+    """Generate the commit message via the active LLM provider.
 
-    Reads model/thinking settings from environment variables:
-    - UTILITY_MODEL_ID: Full model ID (e.g., "claude-haiku-4-5-20251001")
-    - UTILITY_THINKING_BUDGET: Thinking budget tokens (e.g., "1024")
+    Provider-agnostic: routes through ``core.oneshot.oneshot_completion`` so the
+    user's selected provider (Claude / Copilot / OpenAI / Windsurf / …) is
+    honoured instead of hardcoding the Claude SDK. Returns "" on any failure so
+    the caller falls back to a deterministic message.
     """
-    from core.auth import ensure_claude_code_oauth_token, get_auth_token
-    from core.model_config import get_utility_model_config
-
-    if not get_auth_token():
-        logger.warning("No authentication token found")
-        return ""
-
-    ensure_claude_code_oauth_token()
-
     try:
-        from core.simple_client import create_simple_client
+        from core.oneshot import oneshot_completion
     except ImportError:
-        logger.warning("core.simple_client not available")
+        logger.warning("core.oneshot not available")
         return ""
 
-    # Get model settings from environment (passed from frontend)
-    model, thinking_budget = get_utility_model_config()
-
-    logger.info(
-        f"Commit message using model={model}, thinking_budget={thinking_budget}"
-    )
-
-    # Use structured output so the SDK validates the model's response against
-    # the CommitMessage schema and retries malformed JSON for us. We then
-    # render to the Conventional-Commits string format the caller expects.
     try:
-        from core.output_schemas import CommitMessage
-
-        output_format = CommitMessage.as_output_format()
-    except Exception:
-        # If Pydantic / schema import fails for any reason, fall back to
-        # free-form generation rather than blocking the commit.
-        CommitMessage = None  # type: ignore[assignment]
-        output_format = None
-
-    client = create_simple_client(
-        agent_type="commit_message",
-        model=model,
-        system_prompt=SYSTEM_PROMPT,
-        max_thinking_tokens=thinking_budget,
-        output_format=output_format,
-    )
-
-    try:
-        async with client:
-            await client.query(prompt)
-
-            response_text = ""
-            structured_msg = None
-            async for msg in client.receive_response():
-                msg_type = type(msg).__name__
-                if msg_type == "ResultMessage":
-                    structured_msg = msg
-                if msg_type == "AssistantMessage" and hasattr(msg, "content"):
-                    for block in msg.content:
-                        # Must check block type - only TextBlock has .text attribute
-                        block_type = type(block).__name__
-                        if block_type == "TextBlock" and hasattr(block, "text"):
-                            response_text += block.text
-
-            # Prefer the SDK-validated structured output when available.
-            if (
-                CommitMessage is not None
-                and structured_msg is not None
-                and getattr(structured_msg, "subtype", None) == "success"
-                and getattr(structured_msg, "structured_output", None)
-            ):
-                try:
-                    parsed = CommitMessage.model_validate(
-                        structured_msg.structured_output
-                    )
-                    rendered = parsed.render()
-                    logger.info(
-                        f"Generated commit message (structured): {len(rendered)} chars"
-                    )
-                    return rendered
-                except Exception as exc:
-                    logger.debug(
-                        f"Structured commit parse failed, falling back to text: {exc}"
-                    )
-
-            logger.info(f"Generated commit message: {len(response_text)} chars")
-            return response_text.strip()
-
+        message = await oneshot_completion(
+            prompt,
+            system_prompt=SYSTEM_PROMPT,
+            project_dir=str(project_dir) if project_dir else None,
+            spec_dir=str(spec_dir) if spec_dir else None,
+        )
+        logger.info(f"Generated commit message: {len(message)} chars")
+        return message
     except Exception as e:
-        logger.error(f"Claude SDK call failed: {e}")
+        logger.error(f"Commit message generation failed: {e}")
         print(f"    [WARN] Commit message generation failed: {e}", file=sys.stderr)
         return ""
 
@@ -337,9 +273,11 @@ def generate_commit_message_sync(
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                result = pool.submit(lambda: asyncio.run(_call_claude(prompt))).result()
+                result = pool.submit(
+                    lambda: asyncio.run(_call_llm(prompt, project_dir, spec_dir))
+                ).result()
         else:
-            result = asyncio.run(_call_claude(prompt))
+            result = asyncio.run(_call_llm(prompt, project_dir, spec_dir))
 
         if result:
             return result
@@ -399,9 +337,9 @@ async def generate_commit_message(
         files_changed or [],
     )
 
-    # Call Claude
+    # Call the active LLM provider
     try:
-        result = await _call_claude(prompt)
+        result = await _call_llm(prompt, project_dir, spec_dir)
         if result:
             return result
     except Exception as e:

@@ -1,10 +1,11 @@
-﻿import {
+import {
 	AlertTriangle,
 	CheckCheck,
 	CheckCircle,
 	Code,
 	Eye,
 	FileCode,
+	Folder,
 	FolderX,
 	GitBranch,
 	GitCommit,
@@ -142,7 +143,7 @@ export function WorkspaceStatus({
 	const minDisplayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const ipcCleanupRef = useRef<(() => void) | null>(null);
 
-	// Reset state when isMerging transitions from false â†’ true
+	// Reset state when isMerging transitions from false → true
 	useEffect(() => {
 		if (isMerging && !prevIsMergingRef.current) {
 			setMergeProgress(null);
@@ -484,13 +485,13 @@ export function WorkspaceStatus({
 					</span>
 				</div>
 
-				{/* Branch info: spec branch â†’ user's current branch (merge target) */}
+				{/* Branch info: spec branch → user's current branch (merge target) */}
 				{worktreeStatus.branch && (
 					<div className="mt-2 text-xs text-muted-foreground">
 						<code className="bg-background/80 px-1.5 py-0.5 rounded text-[11px]">
 							{worktreeStatus.branch}
 						</code>
-						<span className="mx-1.5">â†’</span>
+						<span className="mx-1.5">→</span>
 						<code className="bg-background/80 px-1.5 py-0.5 rounded text-[11px]">
 							{worktreeStatus.currentProjectBranch ||
 								worktreeStatus.baseBranch ||
@@ -501,8 +502,9 @@ export function WorkspaceStatus({
 
 				{/* Worktree path display */}
 				{worktreeStatus.worktreePath && (
-					<div className="mt-2 text-xs text-muted-foreground font-mono">
-						ðŸ“ {worktreeStatus.worktreePath}
+					<div className="mt-2 text-xs text-muted-foreground font-mono flex items-center gap-1.5">
+						<Folder className="h-3.5 w-3.5 flex-shrink-0" />
+						<span className="break-all">{worktreeStatus.worktreePath}</span>
 					</div>
 				)}
 
@@ -696,7 +698,7 @@ export function WorkspaceStatus({
 					)}
 			</div>
 
-			{/* Merge Progress Overlay â€” shown during merge and for minimum display time after */}
+			{/* Merge Progress Overlay — shown during merge and for minimum display time after */}
 			{(isMerging || showOverlay) && (
 				<MergeProgressOverlay
 					mergeProgress={mergeProgress}

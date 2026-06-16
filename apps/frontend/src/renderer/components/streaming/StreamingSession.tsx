@@ -65,6 +65,9 @@ export function StreamingSession({
 	>([]);
 	const [currentCode, setCurrentCode] = useState<string>("");
 	const [currentFile, setCurrentFile] = useState<string>("");
+	const [changedFiles, setChangedFiles] = useState<
+		Array<{ path: string; operation: string; content?: string }>
+	>([]);
 	const [sessionStats, setSessionStats] = useState({
 		duration: 0,
 		filesChanged: 0,
@@ -123,16 +126,41 @@ export function StreamingSession({
 
 				case "code_change":
 				case "file_update":
-				case "file_operation":
-					setCurrentFile(event.data.file_path);
+				case "file_create":
+				case "file_delete":
+				case "file_operation": {
+					const filePath = event.data.file_path;
 					if (event.data.content) {
 						setCurrentCode(event.data.content);
 					}
-					setSessionStats((prev) => ({
-						...prev,
-						filesChanged: prev.filesChanged + 1,
-					}));
+					if (filePath) {
+						setCurrentFile(filePath);
+						const operation =
+							event.event_type === "file_create"
+								? "create"
+								: event.event_type === "file_delete"
+									? "delete"
+									: "update";
+						// Track a deduplicated list of touched files (latest content
+						// wins) so the view shows WHICH files changed, not just a count.
+						setChangedFiles((prev) => {
+							const idx = prev.findIndex((f) => f.path === filePath);
+							if (idx === -1) {
+								return [...prev, { path: filePath, operation, content: event.data.content }];
+							}
+							return prev.map((f, i) =>
+								i === idx
+									? {
+											...f,
+											operation,
+											content: event.data.content ?? f.content,
+										}
+									: f,
+							);
+						});
+					}
 					break;
+				}
 
 				case "command":
 				case "command_run":
@@ -374,6 +402,7 @@ export function StreamingSession({
 			session_id: sessionId,
 			events: events,
 			stats: sessionStats,
+			changed_files: changedFiles,
 		};
 
 		const blob = new Blob([JSON.stringify(recording, null, 2)], {
@@ -385,7 +414,7 @@ export function StreamingSession({
 		a.download = `streaming-session-${sessionId}.json`;
 		a.click();
 		URL.revokeObjectURL(url);
-	}, [sessionId, events, sessionStats]);
+	}, [sessionId, events, sessionStats, changedFiles]);
 
 	// Format duration
 	const formatDuration = useCallback((seconds: number): string => {
@@ -400,6 +429,7 @@ export function StreamingSession({
 			session_id: sessionId,
 			events: events,
 			stats: sessionStats,
+			changed_files: changedFiles,
 			project_path: projectPath,
 			timestamp: new Date().toISOString(),
 		};
@@ -428,6 +458,7 @@ export function StreamingSession({
 		sessionId,
 		events,
 		sessionStats,
+		changedFiles,
 		projectPath,
 		formatDuration,
 		downloadRecording,
@@ -444,6 +475,11 @@ export function StreamingSession({
 
 		return () => clearInterval(interval);
 	}, []);
+
+	// Keep the "files changed" stat in sync with the distinct file count.
+	useEffect(() => {
+		setSessionStats((prev) => ({ ...prev, filesChanged: changedFiles.length }));
+	}, [changedFiles]);
 
 	const getStatusBadgeContent = () => {
 		if (isConnected) {
@@ -585,6 +621,9 @@ export function StreamingSession({
 							<TabsTrigger value="events" className="flex-1">
 								{t("streaming:tabs.events")} ({events.length})
 							</TabsTrigger>
+							<TabsTrigger value="files" className="flex-1">
+								{t("streaming:tabs.files")} ({changedFiles.length})
+							</TabsTrigger>
 							<TabsTrigger value="timeline" className="flex-1">
 								{t("streaming:tabs.timeline")}
 							</TabsTrigger>
@@ -691,6 +730,47 @@ export function StreamingSession({
 										</Card>
 									))}
 								</div>
+							</div>
+						</TabsContent>
+
+						{/* Files Tab — deduplicated list of created/modified files */}
+						<TabsContent value="files" className="flex-1 m-0">
+							<div
+								className="p-4 overflow-y-auto"
+								style={{ height: "calc(95vh - 280px)" }}
+							>
+								{changedFiles.length === 0 ? (
+									<p className="text-sm text-muted-foreground text-center mt-8">
+										{t("streaming:files.empty")}
+									</p>
+								) : (
+									<div className="space-y-1">
+										{changedFiles.map((file) => (
+											<button
+												type="button"
+												key={file.path}
+												onClick={() => {
+													setSelectedEvent(null);
+													setCurrentFile(file.path);
+													if (file.content) setCurrentCode(file.content);
+												}}
+												className={cn(
+													"w-full text-left px-3 py-2 rounded-md text-xs font-mono flex items-center gap-2 transition-colors hover:bg-muted/50",
+													currentFile === file.path && !selectedEvent
+														? "bg-primary/10 border border-primary/30"
+														: "",
+												)}
+												title={file.path}
+											>
+												<Code2 className="w-3 h-3 shrink-0 text-muted-foreground" />
+												<span className="truncate flex-1">{file.path}</span>
+												<Badge variant="outline" className="text-[10px]">
+													{file.operation}
+												</Badge>
+											</button>
+										))}
+									</div>
+								)}
 							</div>
 						</TabsContent>
 

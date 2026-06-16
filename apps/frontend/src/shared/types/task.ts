@@ -8,6 +8,7 @@ import type {
 } from "../constants/phase-protocol";
 import type {
 	PhaseModelConfig,
+	PhaseProviderConfig,
 	PhaseThinkingConfig,
 	ThinkingLevel,
 } from "./settings";
@@ -18,6 +19,7 @@ export type TaskStatus =
 	| "in_progress"
 	| "ai_review"
 	| "human_review"
+	| "build_failed" // CI pipeline (any provider) went red on this task's branch — "Build rouge" column
 	| "done"
 	| "pr_created"
 	| "error";
@@ -42,7 +44,16 @@ export type ReviewReason =
 	| "stopped"
 	| "prompt_too_long";
 
-export type SubtaskStatus = "pending" | "in_progress" | "completed" | "failed";
+// "blocked" = the agent did all it could but the subtask needs manual action
+// (e.g. an e2e test that must be run by a human). The backend treats it as DONE
+// for build-completion (see core/progress.py count_subtasks), so the frontend
+// must too — otherwise a finished build shows e.g. 2/3 and an undersized %.
+export type SubtaskStatus =
+	| "pending"
+	| "in_progress"
+	| "completed"
+	| "blocked"
+	| "failed";
 
 // Re-exported from constants - single source of truth
 export type ExecutionPhase = ExecutionPhaseType;
@@ -67,11 +78,39 @@ export interface Subtask {
 	description: string;
 	status: SubtaskStatus;
 	files: string[];
+	/**
+	 * Why a subtask ended up "blocked" (e.g. "Failed after 5 attempts"). Set by
+	 * the backend when the agent gives up; surfaced in the UI so a blocked
+	 * subtask reads as "needs attention" rather than a silent gray state.
+	 */
+	blockedReason?: string;
 	verification?: {
 		type: "command" | "browser";
 		run?: string;
 		scenario?: string;
 	};
+	/**
+	 * Provenance marker. "change_request" = this subtask was created from a user
+	 * "Request Changes" submission during human review — i.e. a trace of a
+	 * modification the user explicitly asked for. The Subtasks tab renders these
+	 * with a distinct colour so they stand out from the originally-planned ones.
+	 */
+	origin?: "change_request";
+	/** ISO timestamp recorded when a change_request subtask was created. */
+	requestedAt?: string;
+}
+
+/**
+ * A clarifying question produced by the pre-planning spec interview.
+ * Answers are appended to the task description before planning starts.
+ */
+export interface SpecInterviewQuestion {
+	id: string;
+	question: string;
+	/** Why this question matters for the implementation. */
+	rationale?: string;
+	/** A plausible default answer the user can accept as-is. */
+	suggestion?: string;
 }
 
 export interface QAReport {
@@ -209,6 +248,20 @@ export type TaskPriority = "low" | "medium" | "high" | "urgent";
 // Re-export ThinkingLevel (defined in settings.ts) for convenience
 export type { ThinkingLevel } from "./settings";
 export type ModelType = "haiku" | "sonnet" | "opus";
+
+/**
+ * The Provider × LLM × Effort "formula" a user selected in the Formula Lab,
+ * persisted on a task so the kanban card can show its cost/success badge.
+ */
+export interface AppliedFormula {
+	provider: string;
+	model: string;
+	effort: string; // ThinkingLevel: none | low | medium | high | ultrathink
+	expectedCostUsd: number;
+	successProbability: number; // 0-1
+	perTokenBilled: boolean;
+	appliedAt: string; // ISO timestamp
+}
 export type TaskCategory =
 	| "feature"
 	| "bug_fix"
@@ -258,6 +311,12 @@ export interface TaskMetadata {
 	// inlining des images en pièce jointe, etc.).
 	importSource?: "azure-devops" | "jira";
 
+	// Spec ID of the source task when this task was created via TASK_DUPLICATE.
+	// Duplicates otherwise carry `sourceType: "manual"`, so this is the only
+	// marker that lets the UI treat a clone like an import (e.g. propose the
+	// Provider × LLM × Effort prerequisite before it runs).
+	duplicatedFrom?: string;
+
 	// Classification
 	category?: TaskCategory;
 	complexity?: TaskComplexity;
@@ -306,6 +365,12 @@ export interface TaskMetadata {
 	isAutoProfile?: boolean; // True when using Auto (Optimized) profile
 	phaseModels?: PhaseModelConfig; // Per-phase model configuration
 	phaseThinking?: PhaseThinkingConfig; // Per-phase thinking configuration
+	phaseProviders?: PhaseProviderConfig; // Per-phase LLM provider configuration
+
+	// Formula Lab — the Provider × LLM × Effort "formula" the user picked for
+	// this ticket before development. Drives the compact kanban badge and seeds
+	// the per-phase provider/model/thinking config above.
+	appliedFormula?: AppliedFormula;
 
 	// Git/Worktree configuration
 	baseBranch?: string; // Override base branch for this task's worktree
@@ -410,11 +475,17 @@ export interface PlanSubtask {
 	files_changed?: string[];
 	files_to_modify?: string[];
 	files_to_create?: string[];
+	/** Backend-emitted reason a subtask was marked "blocked". */
+	blocked_reason?: string;
 	verification?: {
 		type: string;
 		run?: string;
 		scenario?: string;
 	};
+	/** Provenance marker (see {@link Subtask.origin}). */
+	origin?: "change_request";
+	/** ISO timestamp recorded when a change-request subtask was created. */
+	requested_at?: string;
 }
 
 // Workspace management types (for human review)
@@ -441,6 +512,83 @@ export interface WorktreeDiffFile {
 	additions: number;
 	deletions: number;
 	patch?: string; // Git patch/diff content for the file
+}
+
+// ============================================
+// CI/CD pipeline loop (provider-agnostic)
+// ============================================
+
+/** Supported CI/CD providers for the « Build rouge » loop. */
+export type PipelineProviderId =
+	| "azure-devops"
+	| "github-actions"
+	| "gitlab-ci"
+	| "jenkins";
+
+/** Normalized state of the latest pipeline run on a task's branch. */
+export type PipelineRunState =
+	| "none" // No build found for the branch (or pipeline not configured)
+	| "queued"
+	| "running"
+	| "succeeded"
+	| "partiallySucceeded"
+	| "failed"
+	| "canceled";
+
+/**
+ * Latest CI pipeline run observed for a task's worktree branch
+ * (`workpilot/{specId}`), whatever the provider (Azure DevOps, GitHub
+ * Actions, GitLab CI, Jenkins). Pushed from the main-process polling service
+ * to the renderer so the kanban card can display a live pipeline badge, and
+ * used to drive the « Build rouge » column + automatic repair loop.
+ */
+export interface TaskPipelineStatus {
+	taskId: string;
+	projectId: string;
+	state: PipelineRunState;
+	/** CI provider that produced this run. */
+	provider?: PipelineProviderId;
+	/** Human-readable provider name ("GitHub Actions", "Jenkins"…). */
+	providerLabel?: string;
+	buildId?: number | string;
+	buildNumber?: string;
+	definitionName?: string;
+	branch?: string;
+	/** Web URL of the run on the CI provider (clickable from the kanban card). */
+	webUrl?: string;
+	queueTime?: string;
+	finishTime?: string;
+	checkedAt: string;
+	/** True while an automatic repair run for this red build is in flight. */
+	autoFixInProgress?: boolean;
+}
+
+// ============================================
+// Plan-time worktree conflict detection
+// ============================================
+
+/**
+ * A task whose planned/modified files overlap with the inspected task.
+ * Computed at planning time (plan review) so parallel tasks touching the
+ * same files raise an alert BEFORE coding starts, instead of surfacing as
+ * a merge conflict at the end.
+ */
+export interface PlanConflictTask {
+	taskId: string;
+	taskTitle: string;
+	taskStatus: TaskStatus;
+	/** Files shared between the two task plans (normalized, deduplicated). */
+	files: string[];
+}
+
+export interface PlanConflictReport {
+	/** Task the report was computed for. */
+	taskId: string;
+	/** Other active tasks sharing at least one file with this task's plan. */
+	conflictingTasks: PlanConflictTask[];
+	/** Total number of distinct overlapping files across all conflicting tasks. */
+	totalConflictingFiles: number;
+	checkedAt: string;
 }
 
 // Conflict severity levels from merge system
@@ -639,6 +787,33 @@ export interface VisualProofScreenshot {
 	capturedAt: string;
 }
 
+/** One endpoint call performed during the API smoke proof. */
+export interface ApiSmokeEndpointResult {
+	method: string;
+	path: string;
+	/** HTTP status, absent when the request itself failed (network/timeout). */
+	status?: number;
+	ok: boolean;
+	durationMs: number;
+	error?: string;
+}
+
+/**
+ * Result of the API smoke proof: when the emulated app exposes an
+ * OpenAPI/Swagger document, parameterless GET endpoints are called and the
+ * outcome is recorded alongside the visual screenshots.
+ */
+export interface VisualProofApiSmoke {
+	specUrl: string;
+	swaggerUiUrl?: string;
+	attempted: number;
+	passed: number;
+	failed: number;
+	results: ApiSmokeEndpointResult[];
+	/** Markdown report file, relative to the artifact dir. */
+	reportFileName: string;
+}
+
 export interface VisualProofRun {
 	id: string;
 	status: VisualProofStatus;
@@ -655,6 +830,8 @@ export interface VisualProofRun {
 	commentUrl?: string;
 	commitSha?: string;
 	screenshots: VisualProofScreenshot[];
+	/** API smoke proof, present when an OpenAPI document was discovered. */
+	apiSmoke?: VisualProofApiSmoke;
 	error?: string;
 	startedAt: string;
 	completedAt?: string;

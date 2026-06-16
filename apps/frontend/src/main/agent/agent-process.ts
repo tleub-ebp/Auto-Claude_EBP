@@ -10,6 +10,7 @@ const __dirname = path.dirname(__filename);
 
 import type { EventEmitter } from "node:events";
 import type { CompletablePhase } from "../../shared/constants/phase-protocol";
+import { isPausePhase } from "../../shared/constants/phase-protocol";
 import type { AppSettings } from "../../shared/types/settings";
 import { appLog } from "../app-logger";
 import { clearKeychainCache } from "../claude-profile/credential-utils";
@@ -44,6 +45,40 @@ import type { AgentState } from "./agent-state";
 import { getOAuthModeClearVars } from "./env-utils";
 import { parseTaskEvent } from "./task-event-parser";
 import type { ExecutionProgressData, ProcessType } from "./types";
+
+/**
+ * Détermine si l'arrêt du processus backend doit être signalé comme un échec.
+ *
+ * Le pipeline ne se termine proprement que lorsqu'il émet une phase terminale
+ * (`complete` ou `failed`). Si le processus se termine — y compris avec le code
+ * 0 (arrêt « propre » au milieu du pipeline, crash silencieux ou kill externe) —
+ * sans avoir atteint une phase terminale, la tâche resterait bloquée sur une
+ * phase « active » côté UI, ce qui ressemble à des logs qui ne se rafraîchissent
+ * plus. On force alors une transition vers `failed` pour débloquer l'interface.
+ *
+ * @returns le message d'échec à émettre, ou `null` si l'arrêt est légitime.
+ */
+export function resolveExitFailure(
+	code: number | null,
+	currentPhase: ExecutionProgressData["phase"],
+): { message: string } | null {
+	if (currentPhase === "complete" || currentPhase === "failed") {
+		return null;
+	}
+
+	// Une tâche en pause (rate limit / auth) attend volontairement : un arrêt
+	// du processus dans cet état ne doit pas être traité comme un échec dur.
+	if (isPausePhase(currentPhase)) {
+		return null;
+	}
+
+	const message =
+		code === 0 || code === null
+			? "Le processus backend s'est arrêté avant la fin du pipeline"
+			: `Process exited with code ${code}`;
+
+	return { message };
+}
 
 /**
  * Type for supported CLI tools
@@ -1221,11 +1256,11 @@ export class AgentProcessManager {
 				}
 			}
 
-			if (
-				code !== 0 &&
-				currentPhase !== "complete" &&
-				currentPhase !== "failed"
-			) {
+			// Si le backend s'est arrêté sans atteindre une phase terminale
+			// (y compris avec le code 0), on émet une phase `failed` afin que
+			// la tâche ne reste pas figée sur une phase « active » côté UI.
+			const exitFailure = resolveExitFailure(code, currentPhase);
+			if (exitFailure) {
 				this.emitter.emit(
 					"execution-progress",
 					taskId,
@@ -1236,7 +1271,7 @@ export class AgentProcessManager {
 							currentPhase,
 							phaseProgress,
 						),
-						message: `Process exited with code ${code}`,
+						message: exitFailure.message,
 						sequenceNumber: ++sequenceNumber,
 						completedPhases: [...completedPhases],
 					},

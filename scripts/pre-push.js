@@ -15,11 +15,14 @@
 
 const { spawn, execSync } = require("node:child_process");
 const path = require("node:path");
-const fs = require("node:fs");
-const os = require("node:os");
+
+const {
+	IS_WINDOWS,
+	findVenvBin,
+	selectPytestTargets,
+} = require("./lib/test-selection");
 
 const ROOT = path.join(__dirname, "..");
-const IS_WINDOWS = os.platform() === "win32";
 
 if (process.env.PRE_PUSH_SKIP === "1") {
 	console.log("⏭  PRE_PUSH_SKIP=1 set — skipping pre-push checks.");
@@ -70,60 +73,9 @@ function getChangedFiles() {
 	}
 }
 
-/**
- * Pick a pytest target list based on changed files.
- *
- * - Backend test file changed → run that file directly.
- * - Backend source file changed → run tests/ matching the module name.
- * - tests/ changed but no specific source → run tests/.
- * - Conservative fallback: if any backend source file changed but we can't
- *   map it, run the whole suite (correctness > speed).
- */
-function selectPytestTargets(changedFiles) {
-	if (!changedFiles) return ["tests/"];
-	const backendSrc = changedFiles.filter(
-		(f) => f.startsWith("apps/backend/") && f.endsWith(".py"),
-	);
-	const testChanges = changedFiles.filter(
-		(f) => f.startsWith("tests/") && f.endsWith(".py"),
-	);
-	if (backendSrc.length === 0 && testChanges.length === 0) return [];
-
-	const targets = new Set();
-	for (const t of testChanges) targets.add(t);
-
-	const allTests = [];
-	function walk(dir) {
-		for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-			const full = path.join(dir, e.name);
-			if (e.isDirectory()) walk(full);
-			else if (e.isFile() && e.name.startsWith("test_") && e.name.endsWith(".py")) {
-				allTests.push(full);
-			}
-		}
-	}
-	try {
-		walk(path.join(ROOT, "tests"));
-	} catch {
-		return ["tests/"];
-	}
-
-	let unmapped = false;
-	for (const src of backendSrc) {
-		const base = path.basename(src, ".py"); // e.g. "ci_discovery"
-		const matches = allTests.filter((t) => path.basename(t).includes(base));
-		if (matches.length === 0) {
-			unmapped = true;
-		} else {
-			for (const m of matches) {
-				targets.add(path.relative(ROOT, m).replaceAll("\\", "/"));
-			}
-		}
-	}
-
-	if (unmapped) return ["tests/"]; // Safe fallback when mapping is uncertain
-	return [...targets];
-}
+// Pytest target selection lives in scripts/lib/test-selection.js (shared with
+// the commit-time gate scripts/staged-tests.js). Pre-push keeps the
+// conservative behavior: unmapped backend changes → run the whole suite.
 
 const changed = getChangedFiles();
 if (changed !== null && changed.length > 0) {
@@ -184,28 +136,27 @@ function runJob(name, cmd, args, opts = {}) {
 
 // ---------------------------------------------------------------------------
 // Resolve binaries — prefer venv pytest, frontend node_modules biome/vitest.
+// findVenvBin checks apps/backend/.venv, ./.venv and .cache/.venv (the
+// install-backend.js default) — see scripts/lib/test-selection.js.
 // ---------------------------------------------------------------------------
-function venvBin(dir, name) {
-	return IS_WINDOWS
-		? path.join(dir, ".venv", "Scripts", `${name}.exe`)
-		: path.join(dir, ".venv", "bin", name);
-}
-
-const backendVenv = path.join(ROOT, "apps", "backend");
-const rootVenv = ROOT;
 const frontendDir = path.join(ROOT, "apps", "frontend");
 
-const pytestPath = [backendVenv, rootVenv]
-	.map((d) => venvBin(d, "pytest"))
-	.find((p) => fs.existsSync(p));
-const ruffPath = [backendVenv, rootVenv]
-	.map((d) => venvBin(d, "ruff"))
-	.find((p) => fs.existsSync(p));
+const pytestPath = findVenvBin(ROOT, "pytest");
+const ruffPath = findVenvBin(ROOT, "ruff");
 
 const jobs = [];
 
 if (ruffPath) {
 	jobs.push(runJob("backend:ruff", ruffPath, ["check", "apps/backend/"]));
+	// Mirrors the CI "ruff format check" step — a check-only `ruff check`
+	// does NOT catch formatting drift, which is exactly what broke CI.
+	jobs.push(
+		runJob("backend:ruff-format", ruffPath, [
+			"format",
+			"apps/backend/",
+			"--check",
+		]),
+	);
 } else {
 	console.warn(
 		"⚠  ruff not found in venv — skipping backend lint. Install with `pip install ruff`.",
@@ -216,7 +167,7 @@ if (pytestPath) {
 	// Default: only run tests related to changed backend paths. Set
 	// PRE_PUSH_FULL=1 to run the full suite (matches CI exactly).
 	const full = process.env.PRE_PUSH_FULL === "1";
-	const pytestTargets = full ? ["tests/"] : selectPytestTargets(changed);
+	const pytestTargets = full ? ["tests/"] : selectPytestTargets(ROOT, changed);
 	if (pytestTargets.length === 0) {
 		console.log("⏭  No backend code changed — skipping pytest.");
 	} else {

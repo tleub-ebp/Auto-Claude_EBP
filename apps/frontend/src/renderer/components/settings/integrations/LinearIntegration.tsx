@@ -211,16 +211,18 @@ interface ImportTasksPromptProps {
 }
 
 function ImportTasksPrompt({ onOpenLinearImport }: ImportTasksPromptProps) {
+	const { t } = useTranslation("settings");
+
 	return (
 		<div className="rounded-lg border border-info/30 bg-info/5 p-3">
 			<div className="flex items-start gap-3">
 				<Import className="h-5 w-5 text-info mt-0.5" />
 				<div className="flex-1">
 					<p className="text-sm font-medium text-foreground">
-						Import Existing Tasks
+						{t("integrations.linear.importTasksTitle")}
 					</p>
 					<p className="text-xs text-muted-foreground mt-1">
-						Select which Linear issues to import into AutoBuild as tasks.
+						{t("integrations.linear.importTasksDescription")}
 					</p>
 					<Button
 						size="sm"
@@ -229,7 +231,7 @@ function ImportTasksPrompt({ onOpenLinearImport }: ImportTasksPromptProps) {
 						onClick={onOpenLinearImport}
 					>
 						<Import className="h-4 w-4 mr-2" />
-						Import Tasks from Linear
+						{t("integrations.linear.importTasksButton")}
 					</Button>
 				</div>
 			</div>
@@ -264,12 +266,12 @@ function RealtimeSyncToggle({ enabled, onToggle }: RealtimeSyncToggleProps) {
 }
 
 function RealtimeSyncWarning() {
+	const { t } = useTranslation("settings");
+
 	return (
 		<div className="rounded-lg border border-warning/30 bg-warning/5 p-3 ml-6">
 			<p className="text-xs text-warning">
-				When enabled, new Linear issues will be automatically imported into
-				AutoBuild. Make sure to configure your team/project filters below to
-				control which issues are imported.
+				{t("integrations.linear.realtimeSyncWarning")}
 			</p>
 		</div>
 	);

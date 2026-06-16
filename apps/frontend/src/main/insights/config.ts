@@ -9,6 +9,7 @@ import {
 	pythonEnvManager,
 } from "../python-env-manager";
 import { getBestAvailableProfileEnv } from "../rate-limit-detector";
+import { credentialManager } from "../services/credential-manager";
 import { getAPIProfileEnv } from "../services/profile";
 import { getEffectiveSourcePath } from "../updater/path-resolver";
 
@@ -122,6 +123,14 @@ export class InsightsConfig {
 		const profileEnv = profileResult.env;
 		const apiProfileEnv = await getAPIProfileEnv();
 		const oauthModeClearVars = getOAuthModeClearVars(apiProfileEnv);
+		// Active provider credentials (SELECTED_LLM_PROVIDER + e.g. OPENAI_API_KEY /
+		// WINDSURF_API_KEY) so the insights runner can route to a non-Claude provider.
+		let providerEnv: Record<string, string> = {};
+		try {
+			providerEnv = credentialManager.getEnvironmentVariables();
+		} catch {
+			providerEnv = {};
+		}
 		const pythonEnv = pythonEnvManager.getPythonEnv();
 		const autoBuildSource = this.getAutoBuildSourcePath();
 		const pythonPathParts = (pythonEnv.PYTHONPATH ?? "")
@@ -158,6 +167,7 @@ export class InsightsConfig {
 			...oauthModeClearVars,
 			...profileEnv,
 			...apiProfileEnv,
+			...providerEnv,
 			PYTHONUNBUFFERED: "1",
 			PYTHONIOENCODING: "utf-8",
 			PYTHONUTF8: "1",

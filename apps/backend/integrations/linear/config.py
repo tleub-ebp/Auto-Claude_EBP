@@ -68,12 +68,16 @@ class LinearConfig:
     def from_env(cls) -> "LinearConfig":
         """Create config from environment variables."""
         api_key = os.environ.get("LINEAR_API_KEY", "")
+        # Explicit LINEAR_ENABLED=false disables the integration even with an API key
+        enabled = bool(api_key)
+        if os.environ.get("LINEAR_ENABLED", "").lower() == "false":
+            enabled = False
 
         return cls(
             api_key=api_key,
             team_id=os.environ.get("LINEAR_TEAM_ID"),
             project_id=os.environ.get("LINEAR_PROJECT_ID"),
-            enabled=bool(api_key),
+            enabled=enabled,
         )
 
     def is_valid(self) -> bool:

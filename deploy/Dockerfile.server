@@ -1,0 +1,26 @@
+# WorkPilot AI — multi-user server image
+# Build from the repo root:  docker build -f deploy/Dockerfile.server .
+FROM python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY apps/backend/requirements.txt /app/apps/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/apps/backend/requirements.txt
+
+COPY apps/backend /app/apps/backend
+COPY configured_providers.json /app/configured_providers.json
+
+WORKDIR /app/apps/backend
+
+# Git identity for server-side merges/commits (override via env)
+RUN git config --global user.name "WorkPilot Server" \
+    && git config --global user.email "workpilot@localhost"
+
+EXPOSE 9000 8765
+
+# Migrations first, then API + streaming WS side by side.
+CMD ["sh", "-c", "alembic -c server/db/alembic.ini upgrade head && python websocket_server.py & exec python -m uvicorn provider_api:app --host 0.0.0.0 --port 9000"]

@@ -86,6 +86,18 @@ class AgentRunner:
 
         # Load prompt
         prompt = prompt_path.read_text(encoding="utf-8")
+
+        # Keep spec/planning prompts in sync with the Coverage Enforcement Gate
+        # threshold (WORKPILOT_QA_MIN_COVERAGE, default 100).
+        if "{{MIN_COVERAGE}}" in prompt:
+            try:
+                from qa.coverage_gate import get_min_coverage
+
+                min_coverage = get_min_coverage()
+            except Exception:
+                min_coverage = 100
+            prompt = prompt.replace("{{MIN_COVERAGE}}", str(min_coverage))
+
         debug_detailed(
             "agent_runner",
             "Loaded prompt file",

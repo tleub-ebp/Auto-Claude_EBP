@@ -149,6 +149,7 @@ import {
 	FavoritesDropZone,
 	FavoritesDropZoneEmpty,
 	SortableWrapper,
+	type SortableKind,
 } from "./sidebar/sortable-primitives";
 import { useSidebarPrefs } from "./sidebar/use-sidebar-prefs";
 import { VoiceControlDialog } from "./voice-control/VoiceControlDialog";
@@ -1337,12 +1338,17 @@ export function Sidebar({
 		}),
 	);
 
+	interface SortableInfo {
+		kind: SortableKind;
+		id: string;
+	}
+
 	const handleDragStart = useCallback((event: DragStartEvent) => {
 		setActiveDragId(String(event.active.id));
 	}, []);
 
 	// Helper function to handle dropping on favorites
-	const handleFavoritesDrop = useCallback((activeInfo: any, overInfo: any) => {
+	const handleFavoritesDrop = useCallback((activeInfo: SortableInfo, _overInfo: SortableInfo) => {
 		if (activeInfo.kind === "item" && !pinnedItemsSet.has(activeInfo.id)) {
 			toggleItemPin(activeInfo.id);
 			return true;
@@ -1355,7 +1361,7 @@ export function Sidebar({
 	}, [pinnedItemsSet, pinnedGroupsSet, toggleItemPin, toggleGroupPin]);
 
 	// Helper function to handle group reordering
-	const handleGroupReorder = useCallback((activeInfo: any, overInfo: any) => {
+	const handleGroupReorder = useCallback((activeInfo: SortableInfo, overInfo: SortableInfo) => {
 		if (activeInfo.id === overInfo.id) return true;
 		const actualOrder = visibleNavGroups.map((g) => g.id);
 		reorderGroups(activeInfo.id, overInfo.id, actualOrder);
@@ -1363,7 +1369,7 @@ export function Sidebar({
 	}, [visibleNavGroups, reorderGroups]);
 
 	// Helper function to handle item reordering within groups
-	const handleItemReorder = useCallback((activeInfo: any, overInfo: any) => {
+	const handleItemReorder = useCallback((activeInfo: SortableInfo, overInfo: SortableInfo) => {
 		if (activeInfo.id === overInfo.id) return true;
 		const group = visibleNavGroups.find(
 			(g) =>
@@ -1408,13 +1414,6 @@ export function Sidebar({
 			}
 		},
 		[
-			visibleNavGroups,
-			pinnedItemsSet,
-			pinnedGroupsSet,
-			reorderGroups,
-			reorderItems,
-			toggleItemPin,
-			toggleGroupPin,
 			handleFavoritesDrop,
 			handleGroupReorder,
 			handleItemReorder,
@@ -1442,8 +1441,10 @@ export function Sidebar({
 		};
 
 		// Pin star lives OUTSIDE the nav button (nested <button> is invalid HTML).
-		// It's rendered as a sibling and positioned at the end of the row via flex;
-		// the button takes flex-1 so the star sits after the kbd shortcut without overlap.
+		// It is an absolute overlay so the nav button keeps the full row width;
+		// it only appears on hover/focus, fading the kbd shortcut underneath.
+		// right-2 (8px) + the 7px inset of the items box = 15px from the sidebar
+		// inner edge — must match the group pin star (right-[15px]) so all stars align.
 		const starButton = !isCollapsed && context !== "favorites" ? (
 			<button
 				type="button"
@@ -1458,12 +1459,14 @@ export function Sidebar({
 				}
 				aria-pressed={isPinned}
 				className={cn(
-					"flex items-center justify-center w-5 h-5 shrink-0 rounded",
+					"absolute right-2 top-1/2 -translate-y-1/2 z-10",
+					"flex items-center justify-center w-5 h-5 rounded",
 					"transition-all duration-200",
 					"hover:bg-accent/60 hover:scale-110",
+					"opacity-0 group-hover/nav-item:opacity-100 focus-visible:opacity-100",
 					isPinned
-						? "text-amber-400 opacity-100"
-						: "text-muted-foreground/40 hover:text-amber-400 opacity-0 group-hover/nav-item:opacity-100 focus-visible:opacity-100",
+						? "text-amber-400"
+						: "text-muted-foreground/40 hover:text-amber-400",
 				)}
 			>
 				<Star
@@ -1475,10 +1478,7 @@ export function Sidebar({
 		const button = (
 			<div
 				key={item.id}
-				className={cn(
-					"group/nav-item flex items-center gap-1",
-					!isCollapsed && "pr-1",
-				)}
+				className="group/nav-item relative flex items-center"
 			>
 				<button
 					type="button"
@@ -1486,7 +1486,7 @@ export function Sidebar({
 					disabled={!selectedProjectId}
 					aria-keyshortcuts={item.shortcut}
 					className={cn(
-						"flex flex-1 min-w-0 items-center rounded-lg text-sm transition-all duration-200",
+						"flex w-full min-w-0 items-center rounded-lg text-sm transition-all duration-200",
 						"hover:bg-accent hover:text-accent-foreground",
 						"disabled:pointer-events-none disabled:opacity-50",
 						isActive && "bg-accent text-accent-foreground",
@@ -1504,7 +1504,14 @@ export function Sidebar({
 								{t(item.labelKey)}
 							</span>
 							{item.shortcut && (
-								<kbd className="pointer-events-none hidden h-5 select-none items-center gap-1 rounded-md border border-border bg-secondary px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:flex">
+								<kbd
+									className={cn(
+										"pointer-events-none hidden h-5 select-none items-center gap-1 rounded-md border border-border bg-secondary px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:flex",
+										"transition-opacity duration-200",
+										context !== "favorites" &&
+											"group-hover/nav-item:opacity-0",
+									)}
+								>
 									{item.shortcut}
 								</kbd>
 							)}
@@ -1802,12 +1809,16 @@ export function Sidebar({
 				}
 				aria-pressed={isPinned}
 				className={cn(
-					"flex items-center justify-center w-5 h-5 shrink-0 rounded",
+					// right-[15px] = the item star's right-2 (8px) + the 7px inset
+					// (border + px-1.5) of the items box, so group and item stars align.
+					"absolute right-[15px] top-1/2 -translate-y-1/2 z-10",
+					"flex items-center justify-center w-5 h-5 rounded",
 					"transition-all duration-200",
 					"hover:bg-accent/60 hover:scale-110",
+					"opacity-0 group-hover/group-header:opacity-100 focus-visible:opacity-100",
 					isPinned
-						? "text-amber-400 opacity-100"
-						: "text-muted-foreground/40 hover:text-amber-400 opacity-0 group-hover/nav-group:opacity-100 focus-visible:opacity-100",
+						? "text-amber-400"
+						: "text-muted-foreground/40 hover:text-amber-400",
 				)}
 			>
 				<Star
@@ -1833,8 +1844,12 @@ export function Sidebar({
 				aria-label={t("navigation:actions.clearAllFavorites")}
 				title={t("navigation:actions.clearAllFavorites")}
 				className={cn(
-					"flex items-center justify-center w-5 h-5 shrink-0 rounded",
+					// The favorites card adds a 5px inset (border + p-1), so right-[10px]
+					// lands at the same 15px-from-sidebar-edge line as the other stars.
+					"absolute right-[10px] top-1/2 -translate-y-1/2 z-10",
+					"flex items-center justify-center w-5 h-5 rounded",
 					"transition-all duration-200",
+					"opacity-0 group-hover/group-header:opacity-100 focus-visible:opacity-100",
 					"text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 hover:scale-110",
 				)}
 			>
@@ -1861,7 +1876,7 @@ export function Sidebar({
 				type="button"
 				onClick={toggleExpand}
 				className={cn(
-					"flex flex-1 min-w-0 items-center rounded-lg text-sm transition-all duration-200 hover:scale-[1.02]",
+					"flex w-full min-w-0 items-center rounded-lg text-sm transition-all duration-200 hover:scale-[1.02]",
 					"hover:bg-accent hover:text-accent-foreground hover:shadow-sm",
 					hasActiveItem && "bg-accent/50 text-accent-foreground shadow-sm",
 					"gap-3 px-3 py-2.5",
@@ -1883,7 +1898,13 @@ export function Sidebar({
 				<span className="flex-1 text-left font-medium truncate">
 					{t(group.labelKey)}
 				</span>
-				<div className="flex items-center gap-1 shrink-0">
+				<div
+					className={cn(
+						"flex items-center gap-1 shrink-0",
+						// Fades out under the pin star (or favorites X) on header hover.
+						"transition-opacity duration-200 group-hover/group-header:opacity-0",
+					)}
+				>
 					<span
 						className={cn(
 							"text-xs px-1.5 py-0.5 rounded-full",
@@ -1909,12 +1930,12 @@ export function Sidebar({
 			<div
 				key={group.id}
 				className={cn(
-					"group/nav-group space-y-1",
+					"space-y-1",
 					isFavorites &&
 						"rounded-lg bg-linear-to-b from-amber-400/5 to-transparent border border-amber-400/20 p-1",
 				)}
 			>
-				<div className="flex items-center gap-1 pr-1">
+				<div className="group/group-header relative flex items-center">
 					{renderGroupButton(group, isExpanded, hasActiveItem)}
 					{renderPinButton(group, isPinned, context)}
 					{renderClearFavoritesButton(isFavorites)}
@@ -2232,16 +2253,19 @@ export function Sidebar({
 						</CollapsibleTrigger>
 
 						<CollapsibleContent className="mt-2 space-y-2">
-							{/* CLI Tools â€” compact grouped badges */}
-							<div className="rounded-lg bg-white/4 border border-white/8 p-2 space-y-0.5">
+							{/* CLI Tools — compact grouped badges */}
+							<div className="rounded-lg bg-white/4 border border-white/8 p-2 space-y-0.5 overflow-hidden">
 								<ClaudeCodeStatusBadge
 									onNavigateToTerminals={() => onViewChange?.("terminals", true)}
+									isCollapsed={isCollapsed}
 								/>
 								<CopilotCliStatusBadge
 									onNavigateToTerminals={() => onViewChange?.("terminals", true)}
+									isCollapsed={isCollapsed}
 								/>
 								<CodexCliStatusBadge
 									onNavigateToTerminals={() => onViewChange?.("terminals", true)}
+									isCollapsed={isCollapsed}
 								/>
 							</div>
 						</CollapsibleContent>

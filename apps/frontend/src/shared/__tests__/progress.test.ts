@@ -126,6 +126,7 @@ describe("countSubtasksByStatus", () => {
 			pending: 0,
 			in_progress: 0,
 			completed: 0,
+			blocked: 0,
 			failed: 0,
 		});
 	});
@@ -138,6 +139,7 @@ describe("countSubtasksByStatus", () => {
 			"completed",
 			"completed",
 			"completed",
+			"blocked",
 			"failed",
 		]);
 		const counts = countSubtasksByStatus(subtasks);
@@ -145,6 +147,7 @@ describe("countSubtasksByStatus", () => {
 			pending: 2,
 			in_progress: 1,
 			completed: 3,
+			blocked: 1,
 			failed: 1,
 		});
 	});

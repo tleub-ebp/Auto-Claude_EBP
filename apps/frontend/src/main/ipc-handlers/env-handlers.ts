@@ -53,6 +53,43 @@ const TEAMS_ENV_KEYS = {
 	WEBHOOK_URL: "TEAMS_WEBHOOK_URL",
 } as const;
 
+// Slack notification environment variable keys
+const SLACK_ENV_KEYS = {
+	ENABLED: "SLACK_NOTIFICATIONS_ENABLED",
+	WEBHOOK_URL: "SLACK_WEBHOOK_URL",
+} as const;
+
+// Discord notification environment variable keys
+const DISCORD_ENV_KEYS = {
+	ENABLED: "DISCORD_NOTIFICATIONS_ENABLED",
+	WEBHOOK_URL: "DISCORD_WEBHOOK_URL",
+} as const;
+
+// Google Chat notification environment variable keys
+const GOOGLE_CHAT_ENV_KEYS = {
+	ENABLED: "GOOGLE_CHAT_NOTIFICATIONS_ENABLED",
+	WEBHOOK_URL: "GOOGLE_CHAT_WEBHOOK_URL",
+} as const;
+
+// Generic webhook notification environment variable keys
+const NOTIFY_WEBHOOK_ENV_KEYS = {
+	ENABLED: "NOTIFY_WEBHOOK_ENABLED",
+	WEBHOOK_URL: "NOTIFY_WEBHOOK_URL",
+} as const;
+
+// CI/CD pipeline loop environment variable keys (« Build rouge »)
+// Read by ci-pipeline-service.ts / ci-pipeline-providers.ts. Azure DevOps,
+// GitHub and GitLab credentials are reused from their own sections above.
+const CICD_ENV_KEYS = {
+	PROVIDER: "CICD_PROVIDER",
+	AUTO_FIX: "CICD_AUTO_FIX",
+	POLL_SECONDS: "CICD_POLL_SECONDS",
+	JENKINS_URL: "CICD_JENKINS_URL",
+	JENKINS_JOB: "CICD_JENKINS_JOB",
+	JENKINS_USER: "CICD_JENKINS_USER",
+	JENKINS_TOKEN: "CICD_JENKINS_TOKEN",
+} as const;
+
 /**
  * Helper to generate .env line (DRY)
  * Uses explicit undefined/null check instead of truthiness to avoid
@@ -141,6 +178,9 @@ export function registerEnvHandlers(
 		if (config.autoBuildModel !== undefined) {
 			existingVars.AUTO_BUILD_MODEL = config.autoBuildModel;
 		}
+		if (config.linearEnabled !== undefined) {
+			existingVars.LINEAR_ENABLED = config.linearEnabled ? "true" : "false";
+		}
 		// Guard: don't overwrite existing non-empty values with empty strings
 		if (
 			config.linearApiKey !== undefined &&
@@ -166,6 +206,9 @@ export function registerEnvHandlers(
 				: "false";
 		}
 		// GitHub Integration
+		if (config.githubEnabled !== undefined) {
+			existingVars.GITHUB_ENABLED = config.githubEnabled ? "true" : "false";
+		}
 		// Guard: don't overwrite existing non-empty values with empty strings
 		if (
 			config.githubToken !== undefined &&
@@ -297,7 +340,44 @@ export function registerEnvHandlers(
 				? "true"
 				: "false";
 		}
-		// Microsoft Teams Notifications
+		// CI/CD pipeline loop (« Build rouge »)
+		if (config.cicdProvider !== undefined) {
+			existingVars[CICD_ENV_KEYS.PROVIDER] = config.cicdProvider;
+		}
+		if (config.cicdAutoFix !== undefined) {
+			existingVars[CICD_ENV_KEYS.AUTO_FIX] = config.cicdAutoFix
+				? "true"
+				: "false";
+		}
+		if (config.cicdPollSeconds !== undefined) {
+			existingVars[CICD_ENV_KEYS.POLL_SECONDS] = config.cicdPollSeconds
+				? String(config.cicdPollSeconds)
+				: "";
+		}
+		if (
+			config.cicdJenkinsUrl !== undefined &&
+			(config.cicdJenkinsUrl || !existingVars[CICD_ENV_KEYS.JENKINS_URL])
+		) {
+			existingVars[CICD_ENV_KEYS.JENKINS_URL] = config.cicdJenkinsUrl;
+		}
+		if (
+			config.cicdJenkinsJob !== undefined &&
+			(config.cicdJenkinsJob || !existingVars[CICD_ENV_KEYS.JENKINS_JOB])
+		) {
+			existingVars[CICD_ENV_KEYS.JENKINS_JOB] = config.cicdJenkinsJob;
+		}
+		if (config.cicdJenkinsUser !== undefined) {
+			existingVars[CICD_ENV_KEYS.JENKINS_USER] = config.cicdJenkinsUser;
+		}
+		// Guard: don't overwrite an existing token with an empty string
+		if (
+			config.cicdJenkinsToken !== undefined &&
+			(config.cicdJenkinsToken || !existingVars[CICD_ENV_KEYS.JENKINS_TOKEN])
+		) {
+			existingVars[CICD_ENV_KEYS.JENKINS_TOKEN] = config.cicdJenkinsToken;
+		}
+		// Channel Notifications (Teams / Slack / Discord / Google Chat / webhook)
+		// Guard: don't overwrite existing non-empty webhook URLs with empty strings
 		if (config.teamsNotificationsEnabled !== undefined) {
 			existingVars[TEAMS_ENV_KEYS.ENABLED] = config.teamsNotificationsEnabled
 				? "true"
@@ -309,6 +389,52 @@ export function registerEnvHandlers(
 		) {
 			existingVars[TEAMS_ENV_KEYS.WEBHOOK_URL] = config.teamsWebhookUrl;
 		}
+		if (config.slackNotificationsEnabled !== undefined) {
+			existingVars[SLACK_ENV_KEYS.ENABLED] = config.slackNotificationsEnabled
+				? "true"
+				: "false";
+		}
+		if (
+			config.slackWebhookUrl !== undefined &&
+			(config.slackWebhookUrl || !existingVars[SLACK_ENV_KEYS.WEBHOOK_URL])
+		) {
+			existingVars[SLACK_ENV_KEYS.WEBHOOK_URL] = config.slackWebhookUrl;
+		}
+		if (config.discordNotificationsEnabled !== undefined) {
+			existingVars[DISCORD_ENV_KEYS.ENABLED] = config.discordNotificationsEnabled
+				? "true"
+				: "false";
+		}
+		if (
+			config.discordWebhookUrl !== undefined &&
+			(config.discordWebhookUrl || !existingVars[DISCORD_ENV_KEYS.WEBHOOK_URL])
+		) {
+			existingVars[DISCORD_ENV_KEYS.WEBHOOK_URL] = config.discordWebhookUrl;
+		}
+		if (config.googleChatNotificationsEnabled !== undefined) {
+			existingVars[GOOGLE_CHAT_ENV_KEYS.ENABLED] =
+				config.googleChatNotificationsEnabled ? "true" : "false";
+		}
+		if (
+			config.googleChatWebhookUrl !== undefined &&
+			(config.googleChatWebhookUrl ||
+				!existingVars[GOOGLE_CHAT_ENV_KEYS.WEBHOOK_URL])
+		) {
+			existingVars[GOOGLE_CHAT_ENV_KEYS.WEBHOOK_URL] =
+				config.googleChatWebhookUrl;
+		}
+		if (config.notifyWebhookEnabled !== undefined) {
+			existingVars[NOTIFY_WEBHOOK_ENV_KEYS.ENABLED] = config.notifyWebhookEnabled
+				? "true"
+				: "false";
+		}
+		if (
+			config.notifyWebhookUrl !== undefined &&
+			(config.notifyWebhookUrl ||
+				!existingVars[NOTIFY_WEBHOOK_ENV_KEYS.WEBHOOK_URL])
+		) {
+			existingVars[NOTIFY_WEBHOOK_ENV_KEYS.WEBHOOK_URL] = config.notifyWebhookUrl;
+		}
 		// Git/Worktree Settings
 		if (config.defaultBranch !== undefined) {
 			existingVars.DEFAULT_BRANCH = config.defaultBranch;
@@ -316,12 +442,24 @@ export function registerEnvHandlers(
 		if (config.graphitiEnabled !== undefined) {
 			existingVars.GRAPHITI_ENABLED = config.graphitiEnabled ? "true" : "false";
 		}
-		// Memory Provider Configuration (embeddings only - LLM uses Claude SDK)
+		// Memory Provider Configuration
 		if (config.graphitiProviderConfig) {
 			const pc = config.graphitiProviderConfig;
-			// Embedding provider only (LLM provider removed - Claude SDK handles RAG)
 			if (pc.embeddingProvider)
 				existingVars.GRAPHITI_EMBEDDER_PROVIDER = pc.embeddingProvider;
+			// graphiti-core needs an LLM to ingest episodes (entity extraction).
+			// Derive it from the embedding provider; for Ollama this keeps the
+			// whole memory stack local.
+			if (pc.embeddingProvider === "ollama" && pc.ollamaLlmModel) {
+				existingVars.GRAPHITI_LLM_PROVIDER = "ollama";
+				existingVars.OLLAMA_LLM_MODEL = pc.ollamaLlmModel;
+			} else if (pc.embeddingProvider === "openai" && pc.openaiApiKey) {
+				existingVars.GRAPHITI_LLM_PROVIDER = "openai";
+			} else if (pc.embeddingProvider === "google" && pc.googleApiKey) {
+				existingVars.GRAPHITI_LLM_PROVIDER = "google";
+			} else if (pc.embeddingProvider === "openrouter" && pc.openrouterApiKey) {
+				existingVars.GRAPHITI_LLM_PROVIDER = "openrouter";
+			}
 			// OpenAI Embeddings
 			if (pc.openaiApiKey) existingVars.OPENAI_API_KEY = pc.openaiApiKey;
 			if (pc.openaiEmbeddingModel)
@@ -444,6 +582,7 @@ ${existingVars.AUTO_BUILD_MODEL ? `AUTO_BUILD_MODEL=${existingVars.AUTO_BUILD_MO
 # =============================================================================
 # LINEAR INTEGRATION (OPTIONAL)
 # =============================================================================
+${existingVars.LINEAR_ENABLED ? `LINEAR_ENABLED=${existingVars.LINEAR_ENABLED}` : "# LINEAR_ENABLED=false"}
 ${existingVars.LINEAR_API_KEY ? `LINEAR_API_KEY=${existingVars.LINEAR_API_KEY}` : "# LINEAR_API_KEY="}
 ${existingVars.LINEAR_TEAM_ID ? `LINEAR_TEAM_ID=${existingVars.LINEAR_TEAM_ID}` : "# LINEAR_TEAM_ID="}
 ${existingVars.LINEAR_PROJECT_ID ? `LINEAR_PROJECT_ID=${existingVars.LINEAR_PROJECT_ID}` : "# LINEAR_PROJECT_ID="}
@@ -452,6 +591,7 @@ ${existingVars.LINEAR_REALTIME_SYNC ? `LINEAR_REALTIME_SYNC=${existingVars.LINEA
 # =============================================================================
 # GITHUB INTEGRATION (OPTIONAL)
 # =============================================================================
+${existingVars.GITHUB_ENABLED ? `GITHUB_ENABLED=${existingVars.GITHUB_ENABLED}` : "# GITHUB_ENABLED=false"}
 ${existingVars.GITHUB_TOKEN ? `GITHUB_TOKEN=${existingVars.GITHUB_TOKEN}` : "# GITHUB_TOKEN="}
 ${existingVars.GITHUB_REPO ? `GITHUB_REPO=${existingVars.GITHUB_REPO}` : "# GITHUB_REPO=owner/repo"}
 ${existingVars.GITHUB_AUTO_SYNC ? `GITHUB_AUTO_SYNC=${existingVars.GITHUB_AUTO_SYNC}` : "# GITHUB_AUTO_SYNC=false"}
@@ -487,12 +627,38 @@ ${envLine(existingVars, JIRA_ENV_KEYS.PROJECT_KEY, "PROJ")}
 ${existingVars[JIRA_ENV_KEYS.AUTO_SYNC] ? `${JIRA_ENV_KEYS.AUTO_SYNC}=${existingVars[JIRA_ENV_KEYS.AUTO_SYNC]}` : `# ${JIRA_ENV_KEYS.AUTO_SYNC}=false`}
 
 # =============================================================================
-# MICROSOFT TEAMS NOTIFICATIONS (OPTIONAL)
-# Sends a message to a Teams channel when a task is done and a PR is created.
-# Create an Incoming Webhook in your Teams channel to get the URL.
+# CI/CD PIPELINE LOOP (OPTIONAL) — « Build rouge » column + auto-repair
+# Provider: azure | github | gitlab | jenkins | none (empty = auto-detect).
+# Azure/GitHub/GitLab credentials are reused from their sections above.
 # =============================================================================
+${envLine(existingVars, CICD_ENV_KEYS.PROVIDER, "azure")}
+${existingVars[CICD_ENV_KEYS.AUTO_FIX] ? `${CICD_ENV_KEYS.AUTO_FIX}=${existingVars[CICD_ENV_KEYS.AUTO_FIX]}` : `# ${CICD_ENV_KEYS.AUTO_FIX}=true`}
+${envLine(existingVars, CICD_ENV_KEYS.POLL_SECONDS, "60")}
+${envLine(existingVars, CICD_ENV_KEYS.JENKINS_URL, "https://jenkins.example.com")}
+${envLine(existingVars, CICD_ENV_KEYS.JENKINS_JOB, "my-multibranch-job")}
+${envLine(existingVars, CICD_ENV_KEYS.JENKINS_USER)}
+${envLine(existingVars, CICD_ENV_KEYS.JENKINS_TOKEN)}
+
+# =============================================================================
+# CHANNEL NOTIFICATIONS (OPTIONAL)
+# Announce on your channels when a task is done and its PR is created.
+# Each channel needs a webhook URL (Incoming Webhook / channel webhook).
+# =============================================================================
+# Microsoft Teams
 ${existingVars[TEAMS_ENV_KEYS.ENABLED] ? `${TEAMS_ENV_KEYS.ENABLED}=${existingVars[TEAMS_ENV_KEYS.ENABLED]}` : `# ${TEAMS_ENV_KEYS.ENABLED}=false`}
 ${envLine(existingVars, TEAMS_ENV_KEYS.WEBHOOK_URL, "https://xxx.webhook.office.com/webhookb2/...")}
+# Slack
+${existingVars[SLACK_ENV_KEYS.ENABLED] ? `${SLACK_ENV_KEYS.ENABLED}=${existingVars[SLACK_ENV_KEYS.ENABLED]}` : `# ${SLACK_ENV_KEYS.ENABLED}=false`}
+${envLine(existingVars, SLACK_ENV_KEYS.WEBHOOK_URL, "https://hooks.slack.com/services/...")}
+# Discord
+${existingVars[DISCORD_ENV_KEYS.ENABLED] ? `${DISCORD_ENV_KEYS.ENABLED}=${existingVars[DISCORD_ENV_KEYS.ENABLED]}` : `# ${DISCORD_ENV_KEYS.ENABLED}=false`}
+${envLine(existingVars, DISCORD_ENV_KEYS.WEBHOOK_URL, "https://discord.com/api/webhooks/...")}
+# Google Chat
+${existingVars[GOOGLE_CHAT_ENV_KEYS.ENABLED] ? `${GOOGLE_CHAT_ENV_KEYS.ENABLED}=${existingVars[GOOGLE_CHAT_ENV_KEYS.ENABLED]}` : `# ${GOOGLE_CHAT_ENV_KEYS.ENABLED}=false`}
+${envLine(existingVars, GOOGLE_CHAT_ENV_KEYS.WEBHOOK_URL, "https://chat.googleapis.com/v1/spaces/...")}
+# Generic webhook (flat JSON POST)
+${existingVars[NOTIFY_WEBHOOK_ENV_KEYS.ENABLED] ? `${NOTIFY_WEBHOOK_ENV_KEYS.ENABLED}=${existingVars[NOTIFY_WEBHOOK_ENV_KEYS.ENABLED]}` : `# ${NOTIFY_WEBHOOK_ENV_KEYS.ENABLED}=false`}
+${envLine(existingVars, NOTIFY_WEBHOOK_ENV_KEYS.WEBHOOK_URL, "https://example.com/webhook")}
 
 # =============================================================================
 # GIT/WORKTREE SETTINGS (OPTIONAL)
@@ -546,6 +712,10 @@ ${existingVars.GRAPHITI_ENABLED ? `GRAPHITI_ENABLED=${existingVars.GRAPHITI_ENAB
 
 # Embedding Provider (for semantic search - optional, keyword search works without)
 ${existingVars.GRAPHITI_EMBEDDER_PROVIDER ? `GRAPHITI_EMBEDDER_PROVIDER=${existingVars.GRAPHITI_EMBEDDER_PROVIDER}` : "# GRAPHITI_EMBEDDER_PROVIDER=ollama"}
+
+# LLM used by graphiti-core to ingest episodes (entity extraction)
+${existingVars.GRAPHITI_LLM_PROVIDER ? `GRAPHITI_LLM_PROVIDER=${existingVars.GRAPHITI_LLM_PROVIDER}` : "# GRAPHITI_LLM_PROVIDER=ollama"}
+${existingVars.OLLAMA_LLM_MODEL ? `OLLAMA_LLM_MODEL=${existingVars.OLLAMA_LLM_MODEL}` : "# OLLAMA_LLM_MODEL=qwen3:4b"}
 
 # OpenAI Embeddings
 ${existingVars.OPENAI_API_KEY ? `OPENAI_API_KEY=${existingVars.OPENAI_API_KEY}` : "# OPENAI_API_KEY="}
@@ -644,8 +814,13 @@ ${existingVars.GRAPHITI_DB_PATH ? `GRAPHITI_DB_PATH=${existingVars.GRAPHITI_DB_P
 			}
 
 			if (vars.LINEAR_API_KEY) {
-				config.linearEnabled = true;
 				config.linearApiKey = vars.LINEAR_API_KEY;
+			}
+			// Explicit LINEAR_ENABLED wins; fall back to API-key presence (legacy .env files)
+			if (vars.LINEAR_ENABLED !== undefined) {
+				config.linearEnabled = vars.LINEAR_ENABLED.toLowerCase() === "true";
+			} else if (vars.LINEAR_API_KEY) {
+				config.linearEnabled = true;
 			}
 			if (vars.LINEAR_TEAM_ID) {
 				config.linearTeamId = vars.LINEAR_TEAM_ID;
@@ -659,8 +834,13 @@ ${existingVars.GRAPHITI_DB_PATH ? `GRAPHITI_DB_PATH=${existingVars.GRAPHITI_DB_P
 
 			// GitHub config
 			if (vars.GITHUB_TOKEN) {
-				config.githubEnabled = true;
 				config.githubToken = vars.GITHUB_TOKEN;
+			}
+			// Explicit GITHUB_ENABLED wins; fall back to token presence (legacy .env files)
+			if (vars.GITHUB_ENABLED !== undefined) {
+				config.githubEnabled = vars.GITHUB_ENABLED.toLowerCase() === "true";
+			} else if (vars.GITHUB_TOKEN) {
+				config.githubEnabled = true;
 			}
 			if (vars.GITHUB_REPO) {
 				config.githubRepo = vars.GITHUB_REPO;
@@ -737,12 +917,67 @@ ${existingVars.GRAPHITI_DB_PATH ? `GRAPHITI_DB_PATH=${existingVars.GRAPHITI_DB_P
 				config.jiraAutoSync = true;
 			}
 
-			// Microsoft Teams Notifications
+			// CI/CD pipeline loop (« Build rouge »)
+			if (vars[CICD_ENV_KEYS.PROVIDER] !== undefined) {
+				config.cicdProvider = vars[
+					CICD_ENV_KEYS.PROVIDER
+				] as ProjectEnvConfig["cicdProvider"];
+			}
+			// Default true: only an explicit "false" disables the auto-repair
+			config.cicdAutoFix =
+				vars[CICD_ENV_KEYS.AUTO_FIX]?.toLowerCase() !== "false";
+			if (vars[CICD_ENV_KEYS.POLL_SECONDS]) {
+				const pollSeconds = Number.parseInt(
+					vars[CICD_ENV_KEYS.POLL_SECONDS],
+					10,
+				);
+				if (Number.isFinite(pollSeconds) && pollSeconds > 0) {
+					config.cicdPollSeconds = pollSeconds;
+				}
+			}
+			if (vars[CICD_ENV_KEYS.JENKINS_URL]) {
+				config.cicdJenkinsUrl = vars[CICD_ENV_KEYS.JENKINS_URL];
+			}
+			if (vars[CICD_ENV_KEYS.JENKINS_JOB]) {
+				config.cicdJenkinsJob = vars[CICD_ENV_KEYS.JENKINS_JOB];
+			}
+			if (vars[CICD_ENV_KEYS.JENKINS_USER]) {
+				config.cicdJenkinsUser = vars[CICD_ENV_KEYS.JENKINS_USER];
+			}
+			if (vars[CICD_ENV_KEYS.JENKINS_TOKEN]) {
+				config.cicdJenkinsToken = vars[CICD_ENV_KEYS.JENKINS_TOKEN];
+			}
+
+			// Channel Notifications (Teams / Slack / Discord / Google Chat / webhook)
 			if (vars[TEAMS_ENV_KEYS.ENABLED]?.toLowerCase() === "true") {
 				config.teamsNotificationsEnabled = true;
 			}
 			if (vars[TEAMS_ENV_KEYS.WEBHOOK_URL]) {
 				config.teamsWebhookUrl = vars[TEAMS_ENV_KEYS.WEBHOOK_URL];
+			}
+			if (vars[SLACK_ENV_KEYS.ENABLED]?.toLowerCase() === "true") {
+				config.slackNotificationsEnabled = true;
+			}
+			if (vars[SLACK_ENV_KEYS.WEBHOOK_URL]) {
+				config.slackWebhookUrl = vars[SLACK_ENV_KEYS.WEBHOOK_URL];
+			}
+			if (vars[DISCORD_ENV_KEYS.ENABLED]?.toLowerCase() === "true") {
+				config.discordNotificationsEnabled = true;
+			}
+			if (vars[DISCORD_ENV_KEYS.WEBHOOK_URL]) {
+				config.discordWebhookUrl = vars[DISCORD_ENV_KEYS.WEBHOOK_URL];
+			}
+			if (vars[GOOGLE_CHAT_ENV_KEYS.ENABLED]?.toLowerCase() === "true") {
+				config.googleChatNotificationsEnabled = true;
+			}
+			if (vars[GOOGLE_CHAT_ENV_KEYS.WEBHOOK_URL]) {
+				config.googleChatWebhookUrl = vars[GOOGLE_CHAT_ENV_KEYS.WEBHOOK_URL];
+			}
+			if (vars[NOTIFY_WEBHOOK_ENV_KEYS.ENABLED]?.toLowerCase() === "true") {
+				config.notifyWebhookEnabled = true;
+			}
+			if (vars[NOTIFY_WEBHOOK_ENV_KEYS.WEBHOOK_URL]) {
+				config.notifyWebhookUrl = vars[NOTIFY_WEBHOOK_ENV_KEYS.WEBHOOK_URL];
 			}
 
 			// Git/Worktree config
@@ -811,6 +1046,7 @@ ${existingVars.GRAPHITI_DB_PATH ? `GRAPHITI_DB_PATH=${existingVars.GRAPHITI_DB_P
 					ollamaEmbeddingDim: vars.OLLAMA_EMBEDDING_DIM
 						? Number.parseInt(vars.OLLAMA_EMBEDDING_DIM, 10)
 						: undefined,
+					ollamaLlmModel: vars.OLLAMA_LLM_MODEL,
 					// LadybugDB
 					database: vars.GRAPHITI_DATABASE,
 					dbPath: vars.GRAPHITI_DB_PATH,
