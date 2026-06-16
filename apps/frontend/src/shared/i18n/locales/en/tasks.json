@@ -39,7 +39,9 @@
 		"taskActions": "Task actions",
 		"selectTask": "Select task: {{title}}",
 		"preview": "Preview",
-		"syncFromBranch": "Sync from branch"
+		"syncFromBranch": "Sync from branch",
+		"duplicate": "Duplicate",
+		"duplicateSuffix": "(copy)"
 	},
 	"confirmDelete": {
 		"title": "Delete Task",
@@ -188,6 +190,8 @@
 		"deleteError": "Failed to delete some tasks",
 		"restoreSuccess": "Task restored successfully",
 		"restoreError": "Failed to restore task",
+		"duplicateSuccess": "Task duplicated successfully",
+		"duplicateError": "Failed to duplicate task",
 		"undo": "Undo",
 		"clearSelection": "Clear Selection",
 		"mixedColumnWarning": "Different columns — move unavailable",
@@ -299,6 +303,8 @@
 			"entry": "entry",
 			"entries": "entries",
 			"step": "Step {{current}}/{{total}}",
+			"stepScrollHint": "Click to jump to the start of this step",
+			"qaPass": "QA — check {{n}}",
 			"thinking": "Processing in progress"
 		},
 		"shortPhases": {
@@ -479,6 +485,14 @@
 			"updateFailed": "Failed to update task. Please try again."
 		}
 	},
+	"duplicate": {
+		"title": "Duplicate Task",
+		"description": "Adjust the fields before creating the copy. The new task is created in the backlog with its own spec (attachments are preserved).",
+		"createButton": "Create copy",
+		"errors": {
+			"createFailed": "Failed to duplicate task. Please try again."
+		}
+	},
 	"form": {
 		"description": "Description",
 		"descriptionPlaceholder": "Describe the feature, bug fix, or improvement you want to implement. Be as specific as possible about requirements, constraints, and expected behavior.",
@@ -491,6 +505,15 @@
 		"requireReviewDescription": "When enabled, you'll be prompted to review the spec and implementation plan before the coding phase begins. This allows you to approve, request changes, or provide feedback.",
 		"tddModeLabel": "Strict TDD mode (Red-Green-Refactor)",
 		"tddModeDescription": "When enabled, the agent follows a strict TDD cycle for this task: write a failing test first, then the minimal code to make it pass, then refactor. Overrides the project TDD setting for this task only.",
+		"stepDetails": "Details",
+		"stepEngine": "Engine",
+		"nextStep": "Next: engine",
+		"previousStep": "Back",
+		"engineStepTitle": "Execution engine",
+		"engineStepDescription": "Choose the provider, model and effort for this task. Each phase (spec, planning, coding, QA) can use a different model.",
+		"providerLabel": "Provider",
+		"providerPlaceholder": "Select a provider",
+		"providerHelp": "The models below are scoped to this provider. Saved on the task only — it does not change your global provider.",
 		"editor": {
 			"bold": "Bold",
 			"italic": "Italic",
@@ -586,6 +609,21 @@
 		"savedDescription_other": "{{count}} answers added to the specification.",
 		"saveErrorTitle": "Failed to save clarifications"
 	},
+	"executionFormula": {
+		"bannerImported": "Imported task — pick the provider, model and effort before running it.",
+		"bannerDuplicated": "Duplicated task — pick the provider, model and effort before running it.",
+		"chooseButton": "Choose engine",
+		"dismiss": "Ignore",
+		"appliedLabel": "Engine:",
+		"editButton": "Change",
+		"gate": {
+			"title": "Choose the provider/LLM/effort first?",
+			"body": "This task was imported or duplicated and has no provider, model or effort chosen yet. Pick a formula in the Formula Lab, or start now with the current defaults.",
+			"choose": "Choose engine",
+			"startDefaults": "Start with defaults",
+			"cancel": "Cancel"
+		}
+	},
 	"reset": {
 		"button": "Reset task",
 		"confirmTitle": "Fully reset this task?",
@@ -607,6 +645,8 @@
 		"failedCount_other": "{{count}} failed",
 		"blockedReason": "Blocked: {{reason}}",
 		"blockedGeneric": "Blocked — needs manual attention",
+		"changeRequest": "Change requested",
+		"requestedAt": "Requested on {{date}}",
 		"filesViewer": {
 			"filesModified_one": "{{count}} file modified",
 			"filesModified_other": "{{count}} files modified",
@@ -681,6 +721,15 @@
 		"phaseEmpty": "No logs yet",
 		"hideOutput": "Hide output",
 		"showOutput": "Show output",
+		"search": {
+			"placeholder": "Search logs…",
+			"ariaLabel": "Search logs",
+			"results_one": "{{count}} result",
+			"results_other": "{{count}} results",
+			"clear": "Clear search",
+			"noResults": "No results",
+			"noResultsHint": "No log entry matches “{{query}}”."
+		},
 		"thinking": {
 			"selectAria": "Thinking effort for this phase",
 			"selectTooltip": "Change the thinking effort for this phase",
@@ -734,7 +783,7 @@
 			"providerSwitch": "Switch LLM while running",
 			"providerSwitchDesc": "Hot override: pauses the task after the current step finishes, then resumes it with a different LLM. For steps that haven't started, use the per-phase LLM selectors above instead.",
 			"providerSwitchPaused": "Task is paused",
-			"providerSwitchPausedDesc": "Choose a provider and model, then resume the task.",
+			"providerSwitchPausedDesc": "Choose a provider, model and effort level, then resume the task.",
 			"pauseToSwitch": "Pause and switch LLM",
 			"pauseToSwitchShort": "Pause & switch",
 			"providerSwitchInfoAria": "About switching the LLM",
@@ -756,6 +805,7 @@
 			"noConfiguredProviders": "No provider configured. Add an API key in Settings.",
 			"chooseProvider": "Provider",
 			"chooseModel": "Model",
+			"chooseEffort": "Effort",
 			"resumeWithChosenLlm": "Resume with this LLM",
 			"resumeSameProvider": "Resume without changing LLM",
 			"previousTask": "Previous task",

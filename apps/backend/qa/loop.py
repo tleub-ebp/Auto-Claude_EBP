@@ -484,6 +484,14 @@ async def run_qa_validation_loop(
         emit_phase(
             ExecutionPhase.QA_REVIEW, f"Running QA review iteration {qa_iteration}"
         )
+        # Sous-étape de la phase de validation, affichée dans la barre de phase
+        # de l'UI (équivalent des « phase N: NOM » de la planification).
+        if task_logger:
+            task_logger.start_subphase(
+                f"QA REVIEW — PASS {qa_iteration}/{MAX_QA_ITERATIONS}",
+                phase=LogPhase.VALIDATION,
+                print_to_console=False,
+            )
 
         # Run QA reviewer with phase-specific model and thinking budget
         qa_model = get_phase_model(spec_dir, "qa", model)
@@ -962,6 +970,12 @@ async def run_qa_validation_loop(
                 thinking_budget=fixer_thinking_budget,
             )
             emit_phase(ExecutionPhase.QA_FIXING, "Fixing QA issues")
+            if task_logger:
+                task_logger.start_subphase(
+                    f"QA FIX — PASS {qa_iteration}",
+                    phase=LogPhase.VALIDATION,
+                    print_to_console=False,
+                )
             task_event_emitter.emit(
                 "QA_FIXING_STARTED",
                 {"iteration": qa_iteration},

@@ -1298,8 +1298,23 @@ async def run_autonomous_agent(
 
             # Set session info in logger
             if task_logger and subtask_id:
+                # Marque le début d'une nouvelle sous-tâche comme sous-étape de la
+                # phase de codage (affichée dans la barre de phase de l'UI, à la
+                # manière des « phase N: NOM » de la planification). On n'émet
+                # qu'au changement de sous-tâche pour éviter les doublons lors des
+                # reprises/retries sur une même sous-tâche.
+                subtask_changed = task_logger.current_subtask != subtask_id
                 task_logger.set_subtask(subtask_id)
                 task_logger.set_session(iteration)
+                if subtask_changed:
+                    subtask_label = " ".join(
+                        str(next_subtask.get("description") or subtask_id).split()
+                    )[:80]
+                    task_logger.start_subphase(
+                        subtask_label,
+                        phase=LogPhase.CODING,
+                        print_to_console=False,
+                    )
 
         # Run session with Claude SDK client
         # Initialize status before async with block in case client context manager fails

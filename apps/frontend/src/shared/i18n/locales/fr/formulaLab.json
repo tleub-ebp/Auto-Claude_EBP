@@ -18,8 +18,15 @@
 		"cta": "Affiner avec l'IA",
 		"running": "Affinage…",
 		"tooltip": "Lance un appel LLM économique pour affiner l'estimation de réussite des 3 meilleures formules pour cette tâche",
-		"error": "Affinage IA indisponible — estimations heuristiques conservées.",
+		"error": "Affinage IA de la confiance indisponible — probabilités de réussite heuristiques conservées (les coûts ne sont pas affectés).",
 		"aiBadge": "Estimation affinée par l'IA"
+	},
+	"costBasis": {
+		"measured": "Coûts calculés sur {{count}} exécution(s) réelle(s) de ce projet — tokens mesurés × prix catalogue.",
+		"calibrated": "Coûts calibrés sur {{count}} exécution(s) réelle(s) de ce projet — volumes mesurés × prix catalogue à jour.",
+		"heuristic": "Aucun historique d'exécution — volumes estimés (par défaut) × prix catalogue réels. La précision augmentera après vos premières tâches.",
+		"measuredTag": "mesuré",
+		"measuredTooltip": "Coût basé sur l'usage réel mesuré de ce modèle dans ce projet"
 	},
 	"picks": {
 		"bestValue": "Meilleur rapport",

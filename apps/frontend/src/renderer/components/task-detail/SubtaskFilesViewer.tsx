@@ -452,7 +452,10 @@ export function SubtaskFilesViewer({
 	const handleToggleDiff = useCallback(
 		(node: FileTreeNode) => {
 			const willOpen = !openDiffs[node.path];
-			setOpenDiffs((prev) => ({ ...prev, [node.path]: !prev[node.path] }));
+			// Single-open accordion: opening a file's diff closes any other open one,
+			// so at most one DiffViewer is mounted at a time. Clicking the same file
+			// again collapses it.
+			setOpenDiffs(willOpen ? { [node.path]: true } : {});
 			if (willOpen) {
 				fetchFileDiff(node);
 			}
@@ -461,26 +464,20 @@ export function SubtaskFilesViewer({
 	);
 
 	const handleExpandAll = () => {
+		// Expand every folder so all files are revealed, but do NOT open any diff:
+		// diffs open one at a time on click (single-open accordion). This keeps the
+		// view light no matter how many files the change touched.
 		const allFolders: Record<string, boolean> = {};
-		const allFiles: Record<string, boolean> = {};
-		const leaves: FileTreeNode[] = [];
 		const collect = (nodes: FileTreeNode[]) => {
 			for (const node of nodes) {
 				if (node.isFolder) {
 					allFolders[node.path] = true;
 					if (node.children) collect(node.children);
-				} else {
-					allFiles[node.path] = true;
-					leaves.push(node);
 				}
 			}
 		};
 		collect(fileTree);
 		setExpanded(allFolders);
-		setOpenDiffs(allFiles);
-		for (const leaf of leaves) {
-			fetchFileDiff(leaf);
-		}
 	};
 
 	const handleCollapseAll = () => {

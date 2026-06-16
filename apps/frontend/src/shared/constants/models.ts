@@ -776,6 +776,68 @@ export function resolveCatalogModelValue(
 	return match ? match.value : value;
 }
 
+/**
+ * Capability tier of a model id, looked up by canonical identity across every
+ * provider catalog (so a preset alias like "sonnet" resolves to its Anthropic
+ * "standard" tier). Returns undefined for unknown models.
+ *
+ * Used to remap a model onto an equivalent-tier model when the active provider
+ * does not offer it (e.g. switching a "sonnet"-based profile to OpenAI should
+ * land on a *standard* OpenAI model, not the flagship).
+ */
+export function getModelTier(value: string): ProviderModel["tier"] | undefined {
+	if (!value) return undefined;
+	const key = getCanonicalModelKey(value);
+	for (const list of Object.values(PROVIDER_MODELS_MAP)) {
+		const hit = list.find((m) => getCanonicalModelKey(m.value) === key);
+		if (hit?.tier) return hit.tier;
+	}
+	return undefined;
+}
+
+/**
+ * Resolve a model id to one actually offered by `provider`, keeping the user's
+ * choice whenever possible and otherwise mapping by capability tier:
+ *
+ *  1. value already present in the live catalog → kept as-is;
+ *  2. same version under another spelling (alias / dotted / dated) → canonical
+ *     catalog entry;
+ *  3. not offered at all → an equivalent-tier model from the provider's static
+ *     catalog (falling back to its flagship, then first entry).
+ *
+ * `liveCatalog` is the union (live + static) shown in the UI and is the source
+ * of truth for "does this provider offer X". Tier mapping uses the static
+ * catalog because live `/v1/models` entries don't carry a tier.
+ */
+export function resolveModelForProviderCatalog(
+	value: string,
+	liveCatalog: readonly { value: string; tier?: ProviderModel["tier"] }[],
+	provider: string,
+): string {
+	if (!value) return value;
+	const valid = new Set(liveCatalog.map((m) => m.value));
+	if (valid.has(value)) return value;
+	const canonical = resolveCatalogModelValue(value, liveCatalog);
+	if (valid.has(canonical)) return canonical;
+
+	// Not offered by this provider → map to an equivalent-tier model.
+	const staticCatalog = getModelsForProvider(provider);
+	const tier = getModelTier(value);
+	const sameTier = tier
+		? staticCatalog.find((m) => m.tier === tier)?.value
+		: undefined;
+	const flagship =
+		liveCatalog.find((m) => m.tier === "flagship")?.value ??
+		staticCatalog.find((m) => m.tier === "flagship")?.value;
+	return (
+		sameTier ??
+		flagship ??
+		liveCatalog[0]?.value ??
+		getDefaultModelForProvider(provider) ??
+		value
+	);
+}
+
 // Maps thinking levels to budget tokens (null = no extended thinking)
 export const THINKING_BUDGET_MAP: Record<string, number | null> = {
 	none: null,
