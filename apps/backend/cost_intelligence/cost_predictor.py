@@ -169,7 +169,12 @@ def _load_history_samples(project_root: Path) -> list[dict[str, Any]]:
     cost_data = project_root / ".workpilot" / "cost_data.json"
     data = _safe_load_json(cost_data)
     if data and isinstance(data, dict):
-        for entry in data.get("usage", []) or []:
+        # usage_tracker writes the canonical key "usages" (plural); accept the
+        # legacy "usage" spelling too so older files still calibrate estimates.
+        records = data.get("usages")
+        if records is None:
+            records = data.get("usage", [])
+        for entry in records or []:
             if isinstance(entry, dict):
                 samples.append(entry)
 

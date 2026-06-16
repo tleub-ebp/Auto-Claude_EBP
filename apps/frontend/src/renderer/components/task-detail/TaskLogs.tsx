@@ -18,6 +18,7 @@ import {
 	Server,
 	Terminal,
 	Wrench,
+	X,
 	XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -46,6 +47,7 @@ import {
 	resolvePhaseDefaults,
 } from "../../../shared/utils/task-thinking";
 import { getStaticProviders } from "../../../shared/utils/providers";
+import { entryMatchesQuery } from "../../../shared/utils/task-logs-search";
 import { debugError } from "../../../shared/utils/debug-logger";
 import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
 import { Badge } from "../ui/badge";
@@ -61,6 +63,8 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../ui/select";
+import { TaskPhaseBar } from "./TaskPhaseBar";
+import { buildPhaseSubSteps } from "./task-log-substep";
 
 interface TaskLogsProps {
 	task: Task;
@@ -73,9 +77,50 @@ interface TaskLogsProps {
 	onLogsScroll: (e: React.UIEvent<HTMLDivElement>) => void;
 	onTogglePhase: (phase: TaskLogPhase) => void;
 	onVisiblePhaseChange?: (phase: TaskLogPhase | null) => void;
+	/** Phase currently visible at the top of the viewport (scroll-driven). */
+	currentPhase?: TaskLogPhase | null;
+	/** Live activity label surfaced in the phase bar. */
+	currentActivity?: string | null;
 }
 
 const PHASE_ORDER: TaskLogPhase[] = ["planning", "coding", "validation"];
+
+/**
+ * Render `text`, wrapping every (case-insensitive) occurrence of `query` in a
+ * <mark> so search hits stand out. Falls back to the raw text when there is no
+ * query or no match, so non-searching renders stay allocation-free.
+ */
+function HighlightedText({
+	text,
+	query,
+}: {
+	text: string;
+	query: string;
+}): React.ReactNode {
+	if (!query) return text;
+	const lower = text.toLowerCase();
+	let from = lower.indexOf(query);
+	if (from === -1) return text;
+
+	const parts: React.ReactNode[] = [];
+	let cursor = 0;
+	let key = 0;
+	while (from !== -1) {
+		if (from > cursor) parts.push(text.slice(cursor, from));
+		parts.push(
+			<mark
+				key={key++}
+				className="rounded-[2px] bg-amber-300/50 text-foreground dark:bg-amber-400/30"
+			>
+				{text.slice(from, from + query.length)}
+			</mark>,
+		);
+		cursor = from + query.length;
+		from = lower.indexOf(query, cursor);
+	}
+	if (cursor < text.length) parts.push(text.slice(cursor));
+	return parts;
+}
 
 const PHASE_ICONS: Record<TaskLogPhase, typeof Pencil> = {
 	planning: Pencil,
@@ -168,12 +213,44 @@ export function TaskLogs({
 	onLogsScroll,
 	onTogglePhase,
 	onVisiblePhaseChange,
+	currentPhase,
+	currentActivity,
 }: TaskLogsProps) {
 	const { t } = useTranslation(["tasks"]);
 	const { toast } = useToast();
 	const [savingPhase, setSavingPhase] = useState<TaskLogPhase | null>(null);
 	const settings = useSettingsStore((s) => s.settings);
 	const profiles = useSettingsStore((s) => s.profiles);
+
+	// Free-text search across all phase log entries. While a query is active,
+	// each phase only renders its matching entries (and is force-expanded so the
+	// hits are visible); phases with no match are hidden.
+	const [searchQuery, setSearchQuery] = useState("");
+	const normalizedQuery = searchQuery.trim().toLowerCase();
+	const isSearching = normalizedQuery.length > 0;
+
+	const matchCount = useMemo(() => {
+		if (!isSearching || !phaseLogs) return 0;
+		return PHASE_ORDER.reduce((acc, phase) => {
+			const entries = phaseLogs.phases[phase]?.entries ?? [];
+			return (
+				acc + entries.filter((e) => entryMatchesQuery(e, normalizedQuery)).length
+			);
+		}, 0);
+	}, [isSearching, phaseLogs, normalizedQuery]);
+
+	const hasAnyLogs = Boolean(phaseLogs || (task.logs && task.logs.length > 0));
+
+	// Table id → titre de sous-tâche, utilisée comme repli pour décrire la
+	// sous-étape de la phase de codage sur les anciens logs (qui portent un
+	// `subtask_id` sur leurs entrées mais aucune borne `subphase` structurée).
+	const subtaskTitles = useMemo(() => {
+		const map: Record<string, string> = {};
+		for (const st of task.subtasks ?? []) {
+			if (st.id) map[st.id] = st.title || st.id;
+		}
+		return map;
+	}, [task.subtasks]);
 
 	// Configured providers shown in each phase's provider dropdown. Loaded once
 	// (and refreshed when settings/profiles change) so adding an API key in
@@ -304,6 +381,11 @@ export function TaskLogs({
 	// frame des logs, afin de ne pas encombrer le viewport au repos.
 	const [isHoveringLogs, setIsHoveringLogs] = useState(false);
 
+	// Sous-étape courante affichée dans la barre de phase, suivie en fonction du
+	// défilement (dernière borne « phase N: NOM » passée sous le haut du
+	// viewport). Mise à jour par computeVisiblePhase.
+	const [visibleSubStep, setVisibleSubStep] = useState<string | null>(null);
+
 	const scrollToTop = useCallback(() => {
 		logsContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
 	}, [logsContainerRef]);
@@ -313,6 +395,36 @@ export function TaskLogs({
 		if (!container) return;
 		container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
 	}, [logsContainerRef]);
+
+	// Remonte le conteneur de logs jusqu'au début de la section d'une phase.
+	// On mesure l'écart entre le haut de la section et le haut du conteneur, ce
+	// qui reste fiable quelles que soient les phases repliées au-dessus.
+	const scrollPhaseIntoView = useCallback(
+		(phase: TaskLogPhase) => {
+			const el = phaseRefs.current[phase];
+			const container = logsContainerRef.current;
+			if (!el || !container) return;
+			const delta =
+				el.getBoundingClientRect().top - container.getBoundingClientRect().top;
+			container.scrollTo({
+				top: Math.max(0, container.scrollTop + delta - 8),
+				behavior: "smooth",
+			});
+		},
+		[logsContainerRef],
+	);
+
+	// Au clic sur la barre de phase : on déploie la phase ciblée si besoin (pour
+	// révéler ses entrées) puis on remonte à son début. Le haut de l'en-tête de
+	// section ne bouge pas avec sa propre expansion, le défilement reste donc
+	// correct sans attendre la fin de l'animation.
+	const handleScrollToPhase = useCallback(
+		(phase: TaskLogPhase) => {
+			if (!expandedPhases.has(phase)) onTogglePhase(phase);
+			scrollPhaseIntoView(phase);
+		},
+		[expandedPhases, onTogglePhase, scrollPhaseIntoView],
+	);
 
 	// Raccourcis clavier quand le conteneur de logs a le focus :
 	// - Home → remonter tout en haut, End → descendre tout en bas.
@@ -344,7 +456,7 @@ export function TaskLogs({
 	// container and notify the parent so the sticky phase bar can follow.
 	const computeVisiblePhase = useCallback(() => {
 		const container = logsContainerRef.current;
-		if (!container || !onVisiblePhaseChange) return;
+		if (!container) return;
 
 		const containerTop = container.getBoundingClientRect().top;
 		let current: TaskLogPhase | null = null;
@@ -357,8 +469,36 @@ export function TaskLogs({
 				current = phase;
 			}
 		}
-		onVisiblePhaseChange(current);
-	}, [logsContainerRef, onVisiblePhaseChange]);
+		onVisiblePhaseChange?.(current);
+
+		// Sous-étape pilotée par le défilement : on suit la dernière borne de
+		// sous-étape passée sous le haut du viewport, restreinte à la phase
+		// affichée (planification : « phase N: NOM » ; codage : sous-tâche ;
+		// validation : passe QA). Les bornes proviennent des entrées marquées
+		// `data-substep` (cf. getSubStepLabel).
+		const activePhase =
+			PHASE_ORDER.find((p) => phaseLogs?.phases[p]?.status === "active") ?? null;
+		const displayPhase = current ?? activePhase;
+		let subStep: string | null = null;
+		if (displayPhase) {
+			const headers = Array.from(
+				container.querySelectorAll<HTMLElement>(
+					`[data-substep][data-substep-phase="${displayPhase}"]`,
+				),
+			);
+			for (const header of headers) {
+				if (header.getBoundingClientRect().top - containerTop <= 8) {
+					subStep = header.dataset.substep || null;
+				}
+			}
+			// Avant d'avoir défilé sous la première borne, on affiche tout de même
+			// la sous-étape initiale plutôt qu'un libellé vide.
+			if (!subStep && headers.length > 0) {
+				subStep = headers[0].dataset.substep || null;
+			}
+		}
+		setVisibleSubStep(subStep);
+	}, [logsContainerRef, onVisiblePhaseChange, phaseLogs]);
 
 	// Met à jour la visibilité des boutons flottants selon la position : on
 	// affiche « haut » dès qu'on s'éloigne du sommet et « bas » tant qu'on n'a
@@ -399,13 +539,64 @@ export function TaskLogs({
 
 	return (
 		<div
-			className="relative h-full"
+			className="relative flex h-full flex-col"
 			onMouseEnter={() => setIsHoveringLogs(true)}
 			onMouseLeave={() => setIsHoveringLogs(false)}
 		>
+			{/* Search bar — filters log entries across all phases */}
+			{!isLoadingLogs && hasAnyLogs && (
+				<div className="shrink-0 border-b border-border/50 p-2">
+					<div className="relative">
+						<Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+						<input
+							type="text"
+							value={searchQuery}
+							onChange={(e) => setSearchQuery(e.target.value)}
+							placeholder={t(
+								"tasks:logs.search.placeholder",
+								"Rechercher dans les logs…",
+							)}
+							aria-label={t(
+								"tasks:logs.search.ariaLabel",
+								"Rechercher dans les logs",
+							)}
+							className="h-8 w-full rounded-md border border-border bg-background pl-8 pr-24 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
+						/>
+						{isSearching && (
+							<div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1">
+								<span className="text-[10px] tabular-nums text-muted-foreground">
+									{t("tasks:logs.search.results", "{{count}} résultat(s)", {
+										count: matchCount,
+									})}
+								</span>
+								<button
+									type="button"
+									onClick={() => setSearchQuery("")}
+									aria-label={t("tasks:logs.search.clear", "Effacer la recherche")}
+									className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+								>
+									<X className="h-3.5 w-3.5" />
+								</button>
+							</div>
+						)}
+					</div>
+				</div>
+			)}
+
+			{/* Barre de phase : nom de la phase, étape courante et sous-étape en
+			    temps réel. Placée sous la recherche ; un clic remonte au début des
+			    logs de la phase affichée. */}
+			<TaskPhaseBar
+				phaseLogs={phaseLogs}
+				currentPhase={currentPhase}
+				currentActivity={currentActivity}
+				subStep={visibleSubStep}
+				onStepClick={handleScrollToPhase}
+			/>
+
 			<div
 				ref={logsContainerRef}
-				className="h-full overflow-y-auto scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent focus:outline-none"
+				className="min-h-0 flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent focus:outline-none"
 				onScroll={handleScroll}
 			>
 				<div className="p-4 space-y-2">
@@ -435,15 +626,33 @@ export function TaskLogs({
 										onModelChange={handleModelChange}
 										onProviderChange={handleProviderChange}
 										isSavingPhase={savingPhase === phase}
+										searchQuery={normalizedQuery}
+										subtaskTitles={subtaskTitles}
 									/>
 								</div>
 							))}
+							{isSearching && matchCount === 0 && (
+								<div className="py-8 text-center text-sm text-muted-foreground">
+									<Search className="mx-auto mb-2 h-8 w-8 opacity-50" />
+									<p>
+										{t("tasks:logs.search.noResults", "Aucun résultat")}
+									</p>
+									<p className="mt-1 text-xs">
+										{t(
+											"tasks:logs.search.noResultsHint",
+											"Aucune entrée de log ne correspond à « {{query}} ».",
+											{ query: searchQuery.trim() },
+										)}
+									</p>
+								</div>
+							)}
 							<div ref={logsEndRef} />
 						</>
 					) : task.logs && task.logs.length > 0 ? (
-						// Fallback to legacy raw logs if no phase logs exist
+						// Fallback to legacy raw logs if no phase logs exist. When a search is
+							// active, keep only the matching lines.
 						<pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-all">
-							{task.logs.join("")}
+							{isSearching ? task.logs.join("").split("\n").filter((line) => line.toLowerCase().includes(normalizedQuery)).join("\n") || t("tasks:logs.search.noResults", "Aucun résultat") : task.logs.join("")}
 							<div ref={logsEndRef} />
 						</pre>
 					) : (
@@ -534,6 +743,10 @@ interface PhaseLogSectionProps {
 	onModelChange?: (phase: TaskLogPhase, model: string) => void;
 	onProviderChange?: (phase: TaskLogPhase, provider: string) => void;
 	isSavingPhase?: boolean;
+	/** Active, already-lower-cased search query (empty = no filtering). */
+	searchQuery?: string;
+	/** Map id → titre de sous-tâche, pour le repli de sous-étape du codage. */
+	subtaskTitles?: Record<string, string>;
 }
 
 function PhaseLogSection({
@@ -548,12 +761,14 @@ function PhaseLogSection({
 	onModelChange,
 	onProviderChange,
 	isSavingPhase,
+	searchQuery = "",
+	subtaskTitles,
 }: PhaseLogSectionProps) {
 	const { t } = useTranslation(["tasks"]);
 	const Icon = PHASE_ICONS[phase];
 	const logOrder = useSettingsStore((s) => s.settings.logOrder);
 	const status = phaseLog?.status || "pending";
-	const hasEntries = (phaseLog?.entries.length || 0) > 0;
+	const isSearching = searchQuery.length > 0;
 
 	// Live model catalog for the phase's currently-selected provider. The hook
 	// is always called (provider may be "") so it complies with the rules of
@@ -589,14 +804,33 @@ function PhaseLogSection({
 		[catalogModels, phaseConfig?.modelValue],
 	);
 
-	// Memoize sorted entries to avoid re-calculating on every render
-	// Entries are naturally in chronological order (oldest first from append())
+	// Memoize sorted+filtered entries to avoid re-calculating on every render.
+	// Entries are naturally in chronological order (oldest first from append());
+	// when a search is active we keep only the matching ones.
 	const displayedEntries = useMemo(() => {
-		const entries = phaseLog?.entries || [];
+		let entries = phaseLog?.entries || [];
+		if (isSearching) {
+			entries = entries.filter((e) => entryMatchesQuery(e, searchQuery));
+		}
 		return logOrder === "reverse-chronological"
 			? [...entries].reverse()
 			: entries;
-	}, [phaseLog?.entries, logOrder]);
+	}, [phaseLog?.entries, logOrder, isSearching, searchQuery]);
+
+	const hasEntries = displayedEntries.length > 0;
+
+	// Table « entrée → libellé de sous-étape » pour cette phase : bornes
+	// structurées (nouveaux logs) ou repli sur les anciens logs (sous-tâche pour
+	// le codage, session QA numérotée pour la validation). Cf. buildPhaseSubSteps.
+	const subStepLabels = useMemo(
+		() =>
+			buildPhaseSubSteps(phaseLog?.entries || [], phase, {
+				subtaskTitles,
+				formatQaPass: (n) =>
+					t("tasks:execution.labels.qaPass", "QA — vérification {{n}}", { n }),
+			}),
+		[phaseLog?.entries, phase, subtaskTitles, t],
+	);
 
 	const getStatusBadge = () => {
 		switch (status) {
@@ -652,8 +886,12 @@ function PhaseLogSection({
 
 	const isInterrupted = isTaskStuck && status === "active";
 
+	// While searching, a phase with no matching entry is hidden entirely so the
+	// results read as a flat, focused list. (All hooks above already ran.)
+	if (isSearching && displayedEntries.length === 0) return null;
+
 	return (
-		<Collapsible open={isExpanded} onOpenChange={onToggle}>
+		<Collapsible open={isSearching || isExpanded} onOpenChange={onToggle}>
 			<div
 				className={cn(
 					"w-full flex items-center justify-between p-3 rounded-lg border transition-colors",
@@ -689,9 +927,9 @@ function PhaseLogSection({
 						</span>
 						{hasEntries && (
 							<span className="text-xs text-muted-foreground">
-								({phaseLog?.entries.length}{" "}
+								({displayedEntries.length}{" "}
 								{t(
-									phaseLog?.entries.length === 1
+									displayedEntries.length === 1
 										? "tasks:execution.labels.entry"
 										: "tasks:execution.labels.entries",
 								)}
@@ -838,12 +1076,21 @@ function PhaseLogSection({
 							{t("tasks:logs.phaseEmpty")}
 						</p>
 					) : (
-						displayedEntries.map((entry) => (
-							<LogEntry
-								key={`${entry.timestamp}-${entry.type}-${entry.content}`}
-								entry={entry}
-							/>
-						))
+						displayedEntries.map((entry) => {
+							const key = `${entry.timestamp}-${entry.type}-${entry.content.slice(0, 80)}`;
+							// Les bornes de sous-étape (« Starting phase N: NOM ») sont
+							// marquées pour que TaskLogs puisse suivre la sous-étape courante
+							// au défilement.
+							const subStepLabel = subStepLabels.get(entry) ?? null;
+							if (subStepLabel) {
+								return (
+									<div key={key} data-substep={subStepLabel} data-substep-phase={phase}>
+										<LogEntry entry={entry} query={searchQuery} />
+									</div>
+								);
+							}
+							return <LogEntry key={key} entry={entry} query={searchQuery} />;
+						})
 					)}
 				</div>
 			</CollapsibleContent>
@@ -854,12 +1101,24 @@ function PhaseLogSection({
 // Log Entry Component
 interface LogEntryProps {
 	entry: TaskLogEntry;
+	/** Active, already-lower-cased search query, for match highlighting. */
+	query?: string;
 }
 
-function LogEntry({ entry }: LogEntryProps) {
+function LogEntry({ entry, query = "" }: LogEntryProps) {
 	const { t } = useTranslation(["tasks"]);
 	const [isExpanded, setIsExpanded] = useState(false);
 	const hasDetail = Boolean(entry.detail);
+
+	// Pre-built highlighted nodes for the searchable fields, reused across the
+	// per-type render branches below.
+	const content = <HighlightedText text={entry.content ?? ""} query={query} />;
+	const detail = entry.detail ? (
+		<HighlightedText text={entry.detail} query={query} />
+	) : null;
+	const toolInput = entry.tool_input ? (
+		<HighlightedText text={entry.tool_input} query={query} />
+	) : null;
 
 	const getToolInfo = (toolName: string) => {
 		switch (toolName) {
@@ -945,9 +1204,9 @@ function LogEntry({ entry }: LogEntryProps) {
 					{entry.tool_input && (
 						<span
 							className="text-muted-foreground break-all whitespace-pre-wrap flex-1 min-w-0"
-							title={entry.tool_input}
+							title={entry.tool_input as string}
 						>
-							{entry.tool_input}
+							{toolInput}
 						</span>
 					)}
 					<SubphaseBadge />
@@ -999,7 +1258,7 @@ function LogEntry({ entry }: LogEntryProps) {
 				{hasDetail && isExpanded && (
 					<div className="mt-1.5 ml-4 p-2 bg-secondary/30 rounded-md border border-border/50 overflow-x-auto">
 						<pre className="text-[10px] text-muted-foreground whitespace-pre-wrap break-words font-mono max-h-[300px] overflow-y-auto">
-							{entry.detail}
+							{detail}
 						</pre>
 					</div>
 				)}
@@ -1012,7 +1271,7 @@ function LogEntry({ entry }: LogEntryProps) {
 			<div className="flex flex-col">
 				<div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-md px-2 py-1">
 					<XCircle className="h-3 w-3 mt-0.5 shrink-0" />
-					<span className="break-words flex-1">{entry.content}</span>
+					<span className="break-words flex-1">{content}</span>
 					<SubphaseBadge />
 					{hasDetail && (
 						<button
@@ -1035,7 +1294,7 @@ function LogEntry({ entry }: LogEntryProps) {
 				{hasDetail && isExpanded && (
 					<div className="mt-1.5 ml-4 p-2 bg-destructive/5 rounded-md border border-destructive/20 overflow-x-auto">
 						<pre className="text-[10px] text-destructive/80 whitespace-pre-wrap break-words font-mono max-h-[300px] overflow-y-auto">
-							{entry.detail}
+							{detail}
 						</pre>
 					</div>
 				)}
@@ -1047,7 +1306,7 @@ function LogEntry({ entry }: LogEntryProps) {
 		return (
 			<div className="flex items-start gap-2 text-xs text-success bg-success/10 rounded-md px-2 py-1">
 				<CheckCircle2 className="h-3 w-3 mt-0.5 shrink-0" />
-				<span className="break-words flex-1">{entry.content}</span>
+				<span className="break-words flex-1">{content}</span>
 				<SubphaseBadge />
 			</div>
 		);
@@ -1057,7 +1316,7 @@ function LogEntry({ entry }: LogEntryProps) {
 		return (
 			<div className="flex items-start gap-2 text-xs text-info bg-info/10 rounded-md px-2 py-1">
 				<Info className="h-3 w-3 mt-0.5 shrink-0" />
-				<span className="break-words flex-1">{entry.content}</span>
+				<span className="break-words flex-1">{content}</span>
 				<SubphaseBadge />
 			</div>
 		);
@@ -1071,7 +1330,7 @@ function LogEntry({ entry }: LogEntryProps) {
 					{formatTime(entry.timestamp)}
 				</span>
 				<span className="break-words whitespace-pre-wrap flex-1">
-					{entry.content}
+					{content}
 				</span>
 				<SubphaseBadge />
 				{hasDetail && (
@@ -1101,7 +1360,7 @@ function LogEntry({ entry }: LogEntryProps) {
 			{hasDetail && isExpanded && (
 				<div className="mt-1.5 ml-12 p-2 bg-secondary/30 rounded-md border border-border/50 overflow-x-auto">
 					<pre className="text-[10px] text-muted-foreground whitespace-pre-wrap break-words font-mono max-h-[300px] overflow-y-auto">
-						{entry.detail}
+						{detail}
 					</pre>
 				</div>
 			)}

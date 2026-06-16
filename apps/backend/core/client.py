@@ -1679,6 +1679,7 @@ def create_agent_client(
     agents: dict | None = None,
     provider: str | None = None,
     resume: str | None = None,
+    system_prompt: str | None = None,
 ) -> "AgentClient":  # noqa: F821
     """
     Create a provider-agnostic agent client for Kanban task execution.
@@ -1699,6 +1700,11 @@ def create_agent_client(
                For Copilot: converted to SubagentDefinition for parallel API calls
         provider: Provider override ("claude" or "copilot").
                  If None, auto-detected from env/project settings.
+        system_prompt: Optional system-prompt override. When provided, it
+                 replaces the default coding base prompt for the
+                 copilot/openai/windsurf clients (used by utilities that need
+                 their own prompt, e.g. the insights chat). Ignored on the
+                 Claude branch, which builds its prompt inside create_client.
 
     Returns:
         AgentClient instance (ClaudeAgentClient or CopilotAgentClient)
@@ -1754,8 +1760,11 @@ def create_agent_client(
         # Shared system prompt (single source — core/llm_optimization.py)
         from core.llm_optimization import build_base_system_prompt
 
-        base_prompt = build_base_system_prompt(project_dir)
-        base_prompt = _inject_domain_addendum(base_prompt, agent_type, spec_dir)
+        if system_prompt:
+            base_prompt = system_prompt
+        else:
+            base_prompt = build_base_system_prompt(project_dir)
+            base_prompt = _inject_domain_addendum(base_prompt, agent_type, spec_dir)
 
         # Convert agents dict to SubagentDefinition if provided
         copilot_agents: dict[str, SubagentDefinition] | None = None
@@ -1820,12 +1829,15 @@ def create_agent_client(
         # Shared system prompt (single source — core/llm_optimization.py)
         from core.llm_optimization import build_base_system_prompt
 
-        windsurf_system_prompt = build_base_system_prompt(
-            project_dir, tool_use_hint=True
-        )
-        windsurf_system_prompt = _inject_domain_addendum(
-            windsurf_system_prompt, agent_type, spec_dir
-        )
+        if system_prompt:
+            windsurf_system_prompt = system_prompt
+        else:
+            windsurf_system_prompt = build_base_system_prompt(
+                project_dir, tool_use_hint=True
+            )
+            windsurf_system_prompt = _inject_domain_addendum(
+                windsurf_system_prompt, agent_type, spec_dir
+            )
 
         logger.info(
             "[create_agent_client] Using WindsurfAgentClient "
@@ -1849,10 +1861,15 @@ def create_agent_client(
             openai_reasoning_effort,
         )
 
-        openai_system_prompt = build_base_system_prompt(project_dir, tool_use_hint=True)
-        openai_system_prompt = _inject_domain_addendum(
-            openai_system_prompt, agent_type, spec_dir
-        )
+        if system_prompt:
+            openai_system_prompt = system_prompt
+        else:
+            openai_system_prompt = build_base_system_prompt(
+                project_dir, tool_use_hint=True
+            )
+            openai_system_prompt = _inject_domain_addendum(
+                openai_system_prompt, agent_type, spec_dir
+            )
 
         # Provider-specific token optimizations layered on the common trunk:
         # - reasoning_effort: maps the Kanban thinking level to OpenAI's native

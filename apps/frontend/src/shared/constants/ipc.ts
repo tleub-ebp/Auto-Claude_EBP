@@ -26,6 +26,7 @@ export const IPC_CHANNELS = {
 	// Task operations
 	TASK_LIST: "task:list",
 	TASK_CREATE: "task:create",
+	TASK_DUPLICATE: "task:duplicate", // Clone a task's spec (spec.md, requirements, metadata, attachments) into a fresh backlog task; no plan/worktree/runtime artifacts
 	TASK_DELETE: "task:delete",
 	TASK_UPDATE: "task:update",
 	TASK_START: "task:start",

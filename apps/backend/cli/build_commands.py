@@ -89,6 +89,7 @@ def handle_build_command(
         debug_info,
         debug_section,
         debug_success,
+        debug_warning,
     )
     from phase_config import get_phase_model
     from prompts_pkg.prompts import (
@@ -255,6 +256,32 @@ def handle_build_command(
             )
         )
         debug_success("run.py", "Agent execution completed")
+
+        # Encoding-safety pass: editing UTF-8 files (notably .resx with a BOM)
+        # can mangle accented characters into the Unicode replacement char "�".
+        # Restore them from the pristine base version before QA so the corruption
+        # never reaches the diff/merge. Best-effort: never breaks the build.
+        if worktree_manager is not None:
+            try:
+                from core.encoding_repair import repair_worktree_changed_files
+
+                repair_base = base_branch or worktree_manager.base_branch
+                repair = repair_worktree_changed_files(working_dir, repair_base)
+                repaired = repair.get("repaired") or []
+                unrepaired = repair.get("unrepaired") or {}
+                if repaired:
+                    print(
+                        f"🩹 Encoding repair: restored accented characters in "
+                        f"{len(repaired)} file(s): {', '.join(repaired)}"
+                    )
+                if unrepaired:
+                    print(
+                        "⚠ Encoding repair: unrecoverable replacement chars (�) "
+                        f"remain in {len(unrepaired)} file(s) — manual review: "
+                        f"{', '.join(unrepaired.keys())}"
+                    )
+            except Exception as exc:  # noqa: BLE001 - non-fatal
+                debug_warning("run.py", f"Encoding repair skipped: {exc}")
 
         # Run QA validation BEFORE finalization (while worktree still exists)
         # QA must sign off before the build is considered complete

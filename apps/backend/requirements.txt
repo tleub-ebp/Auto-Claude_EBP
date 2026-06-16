@@ -2,7 +2,7 @@
 # SDK 0.1.25+ required for improved tool use concurrency handling
 # Earlier versions had 400 errors when tool_use blocks had partial failures
 # Utiliser le nom correct du package (tiret) pour l'installation via pip
-claude-agent-sdk>=0.1.39
+claude-agent-sdk>=0.2.94
 python-dotenv>=1.0.0
 
 # WebSocket support for streaming development mode
@@ -27,7 +27,7 @@ pandas>=3.0.2; python_version >= "3.12"
 # Windows-specific dependency for LadybugDB/Graphiti
 # pywin32 provides Windows system bindings required by real_ladybug
 # Required on all Python versions on Windows (ACS-306) - MCP library unconditionally imports win32api
-pywin32>=306; sys_platform == "win32"
+pywin32>=312; sys_platform == "win32"
 
 # Google AI (optional - for Gemini LLM and embeddings)
 google-generativeai>=0.8.0
@@ -51,7 +51,7 @@ bandit>=1.9.4
 # Install separately: pip install pip-audit
 
 fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
+uvicorn[standard]>=0.49.0
 slowapi>=0.1.9
 
 # Multi-user server mode (central deployment)
@@ -64,10 +64,10 @@ cryptography>=42.0.0     # Fernet encryption for per-user integration secrets
 email-validator>=2.0.0   # pydantic EmailStr support (auth schemas)
 requests>=2.33.1
 httpx[http2]>=0.27.0
-h2>=4.1.0  # HTTP/2 support for Windsurf gRPC proxy
+h2>=4.3.0  # HTTP/2 support for Windsurf gRPC proxy
 sqlalchemy>=2.0.0
 psutil>=5.9.0
-azure-devops>=7.1.0b3  # Azure DevOps SDK for src/connectors/azure_devops
+azure-devops>=7.1.0b4  # Azure DevOps SDK for src/connectors/azure_devops
 msrest>=0.7.1           # Required by azure-devops SDK
 
 # Anthropic SDK for Claude API integration

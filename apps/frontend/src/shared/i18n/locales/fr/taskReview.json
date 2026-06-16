@@ -191,6 +191,8 @@
 		"viewMode": "Vue",
 		"flatList": "Liste plate",
 		"treeView": "Vue arborescente",
+		"unifiedView": "Vue unifiée",
+		"splitView": "Côte à côte",
 		"backToList": "Retour à la liste",
 		"edit": "Modifier",
 		"editFile": "Modifier le fichier",

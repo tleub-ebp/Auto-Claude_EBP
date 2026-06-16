@@ -102,6 +102,7 @@ import { QueueSettingsModal } from "./QueueSettingsModal";
 import { SortableTaskCard } from "./SortableTaskCard";
 import { AppSettingsDialog } from "./settings/AppSettings";
 import { TaskCard } from "./TaskCard";
+import { TaskEditDialog } from "./TaskEditDialog";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -200,6 +201,7 @@ interface DroppableColumnProps {
 	onDeselectAll?: () => void;
 	onToggleSelect?: (taskId: string) => void;
 	onDeleteTask?: (taskId: string) => void;
+	onDuplicateTask?: (taskId: string) => void;
 	onViewPRFiles?: (prUrl: string, taskId: string) => void;
 	onPreviewApp?: (taskId: string) => void;
 	// Collapse props
@@ -377,6 +379,7 @@ const DroppableColumn = memo(function DroppableColumn({
 	onDeselectAll,
 	onToggleSelect,
 	onDeleteTask,
+	onDuplicateTask,
 	onViewPRFiles,
 	onPreviewApp,
 	isCollapsed,
@@ -465,6 +468,16 @@ const DroppableColumn = memo(function DroppableColumn({
 		return handlers;
 	}, [tasks, onDeleteTask]);
 
+	// Create stable onDuplicate handlers for each task
+	const onDuplicateHandlers = useMemo(() => {
+		if (!onDuplicateTask) return null;
+		const handlers = new Map<string, () => void>();
+		tasks.forEach((task) => {
+			handlers.set(task.id, () => onDuplicateTask(task.id));
+		});
+		return handlers;
+	}, [tasks, onDuplicateTask]);
+
 	// Create stable onViewPRFiles handlers for each task
 	const onViewPRFilesHandlers = useMemo(() => {
 		if (!onViewPRFiles) return null;
@@ -504,6 +517,7 @@ const DroppableColumn = memo(function DroppableColumn({
 				isSelected={isSelectable ? selectedTaskIds?.has(task.id) : undefined}
 				onToggleSelect={onToggleSelectHandlers?.get(task.id)}
 				onDelete={onDeleteHandlers.get(task.id)}
+				onDuplicate={onDuplicateHandlers?.get(task.id)}
 				onViewPRFiles={onViewPRFilesHandlers?.get(task.id)}
 				onPreviewApp={onPreviewAppHandlers?.get(task.id)}
 			/>
@@ -514,6 +528,7 @@ const DroppableColumn = memo(function DroppableColumn({
 		onStatusChangeHandlers,
 		onToggleSelectHandlers,
 		onDeleteHandlers,
+		onDuplicateHandlers,
 		onViewPRFilesHandlers,
 		onPreviewAppHandlers,
 		selectedTaskIds,
@@ -1177,6 +1192,9 @@ export function KanbanBoard({
 		taskTitle: "",
 	});
 
+	// Source task for the "duplicate" dialog (edit fields before creating the copy)
+	const [duplicateSource, setDuplicateSource] = useState<Task | null>(null);
+
 	// Store recently deleted tasks for undo functionality
 	const [_recentlyDeletedTasks, setRecentlyDeletedTasks] = useState<
 		Map<string, Task>
@@ -1534,6 +1552,21 @@ export function KanbanBoard({
 			taskTitle,
 		});
 	}, []);
+
+	// Open the duplicate dialog pre-filled with the source task so the user can
+	// edit the fields before the copy is actually created.
+	const handleDuplicateTask = useCallback((taskId: string) => {
+		const task = useTaskStore.getState().tasks.find((t) => t.id === taskId);
+		if (task) setDuplicateSource(task);
+	}, []);
+
+	const handleDuplicateCreated = useCallback(() => {
+		toast({
+			title: t("kanban.duplicateSuccess"),
+			variant: "default",
+		});
+		setDuplicateSource(null);
+	}, [toast, t]);
 
 	// Handle undo delete
 	const handleUndoDelete = useCallback(
@@ -3024,6 +3057,7 @@ export function KanbanBoard({
 								onDeselectAll={deselectAllTasks}
 								onToggleSelect={toggleTaskSelection}
 								onDeleteTask={handleDeleteTask}
+								onDuplicateTask={handleDuplicateTask}
 								onViewPRFiles={handleViewPRFiles}
 								onPreviewApp={handlePreviewApp}
 								isCollapsed={columnPreferences?.[status]?.isCollapsed}
@@ -3402,6 +3436,19 @@ export function KanbanBoard({
 					</AlertDialogContent>
 				</AlertDialogPortal>
 			</AlertDialog>
+
+			{/* Duplicate task dialog — edit fields before creating the copy */}
+			{duplicateSource && (
+				<TaskEditDialog
+					mode="duplicate"
+					task={duplicateSource}
+					open={!!duplicateSource}
+					onOpenChange={(open) => {
+						if (!open) setDuplicateSource(null);
+					}}
+					onCreated={handleDuplicateCreated}
+				/>
+			)}
 
 			{/* Single task delete confirmation dialog */}
 			<AlertDialog
