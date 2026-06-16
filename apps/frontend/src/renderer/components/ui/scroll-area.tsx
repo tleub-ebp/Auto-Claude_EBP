@@ -42,13 +42,12 @@ const ScrollArea = React.forwardRef<
 					ref={viewportCallbackRef}
 					data-radix-scroll-area-viewport=""
 					className={cn(
+						// Scrollbar styling comes from the global themed rules in
+						// globals.css. Do NOT set `scrollbar-width`/`scrollbar-color`
+						// here: on Chromium >= 121 either one disables all
+						// ::-webkit-scrollbar-* styling and renders the native
+						// (light-scheme) scrollbar instead.
 						"h-full w-full rounded-[inherit] overflow-auto",
-						// Thin, themed scrollbar — Chrome/Safari
-						"[&::-webkit-scrollbar]:w-2.5 [&::-webkit-scrollbar]:h-2.5",
-						"[&::-webkit-scrollbar-track]:transparent",
-						"[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border",
-						// Firefox
-						"[scrollbar-width:thin]",
 						viewportClassName,
 					)}
 				>

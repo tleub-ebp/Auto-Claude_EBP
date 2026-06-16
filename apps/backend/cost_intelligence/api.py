@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from .estimator import estimate_build_cost
+from .formula_matrix import compute_formula_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -48,4 +49,41 @@ def preview(req: PreviewRequest):
         return {"success": True, "estimate": estimate.to_dict()}
     except Exception as e:  # noqa: BLE001
         logger.exception("estimate_build_cost failed")
+        return {"success": False, "error": str(e)}
+
+
+class FormulaMatrixRequest(BaseModel):
+    ticket_id: str = Field(..., description="Identifier of the kanban ticket.")
+    description: str = Field("", description="Task title/description.")
+    project_root: str | None = Field(
+        None, description="Project root, used to load cost/success history."
+    )
+    spec_dir: str | None = Field(
+        None, description="Optional spec directory to refine the footprint."
+    )
+    providers: list[str] | None = Field(
+        None, description="Restrict to these providers (lower-case)."
+    )
+    complexity_score: float | None = Field(
+        None, description="Override the derived 1-13 complexity."
+    )
+
+
+@router.post("/formula-matrix")
+def formula_matrix(req: FormulaMatrixRequest):
+    """Compute every Provider × LLM × Effort formula for a ticket. Always 200."""
+    try:
+        matrix = compute_formula_matrix(
+            ticket_id=req.ticket_id,
+            description=req.description,
+            spec_dir=Path(req.spec_dir).expanduser() if req.spec_dir else None,
+            project_root=(
+                Path(req.project_root).expanduser() if req.project_root else None
+            ),
+            providers=req.providers,
+            complexity_score=req.complexity_score,
+        )
+        return {"success": True, "matrix": matrix.to_dict()}
+    except Exception as e:  # noqa: BLE001
+        logger.exception("compute_formula_matrix failed")
         return {"success": False, "error": str(e)}

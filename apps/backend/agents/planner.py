@@ -167,7 +167,7 @@ async def run_followup_planner(
         task_logger.set_session(1)
 
     # Migration vers runtime provider-agnostique
-    phase_provider = get_phase_provider(spec_dir)
+    phase_provider = get_phase_provider(spec_dir, phase="planning")
     phase_model = get_phase_model(spec_dir, "planning", model)
     phase_thinking_budget = get_phase_thinking_budget(spec_dir, "planning")
     config = None

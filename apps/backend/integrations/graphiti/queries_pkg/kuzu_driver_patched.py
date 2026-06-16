@@ -54,8 +54,17 @@ def create_patched_kuzu_driver(db: str = ":memory:", max_concurrent_queries: int
             all referenced parameters to exist. This override keeps None values
             in the parameters dict.
             """
-            # Don't filter out None values - LadybugDB needs them
-            params = {k: v for k, v in kwargs.items()}
+            # Don't filter out None values - LadybugDB needs them.
+            # LadybugDB's native binder auto-parses string parameters that look
+            # like JSON ('{...}' / '[...]'): it re-serializes them (corrupting
+            # the stored text) and crashes outright on empty arrays ("Trying to
+            # a create a vector with ANY type"). A leading space disables that
+            # detection and is ignored by json.loads when the value is read
+            # back, so JSON payloads (episode bodies) survive round-trips.
+            params = {
+                k: (" " + v if isinstance(v, str) and v[:1] in "{[" else v)
+                for k, v in kwargs.items()
+            }
             # Still remove these unsupported parameters
             params.pop("database_", None)
             params.pop("routing_", None)
@@ -140,6 +149,26 @@ def create_patched_kuzu_driver(db: str = ":memory:", max_concurrent_queries: int
                 logger.info("FTS indexes created successfully")
             finally:
                 conn.close()
+
+        async def close(self):
+            """
+            Release the database file lock.
+
+            The original KuzuDriver leaves close() as a no-op and relies on GC,
+            but LadybugDB holds an exclusive file lock until the Database object
+            is actually closed. Without this, any later connection from the same
+            or another process fails with "Could not set lock on file".
+            """
+            try:
+                if getattr(self, "client", None) is not None:
+                    self.client.close()
+            except Exception as e:
+                logger.debug(f"Error closing Kuzu async connection: {e}")
+            try:
+                if getattr(self, "db", None) is not None:
+                    self.db.close()
+            except Exception as e:
+                logger.debug(f"Error closing Kuzu database: {e}")
 
         def setup_schema(self):
             """

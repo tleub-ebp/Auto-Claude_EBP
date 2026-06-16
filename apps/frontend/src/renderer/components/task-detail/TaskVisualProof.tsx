@@ -331,6 +331,44 @@ export function TaskVisualProof({ task }: TaskVisualProofProps) {
 					</div>
 				)}
 
+				{/* API smoke proof - shown when the emulated app exposed an OpenAPI document */}
+				{proof.apiSmoke && proof.apiSmoke.attempted > 0 && (
+					<div className="space-y-2">
+						<h4 className="text-sm font-medium">
+							{t("tasks:visualProof.apiSmoke.title")}{" "}
+							<span
+								className={
+									proof.apiSmoke.failed === 0
+										? "text-[var(--success)]"
+										: "text-[var(--error)]"
+								}
+							>
+								{t("tasks:visualProof.apiSmoke.summary", {
+									passed: proof.apiSmoke.passed,
+									total: proof.apiSmoke.attempted,
+								})}
+							</span>
+						</h4>
+						<div className="rounded-md border border-border overflow-hidden">
+							{proof.apiSmoke.results.map((result) => (
+								<div
+									key={`${result.method} ${result.path}`}
+									className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs border-b border-border/50 last:border-b-0"
+								>
+									<span className="font-mono truncate">
+										{result.method} {result.path}
+									</span>
+									<span className="flex items-center gap-2 shrink-0 tabular-nums text-muted-foreground">
+										<span>{result.status ?? "—"}</span>
+										<span>{result.durationMs} ms</span>
+										<span>{result.ok ? "✅" : "❌"}</span>
+									</span>
+								</div>
+							))}
+						</div>
+					</div>
+				)}
+
 				{latestScreenshot ? (
 					<div className="space-y-3">
 						<div className="flex items-center justify-between">

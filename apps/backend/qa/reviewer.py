@@ -264,6 +264,17 @@ async def run_qa_agent_session(
         print("✓ Memory context loaded for QA reviewer")
         debug_success("qa_reviewer", "Graphiti memory context loaded for QA")
 
+    # Learning Loop: inject patterns learned from previous builds (qa_review phase)
+    try:
+        from learning_loop.prompt_injection import get_learning_context
+
+        learning_context = get_learning_context(project_dir, "qa_review")
+        if learning_context:
+            prompt += "\n\n" + learning_context
+            debug_success("qa_reviewer", "Learning loop patterns injected for QA")
+    except Exception:
+        pass
+
     # Add session context
     prompt += f"\n\n---\n\n**QA Session**: {qa_session}\n"
     prompt += f"**Max Iterations**: {max_iterations}\n"
@@ -311,6 +322,7 @@ After completing your QA review, you MUST:
        "qa_session": {qa_session},
        "report_file": "qa_report.md",
        "tests_passed": {{"unit": "X/Y", "integration": "X/Y", "e2e": "X/Y"}},
+       "coverage": {{"measured": true, "unit": 100, "integration": 100, "e2e": null}},
        "verified_by": "qa_agent"
      }}
    }}

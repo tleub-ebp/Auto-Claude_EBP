@@ -1,0 +1,52 @@
+# WorkPilot AI — multi-user server deployment
+#
+#   cd deploy
+#   cp server-env.example .env.server    # then fill the secrets
+#   docker compose up -d
+#   docker compose exec api python -m server.scripts.create_admin admin@ebp.fr
+#
+# Put a TLS reverse proxy (nginx/caddy/traefik) in front of ports 9000 (API)
+# and 8765 (WebSocket) before exposing this outside the LAN.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: workpilot
+      POSTGRES_USER: workpilot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.server}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workpilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.server
+    environment:
+      WORKPILOT_SERVER_MODE: "true"
+      WORKPILOT_DATABASE_URL: postgresql+asyncpg://workpilot:${POSTGRES_PASSWORD}@postgres:5432/workpilot
+      WORKPILOT_REPOS_ROOT: /data/repos
+      WORKPILOT_WS_URL: ws://127.0.0.1:8765
+    volumes:
+      - repos:/data/repos
+      # SSH deploy key / git credentials for cloning private repos:
+      # - ./git-ssh:/root/.ssh:ro
+    ports:
+      - "9000:9000"   # REST API
+      - "8765:8765"   # Streaming WebSocket
+
+volumes:
+  pgdata:
+  repos:

@@ -48,6 +48,7 @@ interface MemoryConfig {
 	ollamaBaseUrl: string;
 	ollamaEmbeddingModel: string;
 	ollamaEmbeddingDim: number;
+	ollamaLlmModel: string;
 }
 
 /**
@@ -81,6 +82,7 @@ export function MemoryStep({ onNext, onBack }: MemoryStepProps) {
 		ollamaEmbeddingModel:
 			settings.memoryOllamaEmbeddingModel || "qwen3-embedding:4b",
 		ollamaEmbeddingDim: settings.memoryOllamaEmbeddingDim ?? 2560,
+		ollamaLlmModel: settings.memoryOllamaLlmModel || "",
 	});
 
 	const [isSaving, setIsSaving] = useState(false);
@@ -152,6 +154,7 @@ export function MemoryStep({ onNext, onBack }: MemoryStepProps) {
 				ollamaBaseUrl: config.ollamaBaseUrl || undefined,
 				memoryOllamaEmbeddingModel: config.ollamaEmbeddingModel || undefined,
 				memoryOllamaEmbeddingDim: config.ollamaEmbeddingDim || undefined,
+				memoryOllamaLlmModel: config.ollamaLlmModel.trim() || undefined,
 				// Agent memory access (MCP)
 				graphitiMcpEnabled: config.agentMemoryEnabled,
 				graphitiMcpUrl: config.mcpServerUrl.trim() || undefined,
@@ -178,6 +181,7 @@ export function MemoryStep({ onNext, onBack }: MemoryStepProps) {
 					ollamaBaseUrl: config.ollamaBaseUrl || undefined,
 					memoryOllamaEmbeddingModel: config.ollamaEmbeddingModel || undefined,
 					memoryOllamaEmbeddingDim: config.ollamaEmbeddingDim || undefined,
+					memoryOllamaLlmModel: config.ollamaLlmModel.trim() || undefined,
 					graphitiMcpEnabled: config.agentMemoryEnabled,
 					graphitiMcpUrl: config.mcpServerUrl.trim() || undefined,
 					globalOpenAIApiKey: config.openaiApiKey.trim() || undefined,
@@ -577,6 +581,32 @@ export function MemoryStep({ onNext, onBack }: MemoryStepProps) {
 												}}
 												disabled={isSaving}
 											/>
+										</div>
+
+										<div className="space-y-2">
+											<Label className="text-xs text-muted-foreground">
+												{t(
+													"memory.llmModel",
+													"LLM Model (knowledge extraction)",
+												)}
+											</Label>
+											<Input
+												placeholder="qwen3:4b"
+												value={config.ollamaLlmModel}
+												onChange={(e) =>
+													setConfig((prev) => ({
+														...prev,
+														ollamaLlmModel: e.target.value,
+													}))
+												}
+												disabled={isSaving}
+											/>
+											<p className="text-xs text-muted-foreground">
+												{t(
+													"memory.llmModelHint",
+													"Local LLM used to extract entities when storing memories (a small model like qwen3:4b is enough).",
+												)}
+											</p>
 										</div>
 									</div>
 								)}

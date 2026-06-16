@@ -1,21 +1,6 @@
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { app } from "electron";
-
-// ESM-compatible __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 import { EventEmitter } from "node:events";
-import { parsePythonCommand } from "./python-detector";
+import { runOneShotLLM } from "./oneshot-llm";
 import { pythonEnvManager } from "./python-env-manager";
-import {
-	createSDKRateLimitInfo,
-	detectRateLimit,
-	getBestAvailableProfileEnv,
-} from "./rate-limit-detector";
 
 /**
  * Debug logging - only logs when DEBUG=true or in development mode
@@ -29,20 +14,26 @@ function debug(...args: unknown[]): void {
 	}
 }
 
+const SYSTEM_PROMPT =
+	"You generate very short, concise terminal names (2-3 words MAX). Output ONLY " +
+	"the name, nothing else. No quotes, no explanation, no preamble. Keep it as " +
+	"short as possible while being descriptive.";
+
 /**
- * Service for generating terminal names from commands using Claude AI
+ * Service for generating terminal names from commands.
+ *
+ * Provider-agnostic: the actual completion runs through {@link runOneShotLLM},
+ * which honours whatever LLM provider the user selected (Claude / Copilot /
+ * OpenAI / Windsurf / …) instead of hardcoding the Claude SDK.
  */
 export class TerminalNameGenerator extends EventEmitter {
-	private autoBuildSourcePath: string = "";
+	private autoBuildSourcePath = "";
 
 	constructor() {
 		super();
 		debug("TerminalNameGenerator initialized");
 	}
 
-	/**
-	 * Configure the auto-claude source path
-	 */
 	configure(autoBuildSourcePath?: string): void {
 		if (autoBuildSourcePath) {
 			this.autoBuildSourcePath = autoBuildSourcePath;
@@ -50,228 +41,44 @@ export class TerminalNameGenerator extends EventEmitter {
 	}
 
 	/**
-	 * Get the auto-claude source path (detects automatically if not configured)
-	 */
-	private getAutoBuildSourcePath(): string | null {
-		if (this.autoBuildSourcePath && existsSync(this.autoBuildSourcePath)) {
-			return this.autoBuildSourcePath;
-		}
-
-		// In packaged app, check userData override first (consistent with path-resolver.ts)
-		if (app.isPackaged) {
-			// Check for user-updated backend source first (takes priority over bundled)
-			const overridePath = path.join(app.getPath("userData"), "backend-source");
-			if (
-				existsSync(overridePath) &&
-				existsSync(path.join(overridePath, "runners", "spec_runner.py"))
-			) {
-				debug("Using user-updated backend from userData:", overridePath);
-				return overridePath;
-			}
-			// Fall back to bundled backend in resources
-			const resourcesPath = path.join(process.resourcesPath, "backend");
-			if (
-				existsSync(resourcesPath) &&
-				existsSync(path.join(resourcesPath, "runners", "spec_runner.py"))
-			) {
-				debug("Using bundled backend from resources:", resourcesPath);
-				return resourcesPath;
-			}
-		}
-
-		// Development mode paths
-		const possiblePaths = [
-			// Apps structure: from out/main -> apps/backend
-			path.resolve(__dirname, "..", "..", "..", "backend"),
-			path.resolve(app.getAppPath(), "..", "backend"),
-			path.resolve(process.cwd(), "apps", "backend"),
-		];
-
-		for (const p of possiblePaths) {
-			if (
-				existsSync(p) &&
-				existsSync(path.join(p, "runners", "spec_runner.py"))
-			) {
-				return p;
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Load environment variables from auto-claude .env file
-	 */
-	private loadAutoBuildEnv(): Record<string, string> {
-		const autoBuildSource = this.getAutoBuildSourcePath();
-		if (!autoBuildSource) return {};
-
-		const envPath = path.join(autoBuildSource, ".env");
-		if (!existsSync(envPath)) return {};
-
-		try {
-			const envContent = readFileSync(envPath, "utf-8");
-			const envVars: Record<string, string> = {};
-
-			// Handle both Unix (\n) and Windows (\r\n) line endings
-			for (const line of envContent.split(/\r?\n/)) {
-				const trimmed = line.trim();
-				if (!trimmed || trimmed.startsWith("#")) continue;
-
-				const eqIndex = trimmed.indexOf("=");
-				if (eqIndex > 0) {
-					const key = trimmed.substring(0, eqIndex).trim();
-					let value = trimmed.substring(eqIndex + 1).trim();
-
-					if (
-						(value.startsWith('"') && value.endsWith('"')) ||
-						(value.startsWith("'") && value.endsWith("'"))
-					) {
-						value = value.slice(1, -1);
-					}
-
-					envVars[key] = value;
-				}
-			}
-
-			return envVars;
-		} catch {
-			return {};
-		}
-	}
-
-	/**
-	 * Generate a terminal name from a command using Claude AI
+	 * Generate a terminal name from a command.
 	 * @param command - The command or recent output to generate a name from
 	 * @param cwd - Current working directory for context
 	 * @returns Promise resolving to the generated name (2-3 words) or null on failure
 	 */
 	async generateName(command: string, cwd?: string): Promise<string | null> {
-		const autoBuildSource = this.getAutoBuildSourcePath();
-
-		if (!autoBuildSource) {
-			debug("Auto-claude source path not found");
-			return null;
-		}
-
-		// Check if Python environment is ready (has claude_agent_sdk installed)
+		// Ensure the bundled Python env (with the SDK) is ready, then use its
+		// interpreter so the provider clients' dependencies resolve.
 		if (!pythonEnvManager.isEnvReady()) {
 			debug("Python environment not ready, initializing...");
-			const status = await pythonEnvManager.initialize(autoBuildSource);
+			const status = await pythonEnvManager.initialize(this.autoBuildSourcePath);
 			if (!status.ready) {
 				debug("Python environment initialization failed:", status.error);
 				return null;
 			}
 		}
-
-		// Get the venv Python path (where claude_agent_sdk is installed)
-		const venvPythonPath = pythonEnvManager.getPythonPath();
-		if (!venvPythonPath) {
-			debug("Venv Python path not available");
-			return null;
-		}
-
-		const prompt = this.createNamePrompt(command, cwd);
-		const script = this.createGenerationScript(prompt);
+		const venvPythonPath = pythonEnvManager.getPythonPath() ?? undefined;
 
 		debug(
 			"Generating terminal name for command:",
 			`${command.substring(0, 100)}...`,
 		);
 
-		const autoBuildEnv = this.loadAutoBuildEnv();
-		debug("Environment loaded", {
-			hasOAuthToken: !!autoBuildEnv.CLAUDE_CODE_OAUTH_TOKEN,
+		const text = await runOneShotLLM({
+			prompt: this.createNamePrompt(command, cwd),
+			systemPrompt: SYSTEM_PROMPT,
+			pythonPath: venvPythonPath,
+			autoBuildSourcePath: this.autoBuildSourcePath || undefined,
+			timeoutMs: 30000,
+			rateLimitSource: "other",
+			onRateLimit: (info) => this.emit("sdk-rate-limit", info),
+			debugLabel: "TerminalNameGenerator",
 		});
+		if (!text) return null;
 
-		// Use centralized function that automatically handles rate limits and capacity
-		const profileResult = getBestAvailableProfileEnv();
-		const profileEnv = profileResult.env;
-
-		if (profileResult.wasSwapped) {
-			debug("Using alternative profile for terminal name generation:", {
-				originalProfile: profileResult.originalProfile?.name,
-				selectedProfile: profileResult.profileName,
-				reason: profileResult.swapReason,
-			});
-		}
-
-		return new Promise((resolve) => {
-			// Use the venv Python where claude_agent_sdk is installed
-			const [pythonCommand, pythonBaseArgs] =
-				parsePythonCommand(venvPythonPath);
-			const childProcess = spawn(
-				pythonCommand,
-				[...pythonBaseArgs, "-c", script],
-				{
-					cwd: autoBuildSource,
-					env: {
-						...process.env,
-						...autoBuildEnv,
-						...profileEnv, // Include active Claude profile config
-						PYTHONUNBUFFERED: "1",
-						PYTHONIOENCODING: "utf-8",
-						PYTHONUTF8: "1",
-					},
-				},
-			);
-
-			let output = "";
-			let errorOutput = "";
-			const timeout = setTimeout(() => {
-				debug("Terminal name generation timed out after 30s");
-				childProcess.kill();
-				resolve(null);
-			}, 30000); // 30 second timeout
-
-			childProcess.stdout?.on("data", (data: Buffer) => {
-				output += data.toString("utf-8");
-			});
-
-			childProcess.stderr?.on("data", (data: Buffer) => {
-				errorOutput += data.toString("utf-8");
-			});
-
-			childProcess.on("exit", (code: number | null) => {
-				clearTimeout(timeout);
-
-				if (code === 0 && output.trim()) {
-					const name = this.cleanName(output.trim());
-					debug("Generated terminal name:", name);
-					resolve(name);
-				} else {
-					// Check for rate limit
-					const combinedOutput = `${output}\n${errorOutput}`;
-					const rateLimitDetection = detectRateLimit(combinedOutput);
-					if (rateLimitDetection.isRateLimited) {
-						debug("Rate limit detected:", {
-							resetTime: rateLimitDetection.resetTime,
-							limitType: rateLimitDetection.limitType,
-							suggestedProfile: rateLimitDetection.suggestedProfile?.name,
-						});
-
-						const rateLimitInfo = createSDKRateLimitInfo(
-							"other",
-							rateLimitDetection,
-						);
-						this.emit("sdk-rate-limit", rateLimitInfo);
-					}
-
-					if (!rateLimitDetection.isRateLimited) {
-						debug("Terminal name generation failed", {
-							code,
-							errorOutput: errorOutput.substring(0, 500),
-						});
-					}
-					resolve(null);
-				}
-			});
-
-			childProcess.on("error", (err) => {
-				clearTimeout(timeout);
-				debug("Process error:", err.message);
-				resolve(null);
-			});
-		});
+		const name = this.cleanName(text);
+		debug("Generated terminal name:", name);
+		return name;
 	}
 
 	/**
@@ -298,76 +105,14 @@ Output ONLY the name (2-3 words), nothing else. Examples: "npm build", "git logs
 	}
 
 	/**
-	 * Create the Python script to generate terminal name using Claude Agent SDK
-	 */
-	private createGenerationScript(prompt: string): string {
-		// Escape the prompt for Python string - use JSON.stringify for safe escaping
-		const escapedPrompt = JSON.stringify(prompt);
-
-		return `
-import asyncio
-import sys
-
-async def generate_name():
-    try:
-        from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
-
-        prompt = ${escapedPrompt}
-
-        # Create a minimal client for simple text generation (no tools needed)
-        client = ClaudeSDKClient(
-            options=ClaudeAgentOptions(
-                model="claude-haiku-4-5",
-                system_prompt="You generate very short, concise terminal names (2-3 words MAX). Output ONLY the name, nothing else. No quotes, no explanation, no preamble. Keep it as short as possible while being descriptive.",
-                max_turns=1,
-            )
-        )
-
-        async with client:
-            # Send the query
-            await client.query(prompt)
-
-            # Collect response text from AssistantMessage
-            response_text = ""
-            async for msg in client.receive_response():
-                msg_type = type(msg).__name__
-                if msg_type == "AssistantMessage" and hasattr(msg, "content"):
-                    for block in msg.content:
-                        block_type = type(block).__name__
-                        if block_type == "TextBlock" and hasattr(block, "text"):
-                            response_text += block.text
-
-            if response_text:
-                # Clean up the result
-                name = response_text.strip()
-                # Remove any quotes
-                name = name.strip('"').strip("'")
-                # Take first line only
-                name = name.split('\\n')[0].strip()
-                if name:
-                    print(name)
-                    sys.exit(0)
-
-        # If we get here, no valid response
-        sys.exit(1)
-
-    except ImportError as e:
-        print(f"Import error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-asyncio.run(generate_name())
-`;
-	}
-
-	/**
 	 * Clean up the generated name
 	 */
 	private cleanName(name: string): string {
+		// Name may arrive multi-line; keep the first non-empty line.
+		let cleaned = name.split("\n")[0]?.trim() ?? "";
+
 		// Remove quotes if present
-		let cleaned = name.replaceAll(/^["']|["']$/g, "");
+		cleaned = cleaned.replaceAll(/^["']|["']$/g, "");
 
 		// Remove any "Terminal:" or similar prefixes
 		cleaned = cleaned.replace(/^(terminal|name)[:\s]*/i, "");

@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	AVAILABLE_MODELS,
+	dedupeModelCatalog,
 	getModelsForProvider,
 } from "../../shared/constants";
 
@@ -157,8 +158,12 @@ export function useProviderModelCatalog(
 
 	// Live first → static second so a freshly listed model (e.g. Opus 4.7
 	// returned by /v1/models) shows above its statically-curated peer.
+	// `dedupeModelCatalog` then collapses every alternate spelling of the same
+	// version (short alias / dotted-vs-dashed / dated snapshot) into a single
+	// entry, keeping the explicit versioned id so the dropdown never shows the
+	// same model twice for one provider.
 	const models = useMemo(
-		() => mergeCatalogs(liveModels, staticEntries),
+		() => dedupeModelCatalog(mergeCatalogs(liveModels, staticEntries)),
 		[liveModels, staticEntries],
 	);
 

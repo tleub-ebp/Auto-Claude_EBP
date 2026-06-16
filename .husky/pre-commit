@@ -1,14 +1,48 @@
 #!/bin/sh
 . "$(dirname "$0")/_/husky.sh"
 
-# Format Python (Ruff)
-echo "🔧 Running ruff format on backend..."
-python -m ruff format apps/backend/
+# Pre-commit gate — mirrors .github/workflows/lint.yml so lint failures
+# surface HERE instead of in CI.
+#
+# Critical detail: formatters WRITE fixes, so files that were already staged
+# must be RE-STAGED afterwards. Without this, the commit ships the
+# unformatted version while the working tree looks clean — and CI's
+# `ruff format --check` fails on code you can't see locally anymore.
 
-# Lint and fix Python (Ruff)
-echo "🔍 Running ruff check and fix on backend..."
-python -m ruff check --fix --exit-non-zero-on-fix apps/backend/
+# Remember what was staged before the formatters run.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
 
-# Lint et typecheck frontend
-echo "🔍 Running frontend lint and typecheck..."
-cd apps/frontend && pnpm lint && pnpm typecheck
+# Resolve ruff: prefer the active python env, fall back to PATH.
+if python -m ruff --version >/dev/null 2>&1; then
+  RUFF="python -m ruff"
+elif command -v ruff >/dev/null 2>&1; then
+  RUFF="ruff"
+else
+  echo "ERROR: ruff not found (pip install ruff). Aborting commit." >&2
+  exit 1
+fi
+
+echo "[pre-commit] ruff format (backend)..."
+$RUFF format apps/backend/ || exit 1
+
+echo "[pre-commit] ruff check --fix (backend)..."
+$RUFF check --fix apps/backend/ || exit 1
+
+echo "[pre-commit] biome check --write + typecheck (frontend)..."
+(cd apps/frontend && pnpm lint:fix && pnpm typecheck) || exit 1
+
+# Re-stage ONLY the files that were staged before — formatter fixes on them
+# belong in this commit; unrelated working-tree changes stay unstaged.
+if [ -n "$staged" ]; then
+  echo "$staged" | while IFS= read -r f; do
+    [ -f "$f" ] && git add -- "$f"
+  done
+fi
+
+# Targeted tests on the staged files (pytest mapped by module name + vitest
+# related). Fast by design — the FULL suite runs at pre-push and in CI.
+# Bypass: PRE_COMMIT_SKIP_TESTS=1 git commit ...
+echo "[pre-commit] tests related to staged files..."
+node scripts/staged-tests.js || exit 1
+
+exit 0

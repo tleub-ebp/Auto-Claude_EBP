@@ -35,13 +35,18 @@ interface SlashCommand {
 interface QuickCommandBarProps {
 	readonly projectPath?: string;
 	readonly className?: string;
+	readonly variant?: "default" | "compact";
 }
 
 const BACKEND_URL: string =
 	(import.meta as { env?: { VITE_BACKEND_URL?: string } }).env
 		?.VITE_BACKEND_URL || "";
 
-export function QuickCommandBar({ projectPath, className }: QuickCommandBarProps) {
+export function QuickCommandBar({
+	projectPath,
+	className,
+	variant = "default",
+}: QuickCommandBarProps) {
 	const { t } = useTranslation(["tasks", "common"]);
 	const [input, setInput] = useState("");
 	const [commands, setCommands] = useState<SlashCommand[]>([]);
@@ -158,9 +163,20 @@ export function QuickCommandBar({ projectPath, className }: QuickCommandBarProps
 
 	const disabled = !projectPath || isRunning;
 
+	const isCompact = variant === "compact";
+
 	return (
-		<div className={cn("relative flex items-center gap-1", className)}>
-			<Terminal className="h-4 w-4 text-muted-foreground" aria-hidden />
+		<div
+			className={cn(
+				"relative flex items-center gap-1",
+				isCompact ? "gap-1" : "gap-2",
+				className,
+			)}
+		>
+			<Terminal
+				className={cn("text-muted-foreground", isCompact ? "h-3.5 w-3.5" : "h-4 w-4")}
+				aria-hidden
+			/>
 			<Input
 				ref={inputRef}
 				value={input}
@@ -176,7 +192,13 @@ export function QuickCommandBar({ projectPath, className }: QuickCommandBarProps
 				onKeyDown={handleKey}
 				placeholder={t("tasks:kanban.quickCommand.placeholder")}
 				disabled={disabled}
-				className="h-8 w-72 font-mono text-xs"
+				className={cn(
+					"font-mono text-xs",
+					isCompact
+						? "h-8 w-56 placeholder:text-xs"
+						: "h-8 w-72 placeholder:text-xs",
+					isCompact && "bg-muted/40 hover:bg-muted/60 transition-colors",
+				)}
 				aria-label={t("tasks:kanban.quickCommand.placeholder")}
 				title={
 					projectPath

@@ -130,6 +130,41 @@ class GraphitiSearch:
             )
             return []
 
+    async def _fetch_recent_episodes(self, limit: int) -> list[dict]:
+        """
+        Fetch recent episode payloads for this group directly from the graph.
+
+        graphiti.search() only returns entity edges (facts extracted by the
+        LLM), never the raw episode content, so typed episodes (session
+        insights, patterns, gotchas) must be read from Episodic nodes.
+
+        Returns:
+            List of parsed episode content dicts, newest first.
+        """
+        records, _, _ = await self.client.graphiti.driver.execute_query(
+            f"""
+            MATCH (e:Episodic)
+            WHERE e.group_id = $group_id
+            RETURN e.content AS content
+            ORDER BY e.valid_at DESC
+            LIMIT {int(limit)}
+            """,
+            group_id=self.group_id,
+        )
+
+        episodes = []
+        for record in records:
+            content = record.get("content")
+            if not isinstance(content, str):
+                continue
+            try:
+                data = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(data, dict):
+                episodes.append(data)
+        return episodes
+
     async def get_session_history(
         self,
         limit: int = 5,
@@ -146,35 +181,15 @@ class GraphitiSearch:
             List of session insight summaries
         """
         try:
-            results = await self.client.graphiti.search(
-                query="session insight completed subtasks recommendations",
-                group_ids=[self.group_id],
-                num_results=limit * 2,  # Get more to filter
-            )
+            episodes = await self._fetch_recent_episodes(limit=max(limit * 4, 20))
 
             sessions = []
-            for result in results:
-                content = getattr(result, "content", None) or getattr(
-                    result, "fact", None
-                )
-                if content and EPISODE_TYPE_SESSION_INSIGHT in str(content):
-                    try:
-                        data = (
-                            json.loads(content) if isinstance(content, str) else content
-                        )
-                        # Ensure data is a dict before processing (fixes ACS-215)
-                        if not isinstance(data, dict):
-                            continue
-                        if data.get("type") == EPISODE_TYPE_SESSION_INSIGHT:
-                            # Filter by spec if requested
-                            if (
-                                spec_only
-                                and data.get("spec_id") != self.spec_context_id
-                            ):
-                                continue
-                            sessions.append(data)
-                    except (json.JSONDecodeError, TypeError, AttributeError):
-                        continue
+            for data in episodes:
+                if data.get("type") != EPISODE_TYPE_SESSION_INSIGHT:
+                    continue
+                if spec_only and data.get("spec_id") != self.spec_context_id:
+                    continue
+                sessions.append(data)
 
             # Sort by session number and return latest
             sessions.sort(key=lambda x: x.get("session_number", 0), reverse=True)
@@ -205,36 +220,22 @@ class GraphitiSearch:
             List of similar task outcomes with success/failure info
         """
         try:
-            results = await self.client.graphiti.search(
-                query=f"task outcome: {task_description}",
-                group_ids=[self.group_id],
-                num_results=limit * 2,
-            )
+            # Task outcomes are typed Episodic nodes; graphiti.search() returns
+            # only entity edges (facts), so read them directly, newest first.
+            episodes = await self._fetch_recent_episodes(limit=max(limit * 10, 50))
 
             outcomes = []
-            for result in results:
-                content = getattr(result, "content", None) or getattr(
-                    result, "fact", None
+            for data in episodes:
+                if data.get("type") != EPISODE_TYPE_TASK_OUTCOME:
+                    continue
+                outcomes.append(
+                    {
+                        "task_id": data.get("task_id"),
+                        "success": data.get("success"),
+                        "outcome": data.get("outcome"),
+                        "score": 1.0,
+                    }
                 )
-                if content and EPISODE_TYPE_TASK_OUTCOME in str(content):
-                    try:
-                        data = (
-                            json.loads(content) if isinstance(content, str) else content
-                        )
-                        # Ensure data is a dict before processing (fixes ACS-215)
-                        if not isinstance(data, dict):
-                            continue
-                        if data.get("type") == EPISODE_TYPE_TASK_OUTCOME:
-                            outcomes.append(
-                                {
-                                    "task_id": data.get("task_id"),
-                                    "success": data.get("success"),
-                                    "outcome": data.get("outcome"),
-                                    "score": getattr(result, "score", 0.0),
-                                }
-                            )
-                    except (json.JSONDecodeError, TypeError, AttributeError):
-                        continue
 
             return outcomes[:limit]
 
@@ -273,81 +274,33 @@ class GraphitiSearch:
         gotchas = []
 
         try:
-            # Search with query focused on patterns
-            pattern_results = await self.client.graphiti.search(
-                query=f"pattern: {query}",
-                group_ids=[self.group_id],
-                num_results=num_results * 2,
+            # Patterns and gotchas are stored as typed Episodic nodes, which
+            # graphiti.search() (edge/fact search) never returns. Read them
+            # directly, newest first; recency is the relevance proxy.
+            episodes = await self._fetch_recent_episodes(
+                limit=max(num_results * 10, 50)
             )
 
-            for result in pattern_results:
-                content = getattr(result, "content", None) or getattr(
-                    result, "fact", None
-                )
-                score = getattr(result, "score", 0.0)
-
-                if score < min_score:
-                    continue
-
-                if content and EPISODE_TYPE_PATTERN in str(content):
-                    try:
-                        data = (
-                            json.loads(content) if isinstance(content, str) else content
-                        )
-                        # Ensure data is a dict before processing (fixes ACS-215)
-                        if not isinstance(data, dict):
-                            continue
-                        if data.get("type") == EPISODE_TYPE_PATTERN:
-                            patterns.append(
-                                {
-                                    "pattern": data.get("pattern", ""),
-                                    "applies_to": data.get("applies_to", ""),
-                                    "example": data.get("example", ""),
-                                    "score": score,
-                                }
-                            )
-                    except (json.JSONDecodeError, TypeError, AttributeError):
-                        continue
-
-            # Search with query focused on gotchas
-            gotcha_results = await self.client.graphiti.search(
-                query=f"gotcha pitfall avoid: {query}",
-                group_ids=[self.group_id],
-                num_results=num_results * 2,
-            )
-
-            for result in gotcha_results:
-                content = getattr(result, "content", None) or getattr(
-                    result, "fact", None
-                )
-                score = getattr(result, "score", 0.0)
-
-                if score < min_score:
-                    continue
-
-                if content and EPISODE_TYPE_GOTCHA in str(content):
-                    try:
-                        data = (
-                            json.loads(content) if isinstance(content, str) else content
-                        )
-                        # Ensure data is a dict before processing (fixes ACS-215)
-                        if not isinstance(data, dict):
-                            continue
-                        if data.get("type") == EPISODE_TYPE_GOTCHA:
-                            gotchas.append(
-                                {
-                                    "gotcha": data.get("gotcha", ""),
-                                    "trigger": data.get("trigger", ""),
-                                    "solution": data.get("solution", ""),
-                                    "score": score,
-                                }
-                            )
-                    except (json.JSONDecodeError, TypeError, AttributeError):
-                        continue
-
-            # Sort by score and limit
-            patterns.sort(key=lambda x: x.get("score", 0), reverse=True)
-            gotchas.sort(key=lambda x: x.get("score", 0), reverse=True)
+            for data in episodes:
+                episode_type = data.get("type")
+                if episode_type == EPISODE_TYPE_PATTERN:
+                    patterns.append(
+                        {
+                            "pattern": data.get("pattern", ""),
+                            "applies_to": data.get("applies_to", ""),
+                            "example": data.get("example", ""),
+                            "score": 1.0,
+                        }
+                    )
+                elif episode_type == EPISODE_TYPE_GOTCHA:
+                    gotchas.append(
+                        {
+                            "gotcha": data.get("gotcha", ""),
+                            "trigger": data.get("trigger", ""),
+                            "solution": data.get("solution", ""),
+                            "score": 1.0,
+                        }
+                    )
 
             logger.info(
                 f"Found {len(patterns)} patterns and {len(gotchas)} gotchas for: {query[:50]}..."

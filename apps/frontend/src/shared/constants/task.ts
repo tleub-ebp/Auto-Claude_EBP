@@ -16,6 +16,7 @@ export const TASK_STATUS_COLUMNS = [
 	"in_progress",
 	"ai_review",
 	"human_review",
+	"build_failed",
 	"done",
 ] as const;
 
@@ -33,6 +34,7 @@ export const TASK_STATUS_LABELS: Record<
 	in_progress: "columns.in_progress",
 	ai_review: "columns.ai_review",
 	human_review: "columns.human_review",
+	build_failed: "columns.build_failed",
 	done: "columns.done",
 	pr_created: "columns.pr_created",
 	error: "columns.error",
@@ -50,6 +52,7 @@ export const TASK_STATUS_COLORS: Record<
 	in_progress: "bg-info/10 text-info",
 	ai_review: "bg-warning/10 text-warning",
 	human_review: "bg-purple-500/10 text-purple-400",
+	build_failed: "bg-destructive/10 text-destructive",
 	done: "bg-success/10 text-success",
 	pr_created: "bg-info/10 text-info",
 	error: "bg-destructive/10 text-destructive",
@@ -61,6 +64,7 @@ export const TASK_STATUS_COLORS: Record<
 export const TASK_STATUS_PRIORITY: Record<TaskStatus, number> = {
 	done: 100, // Highest priority - task is complete
 	pr_created: 90,
+	build_failed: 85, // Code is written and pushed, but the CI build is red
 	human_review: 80,
 	ai_review: 70,
 	in_progress: 50,

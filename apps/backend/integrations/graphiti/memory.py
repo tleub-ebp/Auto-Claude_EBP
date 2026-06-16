@@ -86,37 +86,19 @@ async def test_graphiti_connection() -> tuple[bool, str]:
         return False, f"Configuration errors: {'; '.join(errors)}"
 
     try:
-        from graphiti_core import Graphiti
-        from graphiti_core.driver.falkordb_driver import FalkorDriver
-        from graphiti_providers import ProviderError, create_embedder, create_llm_client
+        from .queries_pkg.client import GraphitiClient
 
-        # Create providers
-        try:
-            llm_client = create_llm_client(config)
-            embedder = create_embedder(config)
-        except ProviderError as e:
-            return False, f"Provider error: {e}"
+        client = GraphitiClient(config)
+        if not await client.initialize():
+            return False, (
+                "Graphiti initialization failed (see logs). "
+                "Check that real_ladybug is installed and providers are configured."
+            )
 
-        # Try to connect
-        driver = FalkorDriver(
-            host=config.falkordb_host,
-            port=config.falkordb_port,
-            password=config.falkordb_password or None,
-            database=config.database,
-        )
-
-        graphiti = Graphiti(
-            graph_driver=driver,
-            llm_client=llm_client,
-            embedder=embedder,
-        )
-
-        # Try a simple operation
-        await graphiti.build_indices_and_constraints()
-        await graphiti.close()
+        await client.close()
 
         return True, (
-            f"Connected to LadybugDB at {config.falkordb_host}:{config.falkordb_port} "
+            f"Connected to LadybugDB at {config.get_db_path()} "
             f"(providers: {config.get_provider_summary()})"
         )
 

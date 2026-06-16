@@ -5,6 +5,7 @@ import path from "node:path";
 import { app } from "electron";
 import { MODEL_ID_MAP } from "../shared/constants";
 import type { AppSettings } from "../shared/types";
+import { buildMemoryEnvVars } from "./memory-env-builder";
 
 /**
  * Request configuration for a learning loop analysis
@@ -74,6 +75,62 @@ export class LearningLoopService extends EventEmitter {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Record a task outcome (human verdict or CI failure) and run a
+	 * single-build pattern analysis on it, in the background.
+	 *
+	 * Fire-and-forget: runs detached from the dialog-driven analyze() flow so
+	 * it never cancels or blocks a user-triggered analysis, and failures only
+	 * log a warning (learning must never break the kanban workflow).
+	 */
+	recordTaskOutcome(
+		projectDir: string,
+		specId: string,
+		verdict: "approved" | "rejected" | "build_failed",
+		details?: string,
+	): void {
+		const autoBuildSource = this.getAutoBuildSourcePath();
+		if (!autoBuildSource) {
+			console.warn(
+				"[LearningLoop] Cannot record outcome: backend source not found",
+			);
+			return;
+		}
+
+		const runnerPath = path.join(
+			autoBuildSource,
+			"runners",
+			"learning_loop_runner.py",
+		);
+		const args = [
+			runnerPath,
+			"--project-dir",
+			projectDir,
+			"--spec-id",
+			specId,
+			"--record-outcome",
+			verdict,
+		];
+		if (details) {
+			args.push("--outcome-details", details.slice(0, 2000));
+		}
+
+		try {
+			const proc = spawn(this.pythonPath, args, {
+				cwd: autoBuildSource,
+				env: this.buildProcessEnvironment(),
+				stdio: "ignore",
+				detached: true,
+			});
+			proc.on("error", (err) => {
+				console.warn("[LearningLoop] Outcome recording failed:", err.message);
+			});
+			proc.unref();
+		} catch (err) {
+			console.warn("[LearningLoop] Failed to spawn outcome recorder:", err);
+		}
 	}
 
 	/**
@@ -163,6 +220,8 @@ export class LearningLoopService extends EventEmitter {
 				if (settings.globalAnthropicApiKey) {
 					processEnv.ANTHROPIC_API_KEY = settings.globalAnthropicApiKey;
 				}
+				// Graphiti memory config so outcome episodes reach the knowledge graph
+				Object.assign(processEnv, buildMemoryEnvVars(settings));
 			}
 		} catch {
 			// Ignore settings read errors

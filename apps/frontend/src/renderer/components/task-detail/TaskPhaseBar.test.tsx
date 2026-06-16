@@ -8,8 +8,8 @@
  * repli sur la phase active lorsque l'utilisateur n'a pas encore défilé.
  */
 
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom";
 import "../../../shared/i18n";
 import type { TaskLogPhase, TaskLogs } from "../../../shared/types";
@@ -97,7 +97,7 @@ describe("TaskPhaseBar", () => {
 		expect(screen.getByText("ANALYSE")).toBeInTheDocument();
 	});
 
-	it("privilégie l'activité fournie sur le sous-titre des logs", () => {
+	it("privilégie la sous-étape des logs sur l'activité fournie", () => {
 		const logs = {
 			phases: {
 				planning: {
@@ -111,7 +111,94 @@ describe("TaskPhaseBar", () => {
 		render(
 			<TaskPhaseBar phaseLogs={logs} currentActivity="Rédaction du plan" />,
 		);
-		expect(screen.getByText("Rédaction du plan")).toBeInTheDocument();
-		expect(screen.queryByText("ANALYSE")).not.toBeInTheDocument();
+		expect(screen.getByText("ANALYSE")).toBeInTheDocument();
+		expect(screen.queryByText("Rédaction du plan")).not.toBeInTheDocument();
+	});
+
+	it("dérive la sous-étape « phase N: NOM » depuis les logs de planification", () => {
+		const logs = {
+			phases: {
+				planning: {
+					status: "active",
+					entries: [
+						{ type: "info", content: "Starting phase 4: CONTEXT DISCOVERY" },
+					],
+				},
+				coding: { status: "pending", entries: [] },
+				validation: { status: "pending", entries: [] },
+			},
+		} as unknown as TaskLogs;
+		render(<TaskPhaseBar phaseLogs={logs} />);
+		expect(screen.getByText("Planning")).toBeInTheDocument();
+		expect(screen.getByText("Step 1/3")).toBeInTheDocument();
+		expect(
+			screen.getByText("phase 4: CONTEXT DISCOVERY"),
+		).toBeInTheDocument();
+	});
+
+	it("affiche la sous-étape d'une phase de codage (tag subphase)", () => {
+		const logs = {
+			phases: {
+				planning: { status: "completed", entries: [] },
+				coding: {
+					status: "active",
+					entries: [
+						{
+							type: "info",
+							content: "Starting SUBTASK 2/5: Add validation",
+							subphase: "SUBTASK 2/5: Add validation",
+						},
+					],
+				},
+				validation: { status: "pending", entries: [] },
+			},
+		} as unknown as TaskLogs;
+		render(<TaskPhaseBar phaseLogs={logs} />);
+		expect(screen.getByText("Coding")).toBeInTheDocument();
+		expect(screen.getByText("Step 2/3")).toBeInTheDocument();
+		expect(
+			screen.getByText("SUBTASK 2/5: Add validation"),
+		).toBeInTheDocument();
+	});
+
+	it("appelle onStepClick avec la phase affichée au clic sur l'étape", () => {
+		const onStepClick = vi.fn();
+		render(
+			<TaskPhaseBar
+				phaseLogs={makePhaseLogs("coding")}
+				onStepClick={onStepClick}
+			/>,
+		);
+		fireEvent.click(screen.getByText("Coding"));
+		expect(onStepClick).toHaveBeenCalledWith("coding");
+	});
+
+	it("affiche l'ellipsis animée quand la phase affichée est en cours", () => {
+		render(<TaskPhaseBar phaseLogs={makePhaseLogs("coding")} />);
+		expect(screen.getByRole("status")).toBeInTheDocument();
+	});
+
+	it("masque l'ellipsis animée quand on défile vers une phase inactive", () => {
+		render(
+			<TaskPhaseBar
+				phaseLogs={makePhaseLogs("validation")}
+				currentPhase="planning"
+			/>,
+		);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+
+	it("retire l'ellipsis finale de l'activité pour éviter les points doublés", () => {
+		render(
+			<TaskPhaseBar
+				phaseLogs={makePhaseLogs("coding")}
+				currentActivity="Starting build process..."
+			/>,
+		);
+		expect(screen.getByText("Starting build process")).toBeInTheDocument();
+		expect(
+			screen.queryByText("Starting build process..."),
+		).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 });

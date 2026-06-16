@@ -350,6 +350,22 @@ class TestGenerateSpecName:
             assert "!" not in name
             assert "(" not in name
 
+    def test_strips_accents_to_ascii(self, temp_dir: Path):
+        """Strips accents so the name matches the backend spec_name whitelist."""
+        import re
+
+        from spec.pipeline.models import generate_spec_name
+
+        name = generate_spec_name(
+            "Limitation du numéro de TVA intracommunautaire"
+        )
+
+        # No accented characters survive.
+        assert "é" not in name
+        assert "numero" in name
+        # Matches the worktree whitelist (ASCII letters/digits/.-_ only).
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name)
+
     def test_returns_spec_for_empty_description(self, temp_dir: Path):
         """Returns 'spec' for empty description."""
         with patch("spec.pipeline.init_workpilot_dir") as mock_init:

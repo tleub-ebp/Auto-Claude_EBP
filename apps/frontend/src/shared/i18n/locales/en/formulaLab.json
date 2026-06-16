@@ -1,0 +1,67 @@
+{
+	"title": "Formula Lab",
+	"subtitle": "Compare every Provider × LLM × Effort combination and pick your formula before any tokens are spent.",
+	"computing": "Computing formulas…",
+	"error": "Estimation unavailable: {{error}}",
+	"retry": "Retry",
+	"tokens": "tok",
+	"flatRate": "Flat-rate",
+	"apply": "Apply",
+	"applied": "Applied",
+	"applySelected": "Apply this formula",
+	"slider": {
+		"cost": "Cost",
+		"confidence": "Confidence",
+		"preference": "Preference"
+	},
+	"refine": {
+		"cta": "Refine with AI",
+		"running": "Refining…",
+		"tooltip": "Run one cheap LLM pass to sharpen the success estimate of the top 3 formulas for this task",
+		"error": "AI confidence refine unavailable — keeping heuristic success probabilities (costs are unaffected).",
+		"aiBadge": "AI-refined estimate"
+	},
+	"costBasis": {
+		"measured": "Costs computed from {{count}} real run(s) in this project — measured tokens × catalog prices.",
+		"calibrated": "Costs calibrated on {{count}} real run(s) in this project — measured volumes × up-to-date catalog prices.",
+		"heuristic": "No run history yet — estimated (default) volumes × real catalog prices. Accuracy improves after your first tasks.",
+		"measuredTag": "measured",
+		"measuredTooltip": "Cost based on this model's real measured usage in this project"
+	},
+	"picks": {
+		"bestValue": "Best value",
+		"safest": "Safest",
+		"cheapest": "Cheapest",
+		"fastest": "Fastest"
+	},
+	"chart": {
+		"aria": "Efficiency frontier: cost versus success probability",
+		"xAxis": "Cost",
+		"yAxis": "Success"
+	},
+	"filters": {
+		"allProviders": "All providers",
+		"perTokenOnly": "Per-token only",
+		"searchPlaceholder": "Search LLM…",
+		"count": "{{count}} formulas"
+	},
+	"table": {
+		"formula": "Provider / LLM",
+		"effort": "Effort",
+		"tokens": "Tokens",
+		"cost": "Cost",
+		"success": "Success",
+		"more": "+{{count}} more formulas (refine the filters to narrow down)"
+	},
+	"badge": {
+		"estimate": "Estimate",
+		"estimateTooltip": "Estimate cost & success across Provider × LLM × Effort",
+		"appliedTooltip": "Applied formula — click to change"
+	},
+	"toast": {
+		"appliedTitle": "Formula applied",
+		"appliedDesc": "{{model}} · {{effort}} will be used for every phase of this task.",
+		"failedTitle": "Could not apply formula",
+		"failedDesc": "The task configuration was not saved. Please try again."
+	}
+}

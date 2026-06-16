@@ -2,7 +2,7 @@
 import { type MouseEvent, memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ExecutionPhase, Subtask, TaskLogs } from "../../shared/types";
-import { cn } from "../lib/utils";
+import { calculateProgress, cn, getDisplayProgress } from "../lib/utils";
 
 interface PhaseProgressIndicatorProps {
 	phase?: ExecutionPhase;
@@ -10,8 +10,23 @@ interface PhaseProgressIndicatorProps {
 	phaseLogs?: TaskLogs | null;
 	/** Fallback progress percentage (0-100) when phaseLogs unavailable */
 	phaseProgress?: number;
+	/**
+	 * Progression temps réel pondérée par phase (0-100) émise par le backend.
+	 * Pendant une exécution active, elle prime sur l'avancement par sous-tâches
+	 * (qui ne bouge qu'au passage d'une sous-tâche à « completed » et paraît
+	 * donc figé). Voir getDisplayProgress.
+	 */
+	overallProgress?: number;
 	isStuck?: boolean;
 	isRunning?: boolean;
+	/**
+	 * Indique qu'une phase d'exécution est active (in_progress OU ai_review).
+	 * Contrairement à `isRunning` (limité à in_progress), ce flag couvre aussi
+	 * la revue QA, ce qui permet de privilégier `overallProgress` plutôt que
+	 * l'avancement par sous-tâches (figé à ce moment-là). Voir getDisplayProgress.
+	 * Repli sur `isRunning` quand non fourni.
+	 */
+	hasActiveExecution?: boolean;
 	className?: string;
 	/** Called when the user clicks the completed Plan pill to view the implementation plan */
 	onPlanClick?: () => void;
@@ -57,8 +72,10 @@ export const PhaseProgressIndicator = memo(function PhaseProgressIndicator({
 	subtasks,
 	phaseLogs,
 	phaseProgress,
+	overallProgress,
 	isStuck = false,
 	isRunning = false,
+	hasActiveExecution,
 	className,
 	onPlanClick,
 }: PhaseProgressIndicatorProps) {
@@ -94,15 +111,21 @@ export const PhaseProgressIndicator = memo(function PhaseProgressIndicator({
 	// Only animate when visible and running
 	const shouldAnimate = isVisible && isRunning && !isStuck;
 
-	// Calculate subtask-based progress (for coding phase)
-	const completedSubtasks = subtasks.filter(
-		(c) => c.status === "completed",
-	).length;
+	// Avancement par sous-tâches (completed OU blocked comptent comme faites, cf.
+	// calculateProgress) — c'est le travail réel, identique à la pop-in de détail.
 	const totalSubtasks = subtasks.length;
-	const subtaskProgress =
-		totalSubtasks > 0
-			? Math.round((completedSubtasks / totalSubtasks) * 100)
-			: 0;
+	const subtaskProgress = calculateProgress(subtasks);
+
+	// Dès qu'il y a des sous-tâches, on affiche leur avancement réel (cohérent
+	// avec la pop-in) ; sans sous-tâches (spec/planning), repli sur la
+	// progression de phase. Voir getDisplayProgress.
+	const isExecutionActive = hasActiveExecution ?? isRunning;
+	const displayProgress = getDisplayProgress(
+		subtaskProgress,
+		overallProgress,
+		isExecutionActive && !isStuck,
+		totalSubtasks > 0,
+	);
 
 	// Get log entry counts for activity indication
 	const planningEntries = phaseLogs?.phases?.planning?.entries?.length || 0;
@@ -171,7 +194,7 @@ export const PhaseProgressIndicator = memo(function PhaseProgressIndicator({
 				</div>
 				<span className="text-xs font-medium text-foreground">
 					{showSubtaskProgress ? (
-						`${subtaskProgress}%`
+						`${displayProgress}%`
 					) : activeEntries > 0 ? (
 						<span className="text-muted-foreground">
 							{activeEntries}{" "}
@@ -217,7 +240,7 @@ export const PhaseProgressIndicator = memo(function PhaseProgressIndicator({
 							key="determinate"
 							className={cn("h-full rounded-full", colors.color)}
 							initial={{ width: 0 }}
-							animate={{ width: `${subtaskProgress}%` }}
+							animate={{ width: `${displayProgress}%` }}
 							transition={{ duration: 0.5, ease: "easeOut" }}
 						/>
 					) : shouldAnimate && isIndeterminatePhase ? (
@@ -260,6 +283,9 @@ export const PhaseProgressIndicator = memo(function PhaseProgressIndicator({
 								className={cn(
 									"h-2 w-2 rounded-full",
 									subtask.status === "completed" && "bg-success",
+									// Blocked = handled by the build but needs a manual step
+									// (e.g. a manual e2e test) — distinct amber, counts as done.
+									subtask.status === "blocked" && "bg-warning",
 									isInProgress && "bg-info",
 									subtask.status === "failed" && "bg-destructive",
 									subtask.status === "pending" && "bg-muted-foreground/30",

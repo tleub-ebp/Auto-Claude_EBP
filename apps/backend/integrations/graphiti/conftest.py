@@ -8,8 +8,16 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def skip_external_service_tests():
-    """Skip all tests in this directory — they require Ollama and LadybugDB."""
+def skip_external_service_tests(request):
+    """Skip tests in this directory that require live Ollama and LadybugDB.
+
+    Tests whose function carries a ``stubbed_e2e`` attribute run against a
+    stub Ollama server and the embedded LadybugDB, so they are CI-safe and
+    must not be skipped here.
+    """
+    test_fn = getattr(request, "function", None)
+    if getattr(test_fn, "stubbed_e2e", False):
+        return
     pytest.skip("requires external services: Ollama/LadybugDB")
 
 

@@ -17,8 +17,10 @@ Provides:
 """
 
 import importlib
+import os
 import sys
 import types as _types
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -231,6 +233,43 @@ def pytest_runtest_setup(item) -> None:
 
 import subprocess
 
+# Git env vars that point at a specific repo/index/object store. Git EXPORTS
+# these to any process it spawns to run a hook (pre-commit, pre-push) and CI
+# may set them too. If they leak into a test's bare ``git`` calls (those that
+# do not pass an explicit ``env=``), the commands operate on the OUTER repo
+# instead of the test's isolated temp repo — e.g. a worktree commit silently
+# targets the host index, leaving the worktree "dirty". Clearing them for the
+# duration of the fixture makes git rediscover the repo from ``cwd``.
+_INTERFERING_GIT_ENV = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+)
+
+
+@contextmanager
+def _isolated_git_env(ceiling: str):
+    """Clear inherited git location vars and pin GIT_CEILING_DIRECTORIES.
+
+    Restores the previous environment on exit. ``ceiling`` stops git from
+    discovering a parent ``.git`` directory above the temp repo.
+    """
+    saved = {k: os.environ.get(k) for k in _INTERFERING_GIT_ENV}
+    saved["GIT_CEILING_DIRECTORIES"] = os.environ.get("GIT_CEILING_DIRECTORIES")
+    for key in _INTERFERING_GIT_ENV:
+        os.environ.pop(key, None)
+    os.environ["GIT_CEILING_DIRECTORIES"] = ceiling
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
 
 @pytest.fixture
 def temp_git_repo(tmp_path):
@@ -238,7 +277,9 @@ def temp_git_repo(tmp_path):
 
     Yields the ``Path`` to the repository root.  The fixture isolates the
     git environment so that the host user's global git config does not
-    interfere with tests (e.g. hooks, signing, templates).
+    interfere with tests (e.g. hooks, signing, templates) AND so that the
+    git location vars exported by an enclosing hook/CI run cannot redirect
+    the test's git commands to the outer repo.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -252,39 +293,40 @@ def temp_git_repo(tmp_path):
         "GIT_COMMITTER_EMAIL": TEST_EMAIL,
     }
 
-    subprocess.run(
-        ["git", "init", INITIAL_BRANCH_MAIN],
-        cwd=repo,
-        env={**subprocess.os.environ, **env},
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "config", GIT_CONFIG_USER_EMAIL, TEST_EMAIL],
-        cwd=repo,
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "config", GIT_CONFIG_USER_NAME, "Test"],
-        cwd=repo,
-        capture_output=True,
-        check=True,
-    )
+    with _isolated_git_env(str(tmp_path)):
+        subprocess.run(
+            ["git", "init", INITIAL_BRANCH_MAIN],
+            cwd=repo,
+            env={**os.environ, **env},
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", GIT_CONFIG_USER_EMAIL, TEST_EMAIL],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", GIT_CONFIG_USER_NAME, "Test"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
 
-    # Create an initial commit so HEAD exists
-    readme = repo / "README.md"
-    readme.write_text("# Test repo\n")
-    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", INITIAL_COMMIT_MESSAGE],
-        cwd=repo,
-        env={**subprocess.os.environ, **env},
-        capture_output=True,
-        check=True,
-    )
+        # Create an initial commit so HEAD exists
+        readme = repo / "README.md"
+        readme.write_text("# Test repo\n")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", INITIAL_COMMIT_MESSAGE],
+            cwd=repo,
+            env={**os.environ, **env},
+            capture_output=True,
+            check=True,
+        )
 
-    yield repo
+        yield repo
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +338,7 @@ try:
     from src.connectors.azure_devops.client import AzureDevOpsClient
     from src.connectors.azure_devops.repos import AzureReposClient
     from src.connectors.azure_devops.work_items import AzureWorkItemsClient
+
     AZURE_DEVOPS_FIXTURES_AVAILABLE = True
 except ImportError:
     Settings = None  # type: ignore[assignment,misc]
@@ -642,6 +685,7 @@ def mock_run_agent_fn():
 def mock_task_logger():
     """Mock task logger."""
     from unittest.mock import MagicMock
+
     return MagicMock()
 
 
@@ -649,6 +693,7 @@ def mock_task_logger():
 def mock_ui_module():
     """Mock UI module."""
     from unittest.mock import MagicMock
+
     return MagicMock()
 
 
@@ -656,10 +701,12 @@ def mock_ui_module():
 def mock_spec_validator():
     """Mock spec validator."""
     from unittest.mock import MagicMock
-    
-    def _create_mock(spec_valid=True, plan_valid=True, context_valid=True, all_valid=True):
+
+    def _create_mock(
+        spec_valid=True, plan_valid=True, context_valid=True, all_valid=True
+    ):
         mock = MagicMock()
-        
+
         # Create mock validation results
         class MockValidationResult:
             def __init__(self, valid, checkpoint, errors=None, fixes=None):
@@ -667,7 +714,7 @@ def mock_spec_validator():
                 self.checkpoint = checkpoint
                 self.errors = errors or []
                 self.fixes = fixes or []
-        
+
         # Mock validate_all method
         def validate_all():
             results = []
@@ -676,16 +723,18 @@ def mock_spec_validator():
             results.append(MockValidationResult(plan_valid, "plan"))
             results.append(MockValidationResult(context_valid, "context"))
             return results
-        
+
         mock.validate_all = validate_all
         mock.validate_all.return_value = validate_all()
-        
+
         return mock
-    
+
     return _create_mock
 
+
 # Import asyncio event loop plugin
-pytest_plugins = ('pytest_asyncio',)
+pytest_plugins = ("pytest_asyncio",)
+
 
 # Configure asyncio mode for pytest
 def pytest_configure(config):
@@ -703,13 +752,16 @@ def pytest_configure(config):
 # Merge system fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def semantic_analyzer():
     """Create a SemanticAnalyzer instance for testing."""
     import sys
     from pathlib import Path as _Path
+
     sys.path.insert(0, str(_Path(__file__).parent.parent / "apps" / "backend"))
     from merge.semantic_analyzer import SemanticAnalyzer
+
     return SemanticAnalyzer()
 
 
@@ -784,8 +836,10 @@ def file_tracker(temp_project):
     """Create a FileEvolutionTracker instance for testing."""
     import sys
     from pathlib import Path as _Path
+
     sys.path.insert(0, str(_Path(__file__).parent.parent / "apps" / "backend"))
     from merge.file_evolution import FileEvolutionTracker
+
     return FileEvolutionTracker(project_dir=temp_project)
 
 
@@ -794,8 +848,10 @@ def conflict_detector():
     """Create a ConflictDetector instance for testing."""
     import sys
     from pathlib import Path as _Path
+
     sys.path.insert(0, str(_Path(__file__).parent.parent / "apps" / "backend"))
     from merge.conflict_detector import ConflictDetector
+
     return ConflictDetector()
 
 
@@ -804,8 +860,10 @@ def auto_merger():
     """Create an AutoMerger instance for testing."""
     import sys
     from pathlib import Path as _Path
+
     sys.path.insert(0, str(_Path(__file__).parent.parent / "apps" / "backend"))
     from merge.auto_merger import AutoMerger
+
     return AutoMerger()
 
 
@@ -814,8 +872,10 @@ def ai_resolver():
     """Create an AIResolver instance without AI function (for testing fallback behaviour)."""
     import sys
     from pathlib import Path as _Path
+
     sys.path.insert(0, str(_Path(__file__).parent.parent / "apps" / "backend"))
     from merge.ai_resolver import AIResolver
+
     return AIResolver(ai_call_fn=None)
 
 
@@ -824,6 +884,7 @@ def mock_ai_resolver():
     """Create an AIResolver instance with a mock AI function."""
     import sys
     from pathlib import Path as _Path
+
     sys.path.insert(0, str(_Path(__file__).parent.parent / "apps" / "backend"))
     from merge.ai_resolver import AIResolver
 
@@ -837,6 +898,7 @@ def mock_ai_resolver():
 # ---------------------------------------------------------------------------
 # QA loop fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def qa_signoff_approved():
@@ -874,7 +936,9 @@ def python_project(tmp_path):
     project.mkdir()
     (project / "requirements.txt").write_text("flask\nrequests\n")
     (project / "app.py").write_text("from flask import Flask\napp = Flask(__name__)\n")
-    (project / "setup.py").write_text("from setuptools import setup\nsetup(name='test')\n")
+    (project / "setup.py").write_text(
+        "from setuptools import setup\nsetup(name='test')\n"
+    )
     return project
 
 
@@ -882,6 +946,7 @@ def python_project(tmp_path):
 def node_project(tmp_path):
     """Create a temporary Node.js project directory."""
     import json
+
     project = tmp_path / "node_project"
     project.mkdir()
     pkg = {
@@ -921,11 +986,14 @@ def stage_files(tmp_path, temp_git_repo):
 
     def _stage(files: dict):
         import subprocess
+
         for name, content in files.items():
             file_path = temp_git_repo / name
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content)
-        subprocess.run(["git", "add", "."], cwd=temp_git_repo, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "add", "."], cwd=temp_git_repo, capture_output=True, check=True
+        )
 
     return _stage
 
@@ -933,6 +1001,7 @@ def stage_files(tmp_path, temp_git_repo):
 # ---------------------------------------------------------------------------
 # Implementation plan fixture
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def sample_implementation_plan():
@@ -1014,6 +1083,7 @@ def sample_implementation_plan():
 # GitLab/GitHub worktree fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def temp_project_dir(tmp_path):
     """Create a temporary project directory for worktree tests."""
@@ -1030,45 +1100,51 @@ def temp_project_dir(tmp_path):
         "GIT_COMMITTER_NAME": "Test",
         "GIT_COMMITTER_EMAIL": TEST_EMAIL,
     }
-    merged_env = {**subprocess.os.environ, **env}
 
-    subprocess.run(
-        ["git", "init", INITIAL_BRANCH_MAIN],
-        cwd=project,
-        env=merged_env,
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "config", GIT_CONFIG_USER_EMAIL, TEST_EMAIL],
-        cwd=project,
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "config", GIT_CONFIG_USER_NAME, "Test"],
-        cwd=project,
-        capture_output=True,
-        check=True,
-    )
+    # Clear git location vars (see _isolated_git_env) for the whole test so
+    # worktree git commands target this repo, not an enclosing hook's repo.
+    with _isolated_git_env(str(tmp_path)):
+        merged_env = {**os.environ, **env}
 
-    # Create initial commit
-    readme = project / "README.md"
-    readme.write_text("# Test Project\n")
-    subprocess.run(["git", "add", "."], cwd=project, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", INITIAL_COMMIT_MESSAGE],
-        cwd=project,
-        env=merged_env,
-        capture_output=True,
-        check=True,
-    )
+        subprocess.run(
+            ["git", "init", INITIAL_BRANCH_MAIN],
+            cwd=project,
+            env=merged_env,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", GIT_CONFIG_USER_EMAIL, TEST_EMAIL],
+            cwd=project,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", GIT_CONFIG_USER_NAME, "Test"],
+            cwd=project,
+            capture_output=True,
+            check=True,
+        )
 
-    # Create the worktrees directory structure
-    worktrees_dir = project / ".workpilot" / "worktrees" / "tasks"
-    worktrees_dir.mkdir(parents=True, exist_ok=True)
+        # Create initial commit
+        readme = project / "README.md"
+        readme.write_text("# Test Project\n")
+        subprocess.run(
+            ["git", "add", "."], cwd=project, capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", INITIAL_COMMIT_MESSAGE],
+            cwd=project,
+            env=merged_env,
+            capture_output=True,
+            check=True,
+        )
 
-    return project
+        # Create the worktrees directory structure
+        worktrees_dir = project / ".workpilot" / "worktrees" / "tasks"
+        worktrees_dir.mkdir(parents=True, exist_ok=True)
+
+        yield project
 
 
 @pytest.fixture
@@ -1076,6 +1152,8 @@ def worktree_manager(temp_project_dir):
     """Create a WorktreeManager instance for testing."""
     import sys
     from pathlib import Path as _Path
+
     sys.path.insert(0, str(_Path(__file__).parent.parent / "apps" / "backend"))
     from core.worktree import WorktreeManager
+
     return WorktreeManager(temp_project_dir, base_branch="main")

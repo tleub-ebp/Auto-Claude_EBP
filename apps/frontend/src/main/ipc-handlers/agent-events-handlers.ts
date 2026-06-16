@@ -75,6 +75,49 @@ function logInvalidPlanDetails(
 }
 
 /**
+ * True when the task was cooperatively paused by the user (TASK_PAUSE wrote
+ * `plan.paused.enabled`).
+ *
+ * On a user pause the backend finishes the current step and exits with code 0.
+ * That exit must NOT be turned into a state transition — otherwise
+ * `handleProcessExited` synthesises QA_PASSED / PROCESS_EXITED and the card
+ * leaves its current column (e.g. coding → human_review). Detecting the pause
+ * lets us keep the task exactly where it is, resumable. Same rationale as the
+ * existing rate-limit guard.
+ *
+ * Checked across three sources for robustness (watcher snapshot, on-disk plan,
+ * scanned metadata) since any single one can momentarily lag the pause write.
+ */
+function isCooperativelyPaused(
+	taskId: string,
+	task?: Task,
+	project?: Project,
+): boolean {
+	try {
+		const watched = fileWatcher.getCurrentPlan(taskId) as
+			| (ImplementationPlan & { paused?: { enabled?: boolean } })
+			| null;
+		if (watched?.paused?.enabled) return true;
+	} catch {
+		// fall through to the on-disk read
+	}
+	try {
+		if (task && project) {
+			const planPath = getPlanPath(project, task);
+			if (existsSync(planPath)) {
+				const plan = JSON.parse(readFileSync(planPath, "utf-8")) as {
+					paused?: { enabled?: boolean };
+				};
+				if (plan?.paused?.enabled) return true;
+			}
+		}
+	} catch {
+		// fall through to metadata
+	}
+	return task?.metadata?.paused?.enabled === true;
+}
+
+/**
  * Re-stamp XState status fields on plan files if the backend overwrote them
  * This prevents tasks from snapping back to backlog on refresh
  */
@@ -349,16 +392,23 @@ export function registerAgenteventsHandlers(
 			);
 			const exitProjectId = exitProject?.id || projectId;
 
-			// Skip handleProcessExited for rate-limited tasks.
-			// The sdk-rate-limit event fires before exit for rate-limited processes.
-			// Without this guard, handleProcessExited sends PROCESS_EXITED { unexpected: true }
-			// which transitions the task to error → human_review, incorrectly moving the card
-			// to the Human Review column even though the task is just paused waiting for rate limit reset.
+			// Skip the exit→state transition for tasks that exited on purpose:
+			//
+			//  • rate-limited — the sdk-rate-limit event fires before exit; the
+			//    backend will resume when the limit resets.
+			//  • cooperatively paused — the user clicked Pause, so the backend
+			//    finished the current step and exited code 0.
+			//
+			// In both cases, running handleProcessExited would synthesise
+			// QA_PASSED / PROCESS_EXITED{unexpected} and move the card out of its
+			// current column (e.g. coding → human_review). Skipping keeps the task
+			// exactly where it is so it can be resumed in place.
 			const isRateLimited = rateLimitedTaskIds.has(taskId);
-			if (!isRateLimited) {
-				taskStateManager.handleProcessExited(taskId, code, exitTask, exitProject);
-			} else {
+			const isPaused = isCooperativelyPaused(taskId, exitTask, exitProject);
+			if (isRateLimited) {
 				rateLimitedTaskIds.delete(taskId);
+			} else if (!isPaused) {
+				taskStateManager.handleProcessExited(taskId, code, exitTask, exitProject);
 			}
 
 			// Send final plan state to renderer BEFORE unwatching
@@ -386,11 +436,15 @@ export function registerAgenteventsHandlers(
 			const { task, project } = findTaskAndProject(taskId, projectId);
 			if (!task || !project) return;
 
-			const taskTitle = task.title || task.specId;
-			if (code === 0) {
-				notificationService.notifyReviewNeeded(taskTitle, project.id, taskId);
-			} else {
-				notificationService.notifyTaskFailed(taskTitle, project.id, taskId);
+			// A cooperative pause is not a completion — don't fire a "review
+			// needed"/"failed" notification for it.
+			if (!isPaused) {
+				const taskTitle = task.title || task.specId;
+				if (code === 0) {
+					notificationService.notifyReviewNeeded(taskTitle, project.id, taskId);
+				} else {
+					notificationService.notifyTaskFailed(taskTitle, project.id, taskId);
+				}
 			}
 		},
 	);

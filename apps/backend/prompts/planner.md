@@ -411,6 +411,12 @@ Use ONLY these values for the `type` field in phases:
 2. **Small scope** - Each subtask should take 1-3 files max
 3. **Clear verification** - Every subtask must have a way to verify it works
 4. **Explicit dependencies** - Phases block until dependencies complete
+5. **Test coverage is mandatory** - Each implementation subtask must include the
+   unit/integration tests needed to reach **{{MIN_COVERAGE}}%** line + branch
+   coverage on the code it adds or changes. Prefer `command` verifications that
+   run the tests **with coverage** (e.g. `pytest --cov=. --cov-branch`,
+   `vitest run --coverage`). The QA stage enforces this threshold and will reject
+   the task otherwise (e2e coverage is best-effort).
 
 ### Verification Types
 

@@ -1,5 +1,6 @@
 import {
 	AlertCircle,
+	AlertTriangle,
 	CheckCircle2,
 	ChevronRight,
 	Clock,
@@ -7,6 +8,7 @@ import {
 	Edit3,
 	FileCode,
 	ListChecks,
+	MessageSquarePlus,
 	Plus,
 	Trash2,
 	XCircle,
@@ -19,7 +21,9 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { PlanApprovalSection } from "./PlanApprovalSection";
 import { TaskCodeEditor } from "./TaskCodeEditor";
+import { TaskResetButton } from "./TaskResetButton";
 import { SubtaskFilesViewer } from "./SubtaskFilesViewer";
 
 interface Phase {
@@ -28,8 +32,9 @@ interface Phase {
 		id: string;
 		title?: string;
 		description?: string;
-		status: "pending" | "in_progress" | "completed" | "failed";
+		status: "pending" | "in_progress" | "completed" | "blocked" | "failed";
 		files?: string[];
+		blockedReason?: string;
 		verification?: {
 			type: "command" | "browser";
 			run?: string;
@@ -49,6 +54,10 @@ function getSubtaskStatusIcon(status: string) {
 			return <CheckCircle2 className="h-4 w-4 text-[var(--success)]" />;
 		case "in_progress":
 			return <Clock className="h-4 w-4 text-[var(--info)] animate-pulse" />;
+		case "blocked":
+			// Counts as "done" for progress, but the agent gave up — flag it amber
+			// so it reads as "needs attention", never as a clean (green) pass.
+			return <AlertTriangle className="h-4 w-4 text-amber-500" />;
 		case "failed":
 			return <XCircle className="h-4 w-4 text-[var(--error)]" />;
 		default:
@@ -62,6 +71,8 @@ function getStatusBadgeClass(status: string): string {
 			return "bg-success/20 text-success";
 		case "in_progress":
 			return "bg-info/20 text-info";
+		case "blocked":
+			return "bg-amber-500/20 text-amber-600 dark:text-amber-400";
 		case "failed":
 			return "bg-destructive/20 text-destructive";
 		default:
@@ -89,6 +100,13 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 	);
 
 	const progress = calculateProgress(task.subtasks);
+	const completedCount = task.subtasks.filter(
+		(s) => s.status === "completed",
+	).length;
+	const blockedCount = task.subtasks.filter(
+		(s) => s.status === "blocked",
+	).length;
+	const failedCount = task.subtasks.filter((s) => s.status === "failed").length;
 
 	const handleCodeEditorUpdate = async (updatedSubtask: Subtask) => {
 		// Update the subtask in editedPhases
@@ -165,6 +183,7 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 			<SubtaskFilesViewer
 				files={selectedSubtaskForFilesView.files || []}
 				subtaskTitle={selectedSubtaskForFilesView.title}
+				taskId={task.id}
 				onClose={() => setSelectedSubtaskForFilesView(null)}
 			/>
 		);
@@ -220,15 +239,33 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 	return (
 		<ScrollArea className="h-full">
 			<div className="p-4 space-y-3">
-				{/* Header with edit button */}
+				{/* Plan validation - approve/reject the proposed subtasks before coding */}
+				<PlanApprovalSection task={task} />
+
+				{/* Header with edit/reset buttons */}
 				<div className="flex items-center justify-between mb-3">
 					<div className="flex items-center justify-between text-xs text-muted-foreground flex-1">
-						<span>
-							{task.subtasks.filter((c) => c.status === "completed").length} of{" "}
-							{task.subtasks.length} completed
+						<span className="flex items-center gap-1.5">
+							<span>
+								{t("tasks:subtasks.completedCount", {
+									completed: completedCount,
+									total: task.subtasks.length,
+								})}
+							</span>
+							{blockedCount > 0 && (
+								<span className="text-amber-600 dark:text-amber-400">
+									· {t("tasks:subtasks.blockedCount", { count: blockedCount })}
+								</span>
+							)}
+							{failedCount > 0 && (
+								<span className="text-[var(--error)]">
+									· {t("tasks:subtasks.failedCount", { count: failedCount })}
+								</span>
+							)}
 						</span>
 						<span className="tabular-nums">{progress}%</span>
 					</div>
+					{!isEditing && <TaskResetButton task={task} className="ml-2 h-7" />}
 					{!isEditing && onUpdatePlan && (
 						<Button
 							size="sm"
@@ -354,14 +391,7 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 					</div>
 				) : (
 					// View mode
-					<>
-						<div className="flex items-center justify-between text-xs text-muted-foreground pb-2 border-b border-border/50">
-							<span>
-								{task.subtasks.filter((c) => c.status === "completed").length} of{" "}
-								{task.subtasks.length} completed
-							</span>
-						</div>
-						{task.subtasks.map((subtask, index) => (
+					task.subtasks.map((subtask, index) => (
 							<div
 								key={subtask.id}
 								onClick={() => {
@@ -373,8 +403,15 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 										"border-[var(--info)]/50 bg-[var(--info-light)] ring-1 ring-info/20",
 									subtask.status === "completed" &&
 										"border-[var(--success)]/50 bg-[var(--success-light)]",
+									subtask.status === "blocked" &&
+										"border-amber-500/50 bg-amber-500/10",
 									subtask.status === "failed" &&
 										"border-[var(--error)]/50 bg-[var(--error-light)]",
+									// User-requested changes get a distinct violet treatment so they
+									// stand out from the originally-planned subtasks, whatever their
+									// status. Last in the list so it wins the bg/border merge.
+									subtask.origin === "change_request" &&
+										"border-violet-500/50 bg-violet-500/10 hover:bg-violet-500/15",
 								)}
 							>
 								<div className="flex items-start gap-2 w-full">
@@ -389,6 +426,12 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 											>
 												#{index + 1}
 											</span>
+											{subtask.origin === "change_request" && (
+												<span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-600 dark:text-violet-400 flex-shrink-0">
+													<MessageSquarePlus className="h-2.5 w-2.5" />
+													{t("tasks:subtasks.changeRequest")}
+												</span>
+											)}
 											<Tooltip>
 												<TooltipTrigger asChild>
 													<span className="text-sm font-medium text-foreground truncate cursor-default">
@@ -418,6 +461,28 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 											</Tooltip>
 											<ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
 										</div>
+										{subtask.origin === "change_request" &&
+											subtask.requestedAt && (
+												<p className="mt-0.5 text-[10px] text-violet-600/70 dark:text-violet-400/70">
+													{t("tasks:subtasks.requestedAt", {
+														date: new Date(
+															subtask.requestedAt,
+														).toLocaleString(),
+													})}
+												</p>
+											)}
+										{subtask.status === "blocked" && (
+											<div className="mt-1.5 flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-400">
+												<AlertTriangle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+												<span>
+													{subtask.blockedReason
+														? t("tasks:subtasks.blockedReason", {
+																reason: subtask.blockedReason,
+															})
+														: t("tasks:subtasks.blockedGeneric")}
+												</span>
+											</div>
+										)}
 										{subtask.files && subtask.files.length > 0 && (
 											<div className="flex flex-wrap gap-1 items-center">
 												{subtask.files.slice(0, 2).map((file: string) => (
@@ -467,8 +532,7 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 									</div>
 								</div>
 							</div>
-						))}
-					</>
+						))
 				)}
 			</div>
 		</ScrollArea>

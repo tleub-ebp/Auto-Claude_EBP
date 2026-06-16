@@ -683,6 +683,7 @@
 		"selectThinkingLevel": "Sélectionner un niveau de réflexion",
 		"autoLabel": "Auto (Optimisé)",
 		"autoDescription": "Utilise Opus pour toutes les phases avec des niveaux de réflexion optimisés",
+		"autoDescriptionModel": "Utilise {{model}} pour toutes les phases avec des niveaux de réflexion optimisés",
 		"phaseConfiguration": "Configuration des Phases",
 		"phaseConfigurationDescription": "Configurez les modèles et les niveaux de réflexion pour chaque phase du pipeline de développement",
 		"phases": {
@@ -1272,6 +1273,10 @@
 			"apiKeyLink": "Paramètres Linear",
 			"realtimeSync": "Synchronisation en temps réel",
 			"realtimeSyncDescription": "Importer automatiquement les nouvelles tâches créées dans Linear",
+			"realtimeSyncWarning": "Lorsque cette option est activée, les nouvelles issues Linear seront automatiquement importées dans AutoBuild. Pensez à configurer vos filtres d'équipe/projet ci-dessous pour contrôler quelles issues sont importées.",
+			"importTasksTitle": "Importer les tâches existantes",
+			"importTasksDescription": "Sélectionnez les issues Linear à importer dans AutoBuild en tant que tâches.",
+			"importTasksButton": "Importer les tâches depuis Linear",
 			"teamId": "ID d'équipe (Optionnel)",
 			"teamIdDescription": "L'identifiant unique de votre équipe Linear",
 			"teamIdPlaceholder": "Détecté automatiquement",
@@ -1308,23 +1313,78 @@
 		"testConnection": "Tester la connexion",
 		"title": "Intégration Jira"
 	},
-	"teams": {
-		"title": "Microsoft Teams",
-		"description": "Recevez des notifications dans Teams quand les tâches sont terminées et les PRs créées",
-		"initGuardDescription": "Initialisez WorkPilot AI pour ce projet afin de configurer les notifications Teams",
-		"enableNotifications": "Activer les notifications Teams",
-		"enableNotificationsHint": "Envoyer un message dans votre canal Teams quand une tâche est terminée et une PR créée",
-		"webhookUrl": "URL du Webhook entrant",
-		"webhookUrlHint": "Collez l'URL du Webhook entrant depuis le connecteur de votre canal Teams",
+	"channelNotifications": {
+		"navLabel": "Notifications (Teams, Slack…)",
+		"title": "Notifications de canaux",
+		"description": "Annoncez sur vos canaux (Teams, Slack, Discord, Google Chat…) quand une tâche est terminée et que sa PR est prête",
+		"initGuardDescription": "Initialisez WorkPilot AI pour ce projet afin de configurer les notifications de canaux",
 		"testWebhook": "Envoyer un message de test",
 		"testSuccess": "Message envoyé !",
 		"testError": "Impossible d'atteindre le webhook",
-		"testMessage": "WorkPilot AI — Notification de test",
-		"testMessageBody": "Ceci est un message de test de WorkPilot AI. Vos notifications Teams sont correctement configurées.",
 		"howToCreate": "Comment créer un webhook",
 		"triggers": "Déclencheurs de notification",
 		"triggerTaskDone": "Quand une tâche Kanban passe en 'Terminé' et qu'une PR est créée",
-		"triggerPrCreated": "Quand une PR est automatiquement créée pour validation humaine"
+		"triggerPrCreated": "Quand une PR est automatiquement créée pour validation humaine",
+		"channels": {
+			"teams": {
+				"name": "Microsoft Teams",
+				"hint": "Webhook entrant d'un canal Teams (connecteur ou flux Workflows)"
+			},
+			"slack": {
+				"name": "Slack",
+				"hint": "Webhook entrant Slack (app « Incoming Webhooks »)"
+			},
+			"discord": {
+				"name": "Discord",
+				"hint": "Webhook de salon Discord (Paramètres du salon → Intégrations)"
+			},
+			"googleChat": {
+				"name": "Google Chat",
+				"hint": "Webhook d'espace Google Chat (Paramètres de l'espace → Webhooks)"
+			},
+			"webhook": {
+				"name": "Webhook générique",
+				"hint": "POST JSON brut vers n'importe quel endpoint HTTP (intégrations maison)"
+			}
+		}
+	},
+	"cicd": {
+		"title": "Pipeline CI/CD",
+		"description": "Affichez le statut du pipeline sur les cartes kanban et laissez l'agent réparer les builds rouges",
+		"initGuardDescription": "Initialisez WorkPilot AI pour ce projet afin de configurer la boucle de pipeline CI/CD",
+		"introDescription": "Le dernier run de pipeline de chaque branche de tâche est affiché sur sa carte kanban. Quand un build passe au rouge, la tâche bascule dans la colonne « Build rouge » et l'agent peut la réparer automatiquement.",
+		"providerLabel": "Fournisseur CI/CD",
+		"providerDescription": "Choisissez un fournisseur explicitement, ou laissez WorkPilot l'auto-détecter à partir des jetons d'accès configurés pour ce projet",
+		"providerAuto": "Auto-détection (Azure → GitHub → GitLab → Jenkins)",
+		"providerNone": "Désactivé",
+		"reusedCredentials": "Utilise les jetons d'accès de la section d'intégration {{section}}. Configurez-les là-bas au préalable si besoin.",
+		"autoDetectNote": "Le premier fournisseur avec une configuration complète est utilisé, dans cet ordre : Azure DevOps, GitHub, GitLab, Jenkins.",
+		"jenkinsUrlLabel": "URL Jenkins",
+		"jenkinsJobLabel": "Job (pipeline multibranch)",
+		"jenkinsJobDescription": "Nom du job multibranch contenant un sous-job par branche",
+		"jenkinsUserLabel": "Utilisateur",
+		"jenkinsTokenLabel": "Jeton d'API",
+		"autoFixLabel": "Réparation automatique",
+		"autoFixDescription": "Quand un build passe au rouge, lancer automatiquement l'agent pour le corriger",
+		"pollLabel": "Intervalle de vérification (secondes)",
+		"pollDescription": "Fréquence de vérification du statut du pipeline (minimum 15 s, défaut 60 s)"
+	},
+	"invitationsAdmin": {
+		"navLabel": "Invitations (équipe)",
+		"title": "Invitations",
+		"description": "Invitez de nouveaux membres. La création de compte se fait uniquement sur invitation.",
+		"email": "Email du nouvel utilisateur",
+		"role": "Rôle",
+		"roleMember": "Membre",
+		"roleViewer": "Lecteur",
+		"roleAdmin": "Administrateur",
+		"create": "Inviter",
+		"emailSent": "Invitation envoyée par email. Vous pouvez aussi partager le lien :",
+		"emailNotSent": "Email non envoyé (SMTP non configuré). Partagez ce lien à usage unique :",
+		"pending": "Invitations en attente",
+		"none": "Aucune invitation en attente.",
+		"expires": "expire le",
+		"revoke": "Révoquer"
 	},
 	"jiraImport": {
 		"cancel": "Annuler",
@@ -1621,7 +1681,30 @@
 			"autoSyncOnLoad": "Synchronisation automatique au chargement",
 			"autoSyncDescription": "Récupérer automatiquement les problèmes au chargement du projet",
 			"enableGitHubIssues": "Activer les problèmes GitHub",
-			"syncIssuesFromGitHubAndCreateTasksAutomatically": "Synchroniser les problèmes depuis GitHub et créer des tâches automatiquement"
+			"syncIssuesFromGitHubAndCreateTasksAutomatically": "Synchroniser les problèmes depuis GitHub et créer des tâches automatiquement",
+			"githubAuthentication": "Authentification GitHub",
+			"useManualToken": "Utiliser un jeton manuel",
+			"patLabel": "Jeton d'accès personnel",
+			"useOAuthInstead": "Utiliser OAuth à la place",
+			"patHelpBefore": "Créez un jeton avec le scope",
+			"patHelpAfter": "depuis les",
+			"githubSettingsLink": "Paramètres GitHub",
+			"repository": "Dépôt",
+			"repositoryFormatPrefix": "Format :",
+			"repositoryFormatExample": "(ex. : facebook/react)",
+			"repositoryPlaceholder": "propriétaire/dépôt",
+			"loadingRepositories": "Chargement des dépôts...",
+			"selectRepository": "Sélectionnez un dépôt...",
+			"enterManually": "Saisir manuellement",
+			"searchRepositories": "Rechercher des dépôts...",
+			"noMatchingRepositories": "Aucun dépôt correspondant",
+			"noRepositoriesFound": "Aucun dépôt trouvé",
+			"selectedLabel": "Sélectionné",
+			"checkingConnection": "Vérification de la connexion...",
+			"connectedToGitHub": "Connecté à GitHub",
+			"notConnectedToGitHub": "Non connecté à GitHub",
+			"failedToLoadBranches": "Échec du chargement des branches",
+			"failedToLoadRepositories": "Échec du chargement des dépôts"
 		},
 		"gitlab": {
 			"description": "Synchronisation des issues GitLab",
