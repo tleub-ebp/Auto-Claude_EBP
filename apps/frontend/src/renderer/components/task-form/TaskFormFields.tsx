@@ -17,9 +17,10 @@ import {
 	WandSparkles,
 	X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MAX_IMAGES_PER_TASK } from "../../../shared/constants";
+import { providerRegistry } from "../../../shared/services/providerRegistry";
 import type {
 	ImageAttachment,
 	TaskCategory,
@@ -41,6 +42,13 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { ClassificationFields } from "./ClassificationFields";
 import { ImagePreviewModal } from "./ImagePreviewModal";
@@ -76,6 +84,15 @@ interface TaskFormFieldsProps {
 	profileId: string;
 	model: string | "";
 	thinkingLevel: ThinkingLevel | "";
+	/**
+	 * Active LLM provider for this task. When `onProviderChange` is provided, a
+	 * provider selector is rendered above the agent profile and the chosen
+	 * provider is forwarded to AgentProfileSelector (so its model catalog and
+	 * labels follow the provider). When omitted, the provider falls back to the
+	 * global selection (creation wizard behaviour).
+	 */
+	provider?: string;
+	onProviderChange?: (provider: string) => void;
 	phaseModels?: PhaseModelConfig;
 	phaseThinking?: PhaseThinkingConfig;
 	onProfileChange: (
@@ -120,6 +137,15 @@ interface TaskFormFieldsProps {
 	// ID prefix for accessibility
 	idPrefix?: string;
 
+	/**
+	 * Which subset of fields to render. Lets the edit/duplicate dialog split into
+	 * a 2-step wizard so the engine configuration gets a dedicated, prominent page:
+	 *  - "content": everything except the agent/engine configuration;
+	 *  - "engine": only the agent profile (Provider · LLM · Effort), with a heading;
+	 *  - "all" (default): single page (used by the creation wizard).
+	 */
+	section?: "all" | "content" | "engine";
+
 	/** Optional children to render after description (e.g., @ mention highlight overlay) */
 	children?: ReactNode;
 
@@ -141,6 +167,8 @@ export function TaskFormFields({
 	profileId,
 	model,
 	thinkingLevel,
+	provider,
+	onProviderChange,
 	phaseModels,
 	phaseThinking,
 	onProfileChange,
@@ -168,10 +196,25 @@ export function TaskFormFields({
 	error,
 	onError,
 	idPrefix = "",
+	section = "all",
 	children,
 	onFileReferenceDrop,
 }: TaskFormFieldsProps) {
 	const { t } = useTranslation(["tasks", "common"]);
+	// Which step of the (optional) 2-step wizard this render belongs to.
+	const inContent = section !== "engine";
+	const inEngine = section !== "content";
+
+	// Provider options (single source of truth: providerRegistry), excluding the
+	// "claude" alias and the "custom" enterprise entry — mirrors getStaticProviders.
+	const providerOptions = useMemo(
+		() =>
+			providerRegistry
+				.getAllProviders()
+				.filter((p) => p.name !== "claude" && p.name !== "custom")
+				.map((p) => ({ value: p.name, label: p.label })),
+		[],
+	);
 	// Use external ref if provided (for @ mention autocomplete), otherwise use internal ref
 	const internalDescriptionRef = useRef<HTMLTextAreaElement>(null);
 	const descriptionRef = externalDescriptionRef || internalDescriptionRef;
@@ -329,6 +372,8 @@ export function TaskFormFields({
 			/>
 
 			<div className="space-y-6">
+				{/* Content group (page 1 in the 2-step wizard) */}
+				<div className={cn("space-y-6", !inContent && "hidden")}>
 				{/* Title (Optional) — shown first so it reads top-to-bottom */}
 				<div className="space-y-2">
 					<Label
@@ -564,21 +609,74 @@ export function TaskFormFields({
 					</div>
 				)}
 
-				{/* Agent Profile Selection */}
-				<AgentProfileSelector
-					profileId={profileId}
-					model={model}
-					thinkingLevel={thinkingLevel}
-					phaseModels={phaseModels}
-					phaseThinking={phaseThinking}
-					onProfileChange={onProfileChange}
-					onModelChange={onModelChange}
-					onThinkingLevelChange={onThinkingLevelChange}
-					onPhaseModelsChange={onPhaseModelsChange}
-					onPhaseThinkingChange={onPhaseThinkingChange}
-					disabled={disabled}
-				/>
+				</div>
 
+				{/* Engine group (page 2 in the 2-step wizard): the Provider · LLM ·
+				    Effort configuration, given a dedicated heading when isolated. */}
+				<div className={cn("space-y-4", !inEngine && "hidden")}>
+					{section === "engine" && (
+						<div className="space-y-1">
+							<h3 className="text-base font-semibold text-foreground">
+								{t("tasks:form.engineStepTitle")}
+							</h3>
+							<p className="text-sm text-muted-foreground">
+								{t("tasks:form.engineStepDescription")}
+							</p>
+						</div>
+					)}
+
+					{/* Provider selection (per task) — drives the model catalog below */}
+					{onProviderChange && (
+						<div className="space-y-2">
+							<Label
+								htmlFor={`${prefix}provider`}
+								className="text-sm font-medium text-foreground"
+							>
+								{t("tasks:form.providerLabel")}
+							</Label>
+							<Select
+								value={provider || undefined}
+								onValueChange={onProviderChange}
+								disabled={disabled}
+							>
+								<SelectTrigger id={`${prefix}provider`} className="h-10">
+									<SelectValue
+										placeholder={t("tasks:form.providerPlaceholder")}
+									/>
+								</SelectTrigger>
+								<SelectContent>
+									{providerOptions.map((p) => (
+										<SelectItem key={p.value} value={p.value}>
+											{p.label}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							<p className="text-xs text-muted-foreground">
+								{t("tasks:form.providerHelp")}
+							</p>
+						</div>
+					)}
+
+					{/* Agent Profile Selection */}
+					<AgentProfileSelector
+						profileId={profileId}
+						model={model}
+						thinkingLevel={thinkingLevel}
+						provider={provider}
+						phaseModels={phaseModels}
+						phaseThinking={phaseThinking}
+						onProfileChange={onProfileChange}
+						onModelChange={onModelChange}
+						onThinkingLevelChange={onThinkingLevelChange}
+						onPhaseModelsChange={onPhaseModelsChange}
+						onPhaseThinkingChange={onPhaseThinkingChange}
+						disabled={disabled}
+					/>
+				</div>
+
+				{/* Content group (continued, page 1) */}
+				<div className={cn("space-y-6", !inContent && "hidden")}>
 				{/* Classification Toggle */}
 				<button
 					type="button"
@@ -663,7 +761,9 @@ export function TaskFormFields({
 					</div>
 				</div>
 
-				{/* Error Display */}
+				</div>
+
+				{/* Error Display — always visible regardless of the active step */}
 				{error && (
 					<div
 						className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive"

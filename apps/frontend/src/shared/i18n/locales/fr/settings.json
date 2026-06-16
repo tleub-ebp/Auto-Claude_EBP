@@ -683,6 +683,7 @@
 		"selectThinkingLevel": "Sélectionner un niveau de réflexion",
 		"autoLabel": "Auto (Optimisé)",
 		"autoDescription": "Utilise Opus pour toutes les phases avec des niveaux de réflexion optimisés",
+		"autoDescriptionModel": "Utilise {{model}} pour toutes les phases avec des niveaux de réflexion optimisés",
 		"phaseConfiguration": "Configuration des Phases",
 		"phaseConfigurationDescription": "Configurez les modèles et les niveaux de réflexion pour chaque phase du pipeline de développement",
 		"phases": {
