@@ -46,6 +46,7 @@ export function FormulaCard({
 	return (
 		// A div (not a button) so the inner "Apply" Button isn't a nested button —
 		// nested <button> is invalid HTML and triggers a hydration error.
+		// biome-ignore lint/a11y/useSemanticElements: nested button constraint required
 		<div
 			role="button"
 			tabIndex={0}

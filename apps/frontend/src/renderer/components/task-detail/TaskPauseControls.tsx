@@ -1,8 +1,10 @@
 import { Info, Loader2, Pause, Play, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { THINKING_LEVELS } from "../../../shared/constants/models";
 import { getModelsForProvider } from "../../../shared/services/providerRegistry";
 import type { Task } from "../../../shared/types";
+import type { ThinkingLevel } from "../../../shared/types/settings";
 import { getStaticProviders } from "../../../shared/utils/providers";
 import { debugError } from "../../../shared/utils/debug-logger";
 import { useToast } from "../../hooks/use-toast";
@@ -57,6 +59,14 @@ export function TaskPauseControls({
 	);
 	const [selectedModel, setSelectedModel] = useState(
 		task.metadata?.paused?.model || task.metadata?.model || "",
+	);
+	// Reasoning "effort" applied to the resumed run. Seed it from the task's
+	// current single thinking level, falling back to the coding phase's per-phase
+	// level, then a sensible default.
+	const [selectedEffort, setSelectedEffort] = useState<ThinkingLevel>(
+		task.metadata?.thinkingLevel ||
+			task.metadata?.phaseThinking?.coding ||
+			"medium",
 	);
 
 	// The task has finished its current step and the process exited — only then
@@ -143,6 +153,7 @@ export function TaskPauseControls({
 				task.id,
 				selectedProvider,
 				selectedModel || undefined,
+				selectedEffort,
 			);
 			if (res?.success) {
 				toast({
@@ -179,7 +190,7 @@ export function TaskPauseControls({
 		} finally {
 			setIsResuming(false);
 		}
-	}, [task.id, selectedProvider, selectedModel, toast, t]);
+	}, [task.id, selectedProvider, selectedModel, selectedEffort, toast, t]);
 
 	return (
 		<div className="overflow-hidden rounded-lg border bg-muted/20">
@@ -293,7 +304,7 @@ export function TaskPauseControls({
 					) : (
 						<div
 							className={`grid gap-2 ${
-								models.length > 0 ? "grid-cols-2" : "grid-cols-1"
+								models.length > 0 ? "grid-cols-3" : "grid-cols-2"
 							}`}
 						>
 							<div className="space-y-1">
@@ -339,6 +350,29 @@ export function TaskPauseControls({
 									</Select>
 								</div>
 							)}
+
+							<div className="space-y-1">
+								<div className="text-xs font-medium text-muted-foreground">
+									{t("tasks:modal.actions.chooseEffort", "Effort")}
+								</div>
+								<Select
+									value={selectedEffort}
+									onValueChange={(value) =>
+										setSelectedEffort(value as ThinkingLevel)
+									}
+								>
+									<SelectTrigger className="h-8">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{THINKING_LEVELS.map((level) => (
+											<SelectItem key={level.value} value={level.value}>
+												{level.label}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
 						</div>
 					)}
 

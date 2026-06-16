@@ -27,8 +27,8 @@
  * ```
  */
 
-import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	DEFAULT_AGENT_PROFILES,
@@ -48,9 +48,11 @@ import type {
 	PhaseModelConfig,
 	PhaseThinkingConfig,
 } from "../../shared/types/settings";
+import { cn } from "../lib/utils";
 import { useProjectStore } from "../stores/project-store";
 import { useSettingsStore } from "../stores/settings-store";
-import { persistUpdateTask } from "../stores/task-store";
+import { duplicateTask, persistUpdateTask } from "../stores/task-store";
+import { useProviderContext } from "./ProviderContext";
 import { TaskFormFields } from "./task-form/TaskFormFields";
 import { TaskModalLayout } from "./task-form/TaskModalLayout";
 import type { FileReferenceData } from "./task-form/useImageUpload";
@@ -60,16 +62,25 @@ import { Button } from "./ui/button";
  * Props for the TaskEditDialog component
  */
 interface TaskEditDialogProps {
-	/** The task to edit */
+	/** The task to edit (in "duplicate" mode, the source task to clone) */
 	readonly task: Task;
 	/** Whether the dialog is open */
 	readonly open: boolean;
 	/** Callback when the dialog open state changes */
 	readonly onOpenChange: (open: boolean) => void;
-	/** Optional callback when task is successfully saved */
+	/** Optional callback when task is successfully saved (edit mode) */
 	readonly onSaved?: () => void;
 	/** Callback pour fermeture explicite de la tâche courante (remonte jusqu'à App.tsx) */
 	readonly onCloseTask?: () => void;
+	/**
+	 * Dialog behaviour:
+	 * - "edit" (default): update the existing task in place.
+	 * - "duplicate": pre-fill from the source task, let the user edit the
+	 *   fields, then create a brand-new backlog task on submit.
+	 */
+	readonly mode?: "edit" | "duplicate";
+	/** Optional callback when a duplicate is successfully created (duplicate mode) */
+	readonly onCreated?: (newTaskId: string) => void;
 }
 
 export function TaskEditDialog({
@@ -78,10 +89,19 @@ export function TaskEditDialog({
 	onOpenChange,
 	onSaved,
 	onCloseTask,
+	mode = "edit",
+	onCreated,
 }: TaskEditDialogProps) {
 	const { t } = useTranslation(["tasks", "common"]);
+	const isDuplicate = mode === "duplicate";
+	// In duplicate mode the title is pre-filled with a localized "(copy)" suffix.
+	const initialTitle = isDuplicate
+		? `${task.title} ${t("tasks:actions.duplicateSuffix")}`
+		: task.title;
 	// Get selected agent profile from settings for defaults
 	const { settings } = useSettingsStore();
+	// Global provider, used as the per-task default when the task has none yet.
+	const { selectedProvider } = useProviderContext();
 	const selectedProfile =
 		DEFAULT_AGENT_PROFILES.find(
 			(p) => p.id === settings.selectedAgentProfile,
@@ -96,11 +116,14 @@ export function TaskEditDialog({
 	}, [projects, task.projectId]);
 
 	// Form state
-	const [title, setTitle] = useState(task.title);
+	const [title, setTitle] = useState(initialTitle);
 	const [description, setDescription] = useState(task.description);
 	const [isSaving, setIsSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [showClassification, setShowClassification] = useState(false);
+	// 2-step wizard: 1 = task details, 2 = execution engine (provider/LLM/effort),
+	// so the engine choice gets a dedicated, prominent page instead of being buried.
+	const [step, setStep] = useState<1 | 2>(1);
 
 	// Classification fields
 	const [category, setCategory] = useState<TaskCategory | "">(
@@ -115,6 +138,14 @@ export function TaskEditDialog({
 	const [impact, setImpact] = useState<TaskImpact | "">(
 		task.metadata?.impact || "",
 	);
+
+	// Per-task LLM provider. Defaults to the task's own provider, else the global
+	// selection. `initialProviderRef` lets edit mode tell "untouched" from an
+	// explicit change so we don't silently pin a provider the user didn't pick.
+	const defaultProvider =
+		task.metadata?.provider || selectedProvider || "anthropic";
+	const [provider, setProvider] = useState<string>(defaultProvider);
+	const initialProviderRef = useRef<string>(defaultProvider);
 
 	// Agent profile / model configuration
 	const [profileId, setProfileId] = useState<string>(() => {
@@ -169,7 +200,7 @@ export function TaskEditDialog({
 	// Reset form when task changes or dialog opens
 	useEffect(() => {
 		if (open) {
-			setTitle(task.title);
+			setTitle(initialTitle);
 			setDescription(task.description);
 			setCategory(task.metadata?.category || "");
 			setPriority(task.metadata?.priority || "");
@@ -218,7 +249,12 @@ export function TaskEditDialog({
 				task.metadata?.requireReviewBeforeCoding ?? false,
 			);
 			setTddMode(task.metadata?.tddMode ?? false);
+			const resolvedProvider =
+				task.metadata?.provider || selectedProvider || "anthropic";
+			setProvider(resolvedProvider);
+			initialProviderRef.current = resolvedProvider;
 			setError(null);
+			setStep(1);
 
 			// Auto-expand classification if it has content
 			if (
@@ -235,11 +271,13 @@ export function TaskEditDialog({
 	}, [
 		open,
 		task,
+		initialTitle,
 		settings.selectedAgentProfile,
 		selectedProfile.model,
 		selectedProfile.thinkingLevel,
 		selectedProfile.phaseModels,
 		selectedProfile.phaseThinking,
+		selectedProvider,
 	]);
 
 	// Resolve Azure DevOps attachment images (PAT-protected URLs the renderer
@@ -296,37 +334,46 @@ export function TaskEditDialog({
 			return;
 		}
 
-		// Check if anything changed
 		const trimmedTitle = title.trim();
 		const trimmedDescription = description.trim();
-		const hasChanges =
-			trimmedTitle !== task.title ||
-			trimmedDescription !== task.description ||
-			category !== (task.metadata?.category || "") ||
-			priority !== (task.metadata?.priority || "") ||
-			complexity !== (task.metadata?.complexity || "") ||
-			impact !== (task.metadata?.impact || "") ||
-			model !== (task.metadata?.model || "") ||
-			thinkingLevel !== (task.metadata?.thinkingLevel || "") ||
-			requireReviewBeforeCoding !==
-				(task.metadata?.requireReviewBeforeCoding ?? false) ||
-			tddMode !== (task.metadata?.tddMode ?? false) ||
-			JSON.stringify(images) !==
-				JSON.stringify(task.metadata?.attachedImages || []) ||
-			JSON.stringify(phaseModels) !==
-				JSON.stringify(task.metadata?.phaseModels || DEFAULT_PHASE_MODELS) ||
-			JSON.stringify(phaseThinking) !==
-				JSON.stringify(task.metadata?.phaseThinking || DEFAULT_PHASE_THINKING);
+		// Provider is "changed" only when the user picked a different one than the
+		// value the dialog opened with (so plain edits don't pin a provider).
+		const providerChanged = provider !== initialProviderRef.current;
 
-		if (!hasChanges) {
-			onOpenChange(false);
-			return;
+		// Edit mode short-circuits when nothing changed. Duplicate always creates.
+		if (!isDuplicate) {
+			const hasChanges =
+				trimmedTitle !== task.title ||
+				trimmedDescription !== task.description ||
+				category !== (task.metadata?.category || "") ||
+				priority !== (task.metadata?.priority || "") ||
+				complexity !== (task.metadata?.complexity || "") ||
+				impact !== (task.metadata?.impact || "") ||
+				providerChanged ||
+				model !== (task.metadata?.model || "") ||
+				thinkingLevel !== (task.metadata?.thinkingLevel || "") ||
+				requireReviewBeforeCoding !==
+					(task.metadata?.requireReviewBeforeCoding ?? false) ||
+				tddMode !== (task.metadata?.tddMode ?? false) ||
+				JSON.stringify(images) !==
+					JSON.stringify(task.metadata?.attachedImages || []) ||
+				JSON.stringify(phaseModels) !==
+					JSON.stringify(task.metadata?.phaseModels || DEFAULT_PHASE_MODELS) ||
+				JSON.stringify(phaseThinking) !==
+					JSON.stringify(
+						task.metadata?.phaseThinking || DEFAULT_PHASE_THINKING,
+					);
+
+			if (!hasChanges) {
+				onOpenChange(false);
+				return;
+			}
 		}
 
 		setIsSaving(true);
 		setError(null);
 
-		// Build metadata updates
+		// Build metadata updates (shared by edit + duplicate)
 		const metadataUpdates: Partial<typeof task.metadata> = {};
 		if (category) metadataUpdates.category = category;
 		if (priority) metadataUpdates.priority = priority;
@@ -339,6 +386,18 @@ export function TaskEditDialog({
 			metadataUpdates.phaseModels = phaseModels;
 			metadataUpdates.phaseThinking = phaseThinking;
 		}
+		// Pin the provider on this task (uniformly across phases) when it was
+		// chosen for a clone or explicitly changed, so the task runs with the
+		// selected provider regardless of the global selection.
+		if ((isDuplicate || providerChanged) && provider) {
+			metadataUpdates.provider = provider;
+			metadataUpdates.phaseProviders = {
+				spec: provider,
+				planning: provider,
+				coding: provider,
+				qa: provider,
+			};
+		}
 		// Always set attachedImages to persist removal when all images are deleted
 		metadataUpdates.attachedImages = images.length > 0 ? images : [];
 		metadataUpdates.requireReviewBeforeCoding = requireReviewBeforeCoding;
@@ -346,6 +405,26 @@ export function TaskEditDialog({
 		// "inherit project default" (undefined) is preserved unless explicitly changed.
 		if (tddMode !== (task.metadata?.tddMode ?? false)) {
 			metadataUpdates.tddMode = tddMode;
+		}
+
+		if (isDuplicate) {
+			// Clone the source task (copies spec.md/requirements/metadata/attachments
+			// on disk, preserving images), then apply the edited fields to the
+			// freshly created backlog task.
+			const dup = await duplicateTask(task.id, trimmedTitle);
+			if (dup.success && dup.task) {
+				await persistUpdateTask(dup.task.id, {
+					title: trimmedTitle,
+					description: trimmedDescription,
+					metadata: metadataUpdates,
+				});
+				onOpenChange(false);
+				onCreated?.(dup.task.id);
+			} else {
+				setError(dup.error || t("tasks:duplicate.errors.createFailed"));
+			}
+			setIsSaving(false);
+			return;
 		}
 
 		const success = await persistUpdateTask(task.id, {
@@ -366,37 +445,88 @@ export function TaskEditDialog({
 
 	const isValid = description.trim().length > 0;
 
+	// Advance to the engine step, enforcing the only hard requirement (description)
+	// before leaving the details page.
+	const goToEngineStep = () => {
+		if (!description.trim()) {
+			setError(t("tasks:form.errors.descriptionRequired"));
+			return;
+		}
+		setError(null);
+		setStep(2);
+	};
+
 	return (
 		<TaskModalLayout
 			open={open}
 			onOpenChange={onOpenChange}
-			title={t("tasks:edit.title")}
-			description={t("tasks:edit.description")}
+			title={isDuplicate ? t("tasks:duplicate.title") : t("tasks:edit.title")}
+			description={
+				isDuplicate
+					? t("tasks:duplicate.description")
+					: t("tasks:edit.description")
+			}
 			disabled={isSaving}
 			onClose={onCloseTask}
 			footer={
-				<div className="flex items-center justify-end gap-3">
-					<Button
-						variant="outline"
-						onClick={() => onOpenChange(false)}
-						disabled={isSaving}
-					>
-						{t("common:buttons.cancel")}
-					</Button>
-					<Button onClick={handleSave} disabled={isSaving || !isValid}>
-						{isSaving ? (
+				<div className="flex items-center justify-between gap-3">
+					{/* Step indicator — makes the 2 pages explicit */}
+					<div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+						<span className={cn(step === 1 && "font-medium text-foreground")}>
+							1. {t("tasks:form.stepDetails")}
+						</span>
+						<ChevronRight className="h-3.5 w-3.5" />
+						<span className={cn(step === 2 && "font-medium text-foreground")}>
+							2. {t("tasks:form.stepEngine")}
+						</span>
+					</div>
+					<div className="flex items-center gap-3">
+						{step === 1 ? (
 							<>
-								<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-								{t("common:buttons.saving")}
+								<Button
+									variant="outline"
+									onClick={() => onOpenChange(false)}
+									disabled={isSaving}
+								>
+									{t("common:buttons.cancel")}
+								</Button>
+								<Button onClick={goToEngineStep} disabled={isSaving || !isValid}>
+									{t("tasks:form.nextStep")}
+									<ChevronRight className="ml-2 h-4 w-4" />
+								</Button>
 							</>
 						) : (
-							t("tasks:edit.saveChanges")
+							<>
+								<Button
+									variant="outline"
+									onClick={() => setStep(1)}
+									disabled={isSaving}
+								>
+									<ChevronLeft className="mr-2 h-4 w-4" />
+									{t("tasks:form.previousStep")}
+								</Button>
+								<Button onClick={handleSave} disabled={isSaving || !isValid}>
+									{isSaving ? (
+										<>
+											<Loader2 className="mr-2 h-4 w-4 animate-spin" />
+											{isDuplicate
+												? t("common:buttons.creating")
+												: t("common:buttons.saving")}
+										</>
+									) : isDuplicate ? (
+										t("tasks:duplicate.createButton")
+									) : (
+										t("tasks:edit.saveChanges")
+									)}
+								</Button>
+							</>
 						)}
-					</Button>
+					</div>
 				</div>
 			}
 		>
 			<TaskFormFields
+				section={step === 1 ? "content" : "engine"}
 				projectPath={projectPath}
 				specId={task.specId}
 				description={description}
@@ -407,6 +537,8 @@ export function TaskEditDialog({
 				profileId={profileId}
 				model={model}
 				thinkingLevel={thinkingLevel}
+				provider={provider}
+				onProviderChange={setProvider}
 				phaseModels={phaseModels}
 				phaseThinking={phaseThinking}
 				onProfileChange={(newProfileId, newModel, newThinkingLevel) => {

@@ -8,6 +8,7 @@ import {
 	Edit3,
 	FileCode,
 	ListChecks,
+	MessageSquarePlus,
 	Plus,
 	Trash2,
 	XCircle,
@@ -406,6 +407,11 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 										"border-amber-500/50 bg-amber-500/10",
 									subtask.status === "failed" &&
 										"border-[var(--error)]/50 bg-[var(--error-light)]",
+									// User-requested changes get a distinct violet treatment so they
+									// stand out from the originally-planned subtasks, whatever their
+									// status. Last in the list so it wins the bg/border merge.
+									subtask.origin === "change_request" &&
+										"border-violet-500/50 bg-violet-500/10 hover:bg-violet-500/15",
 								)}
 							>
 								<div className="flex items-start gap-2 w-full">
@@ -420,6 +426,12 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 											>
 												#{index + 1}
 											</span>
+											{subtask.origin === "change_request" && (
+												<span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-600 dark:text-violet-400 flex-shrink-0">
+													<MessageSquarePlus className="h-2.5 w-2.5" />
+													{t("tasks:subtasks.changeRequest")}
+												</span>
+											)}
 											<Tooltip>
 												<TooltipTrigger asChild>
 													<span className="text-sm font-medium text-foreground truncate cursor-default">
@@ -449,6 +461,16 @@ export function TaskSubtasks({ task, onUpdatePlan }: TaskSubtasksProps) {
 											</Tooltip>
 											<ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
 										</div>
+										{subtask.origin === "change_request" &&
+											subtask.requestedAt && (
+												<p className="mt-0.5 text-[10px] text-violet-600/70 dark:text-violet-400/70">
+													{t("tasks:subtasks.requestedAt", {
+														date: new Date(
+															subtask.requestedAt,
+														).toLocaleString(),
+													})}
+												</p>
+											)}
 										{subtask.status === "blocked" && (
 											<div className="mt-1.5 flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-400">
 												<AlertTriangle className="h-3 w-3 mt-0.5 flex-shrink-0" />
