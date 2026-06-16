@@ -166,6 +166,7 @@ def _build_client(
             model=model,
             agent_type="commit_message",
             provider=provider,
+            system_prompt=system_prompt,
         )
 
     logger.info(
