@@ -14,11 +14,12 @@ Exposes two endpoints used by the Kanban Quick-Command bar:
   POST /api/slash-commands/run
        Body: { project_dir: str, command: str, args?: str }
        Resolves the command's instruction body from the agnostic
-       `.agents/skills/` source and runs it as a single-turn prompt against the
-       project's active provider via core.oneshot.oneshot_completion — so it
-       works regardless of the LLM/IDE driving the task. Falls back to the
-       Claude slash resolver (create_simple_client) only when the oneshot
-       runner is unavailable or no definition is found.
+       `.agents/skills/` source and runs it with a tool-enabled, multi-turn
+       agent on the project's active provider via core.client.create_agent_client
+       — so a BMAD workflow can read its `_bmad/` files, follow its steps and
+       write outputs, regardless of the LLM/IDE driving the task. Degrades to a
+       one-shot completion (core.oneshot) and finally the Claude slash resolver
+       (create_simple_client) when the richer runners are unavailable.
 
 The router is mounted from provider_api.py alongside the other domain APIs.
 
@@ -278,6 +279,63 @@ async def _invoke_in_proactor_thread(coro_factory) -> tuple[bool, str]:
     return await _a.to_thread(_worker)
 
 
+# Build/availability failures from the tool-enabled path that should trigger a
+# graceful fallback to the lighter runners (vs a genuine workflow runtime error,
+# which we surface as-is).
+_AGENT_FALLBACK_PREFIXES = (
+    "agent runner not available",
+    "failed to build agent client",
+)
+
+
+async def _agent_workflow_call(proj: Path, prompt: str) -> tuple[bool, str]:
+    """Run `prompt` as a multi-turn, tool-enabled agent against the active provider.
+
+    Unlike `_agnostic_call` (single-turn, no tools), this builds a full
+    task-execution client (read/write/web tools, multi-turn) via
+    `core.client.create_agent_client`, so the agent can actually READ the
+    referenced `_bmad/` workflow files, follow the multi-step workflow and WRITE
+    its output documents. The provider is resolved from the project config
+    (Claude / Copilot / OpenAI / Windsurf …) — fully provider-agnostic.
+
+    Returns (False, "<prefix>: …") with a prefix in `_AGENT_FALLBACK_PREFIXES`
+    when the client could not be built, so the caller degrades to `_agnostic_call`.
+    """
+    try:
+        from core.client import _get_active_provider, create_agent_client
+        from core.oneshot import _extract_text, _resolve_model
+    except ImportError as exc:
+        return False, f"agent runner not available: {exc}"
+
+    try:
+        provider = _get_active_provider(proj)
+        model = _resolve_model(provider, None, proj)
+        # spec_dir == project_dir: the Quick-Command bar is project-scoped (no
+        # per-task spec). agent_type="coder" carries the read+write+web tool set
+        # needed to run a BMAD workflow end to end.
+        client = create_agent_client(
+            project_dir=proj,
+            spec_dir=proj,
+            model=model,
+            agent_type="coder",
+            provider=provider,
+        )
+    except Exception as exc:
+        logger.exception("[slash-commands] failed to build agent client")
+        return False, f"failed to build agent client: {exc}"
+
+    text = ""
+    try:
+        async with client:
+            await client.query(prompt)
+            async for msg in client.receive_response():
+                text += _extract_text(msg)
+    except Exception as exc:
+        logger.exception("[slash-commands] agent workflow call failed")
+        return False, f"workflow run failed: {exc}"
+    return True, text.strip()
+
+
 async def _agnostic_call(proj: Path, prompt: str) -> tuple[bool, str]:
     """Run a one-shot prompt against the project's active provider.
 
@@ -338,11 +396,13 @@ async def _sdk_call(proj: Path, prompt: str) -> tuple[bool, str]:
 
 @router.post("/api/slash-commands/run")
 async def run_slash_command(payload: Annotated[dict, Body()]):
-    """Fire a slash command as a single-turn prompt against the active provider.
+    """Fire a slash command against the project's active provider.
 
     The command body is resolved from the agnostic `.agents/skills/` source and
-    executed via core.oneshot (provider/IDE/LLM-agnostic). Falls back to the
-    Claude slash resolver only when the oneshot runner is unavailable.
+    executed by a tool-enabled, multi-turn agent (provider/IDE/LLM-agnostic) so a
+    BMAD workflow can read its `_bmad/` files, run its steps and write outputs.
+    Degrades to a one-shot completion, then to the Claude slash resolver, only
+    when the richer runners are unavailable.
 
     Body schema:
         project_dir: str   absolute path to the project (required)
@@ -384,15 +444,24 @@ async def run_slash_command(payload: Annotated[dict, Body()]):
         prompt = body
         if args.strip():
             prompt = f"{prompt}\n\nArguments: {args.strip()}"
+
+        # Preferred: tool-enabled, multi-turn agent on the active provider so the
+        # command (e.g. a BMAD workflow) can read the referenced _bmad/ files,
+        # run its steps and write outputs — works for Claude/Copilot/OpenAI/
+        # Windsurf alike.
         ok, text = await _invoke_in_proactor_thread(
-            lambda: _agnostic_call(proj, prompt)
+            lambda: _agent_workflow_call(proj, prompt)
         )
-        # Only when the agnostic runner is unavailable do we fall back to the
-        # Claude slash resolver (keeps Claude-only environments working).
-        if not ok and text.startswith("oneshot runner not available"):
+        # Degrade only when the agent client couldn't be built (not on genuine
+        # workflow runtime errors, which we surface as-is).
+        if not ok and text.startswith(_AGENT_FALLBACK_PREFIXES):
             ok, text = await _invoke_in_proactor_thread(
-                lambda: _sdk_call(proj, display)
+                lambda: _agnostic_call(proj, prompt)
             )
+            if not ok and text.startswith("oneshot runner not available"):
+                ok, text = await _invoke_in_proactor_thread(
+                    lambda: _sdk_call(proj, display)
+                )
         if ok:
             return {"success": True, "prompt": display, "result": text}
         return {"success": False, "prompt": display, "error": text}
