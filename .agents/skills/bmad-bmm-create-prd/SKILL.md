@@ -1,6 +1,6 @@
 ---
 name: bmad-bmm-create-prd
-description: Create a PRD from scratch. Use when the user says ""lets create a product requirements document"" or ""I want to create a new PRD""
+description: Create a PRD from scratch. Use when the user says "lets create a product requirements document" or "I want to create a new PRD"
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:

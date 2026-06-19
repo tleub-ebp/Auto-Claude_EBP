@@ -4,18 +4,21 @@ Exposes two endpoints used by the Kanban Quick-Command bar:
 
   GET  /api/slash-commands?project_dir=<abs path>
        Returns the merged list of slash commands discovered from:
-       - <project_dir>/.claude/commands/*.md   (project-scoped)
-       - ~/.claude/commands/*.md               (user-scoped)
+       - <project_dir>/.agents/skills/*/SKILL.md  (agnostic, primary source)
+       - <project_dir>/.claude/commands/*.md       (Claude mirror, fallback)
+       - ~/.claude/commands/*.md                   (user-scoped fallback)
+       Commands already covered by the agnostic source are not duplicated.
        Each entry carries the parsed YAML frontmatter so the UI can render
        a description tooltip without an extra round-trip.
 
   POST /api/slash-commands/run
        Body: { project_dir: str, command: str, args?: str }
-       Runs the command as a single-turn SDK prompt via create_simple_client,
-       i.e. `prompt = f"/{command} {args}".strip()`. The Claude Agent SDK
-       resolves the slash command against the same filesystem sources (via
-       setting_sources="project"/"user" inherited from the factory) and
-       returns the result text.
+       Resolves the command's instruction body from the agnostic
+       `.agents/skills/` source and runs it as a single-turn prompt against the
+       project's active provider via core.oneshot.oneshot_completion — so it
+       works regardless of the LLM/IDE driving the task. Falls back to the
+       Claude slash resolver (create_simple_client) only when the oneshot
+       runner is unavailable or no definition is found.
 
 The router is mounted from provider_api.py alongside the other domain APIs.
 
@@ -114,6 +117,72 @@ def _scan_commands_dir(dir_path: Path, source: str) -> list[dict[str, Any]]:
     return items
 
 
+# Provider/IDE-agnostic command source. Each skill lives in its own folder as
+# `<project_dir>/.agents/skills/<name>/SKILL.md`. This is the single source of
+# truth the Kanban uses regardless of which LLM/IDE drives the task, instead of
+# the Claude-specific `.claude/commands/*.md` mirror.
+_AGNOSTIC_SKILLS_SUBDIR = Path(".agents") / "skills"
+
+
+def _scan_skills_dir(project_dir: Path, source: str) -> list[dict[str, Any]]:
+    """Return one entry per `.agents/skills/*/SKILL.md`. Missing dir → []."""
+    base = project_dir / _AGNOSTIC_SKILLS_SUBDIR
+    if not base.exists() or not base.is_dir():
+        return []
+    items: list[dict[str, Any]] = []
+    try:
+        skill_files = sorted(base.glob("*/SKILL.md"))
+    except OSError:
+        return []
+    for f in skill_files:
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        meta, _ = _parse_frontmatter(text)
+        items.append(
+            {
+                # The folder name is the command name (e.g. /bmad-bmm-create-prd).
+                "name": meta.get("name") or f.parent.name,
+                "description": meta.get("description") or meta.get("desc") or "",
+                "source": source,
+                "path": str(f),
+            }
+        )
+    return items
+
+
+def _resolve_command_body(proj: Path, command: str) -> str | None:
+    """Return the prompt body for `command` from the agnostic source.
+
+    Resolution order (first hit wins):
+      1. <proj>/.agents/skills/<command>/SKILL.md   (agnostic, preferred)
+      2. <proj>/.claude/commands/<command>.md       (Claude mirror, fallback)
+      3. ~/.claude/commands/<command>.md            (user-scoped fallback)
+
+    The frontmatter is stripped so the returned text is the raw instructions
+    any provider can execute. Returns None when no definition is found (the
+    caller then degrades to the SDK slash-command resolver).
+    """
+    candidates = [
+        proj / _AGNOSTIC_SKILLS_SUBDIR / command / "SKILL.md",
+        proj / ".claude" / "commands" / f"{command}.md",
+        Path.home() / ".claude" / "commands" / f"{command}.md",
+    ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                _, body = _parse_frontmatter(
+                    path.read_text(encoding="utf-8", errors="replace")
+                )
+                body = body.strip()
+                if body:
+                    return body
+        except OSError:
+            continue
+    return None
+
+
 # Built-in slash commands the SDK / CLI recognises AND that make sense in
 # our one-shot Quick-Command bar. Commands that operate on a persistent
 # conversation (/compact, /clear, /save, /resume…) are intentionally
@@ -136,36 +205,53 @@ _BUILT_IN_COMMANDS: list[dict[str, str]] = [
 def list_slash_commands(project_dir: Annotated[str, Query()]):
     """List discovered slash commands for a project.
 
-    Order: project commands first, then user commands, then built-ins.
-    Duplicates (same `name`) are kept — the UI groups them by source.
+    Order: agnostic project skills first, then any Claude-only mirror commands,
+    then user commands, then built-ins. Commands already provided by the
+    agnostic `.agents/skills/` source are not repeated from `.claude/commands`
+    (the Claude mirror is a fallback for non-skill commands only).
     """
     proj = _safe_project_dir(project_dir)
 
-    project_cmds = _scan_commands_dir(proj / ".claude" / "commands", "project")
-    user_cmds = _scan_commands_dir(Path.home() / ".claude" / "commands", "user")
+    # Primary, provider/IDE-agnostic source.
+    skill_cmds = _scan_skills_dir(proj, "project")
+    seen = {c["name"] for c in skill_cmds}
+
+    # Claude-specific mirror, kept only for commands not already covered above.
+    project_cmds = [
+        c
+        for c in _scan_commands_dir(proj / ".claude" / "commands", "project")
+        if c["name"] not in seen
+    ]
+    seen.update(c["name"] for c in project_cmds)
+    user_cmds = [
+        c
+        for c in _scan_commands_dir(Path.home() / ".claude" / "commands", "user")
+        if c["name"] not in seen
+    ]
     built_ins = [
         {**cmd, "source": "built-in", "path": ""} for cmd in _BUILT_IN_COMMANDS
     ]
 
     return {
         "success": True,
-        "commands": project_cmds + user_cmds + built_ins,
+        "commands": skill_cmds + project_cmds + user_cmds + built_ins,
     }
 
 
-async def _invoke_sdk_in_proactor_thread(proj: Path, prompt: str) -> tuple[bool, str]:
-    """Run the SDK call on a dedicated thread with its own Proactor loop.
+async def _invoke_in_proactor_thread(coro_factory) -> tuple[bool, str]:
+    """Run an async (success, text) call on a thread with its own Proactor loop.
 
     Why: uvicorn's running event loop is sometimes a SelectorEventLoop on
     Windows (depending on Python / uvicorn / FastAPI versions), and
-    SelectorEventLoop.subprocess_exec raises NotImplementedError. The Claude
-    Agent SDK launches `claude.exe` as a subprocess, so we MUST run it on a
-    loop that supports subprocess. Solution: spawn a worker thread, force a
-    Proactor loop there, and execute the whole SDK conversation inside it.
+    SelectorEventLoop.subprocess_exec raises NotImplementedError. The agent
+    clients (Claude SDK, Copilot CLI, …) launch a subprocess, so we MUST run on
+    a loop that supports subprocess. Solution: spawn a worker thread, force a
+    Proactor loop there, and execute the whole conversation inside it.
 
     This pattern is robust regardless of how uvicorn is started (`--reload`,
     no-reload, `--loop asyncio`, `--loop uvloop`, etc.).
 
+    `coro_factory` is a zero-arg callable returning the coroutine to await.
     Returns (success, text). On failure, text is the error message.
     """
     import asyncio as _a
@@ -180,7 +266,7 @@ async def _invoke_sdk_in_proactor_thread(proj: Path, prompt: str) -> tuple[bool,
         loop = _a.new_event_loop()
         try:
             _a.set_event_loop(loop)
-            return loop.run_until_complete(_sdk_call(proj, prompt))
+            return loop.run_until_complete(coro_factory())
         finally:
             try:
                 loop.close()
@@ -190,6 +276,27 @@ async def _invoke_sdk_in_proactor_thread(proj: Path, prompt: str) -> tuple[bool,
     # asyncio.to_thread schedules the worker on the default executor and
     # awaits its return value without blocking the FastAPI event loop.
     return await _a.to_thread(_worker)
+
+
+async def _agnostic_call(proj: Path, prompt: str) -> tuple[bool, str]:
+    """Run a one-shot prompt against the project's active provider.
+
+    Provider/IDE/LLM/effort-agnostic: routes through core.oneshot which resolves
+    whatever LLM the project is configured to use (Claude, Copilot, OpenAI,
+    Windsurf…) instead of the Claude-only slash-command resolver. The special
+    "oneshot runner not available" message lets the caller fall back to the SDK.
+    """
+    try:
+        from core.oneshot import oneshot_completion
+    except ImportError as exc:
+        return False, f"oneshot runner not available: {exc}"
+
+    try:
+        text = await oneshot_completion(prompt, project_dir=str(proj), max_turns=1)
+    except Exception as exc:
+        logger.exception("[slash-commands] agnostic call failed")
+        return False, f"command run failed: {exc}"
+    return True, (text or "").strip()
 
 
 async def _sdk_call(proj: Path, prompt: str) -> tuple[bool, str]:
@@ -231,7 +338,11 @@ async def _sdk_call(proj: Path, prompt: str) -> tuple[bool, str]:
 
 @router.post("/api/slash-commands/run")
 async def run_slash_command(payload: Annotated[dict, Body()]):
-    """Fire a slash command as a single-turn SDK prompt.
+    """Fire a slash command as a single-turn prompt against the active provider.
+
+    The command body is resolved from the agnostic `.agents/skills/` source and
+    executed via core.oneshot (provider/IDE/LLM-agnostic). Falls back to the
+    Claude slash resolver only when the oneshot runner is unavailable.
 
     Body schema:
         project_dir: str   absolute path to the project (required)
@@ -240,7 +351,7 @@ async def run_slash_command(payload: Annotated[dict, Body()]):
 
     Response:
         success:   bool
-        prompt:    str   the exact prompt sent to the SDK (for debugging)
+        prompt:    str   the `/command args` label (for display/debugging)
         result:    str   the model's text response (success path only)
         error:     str   error message (failure path only)
     """
@@ -263,11 +374,31 @@ async def run_slash_command(payload: Annotated[dict, Body()]):
         )
 
     proj = _safe_project_dir(project_dir_raw)
-    prompt = f"/{command}".strip()
-    if args.strip():
-        prompt = f"{prompt} {args.strip()}"
+    display = f"/{command} {args.strip()}".strip()
 
-    ok, text = await _invoke_sdk_in_proactor_thread(proj, prompt)
+    # Preferred path: send the skill body itself so ANY configured provider
+    # executes the same instructions, instead of relying on Claude's /slash
+    # resolution against .claude/commands.
+    body = _resolve_command_body(proj, command)
+    if body is not None:
+        prompt = body
+        if args.strip():
+            prompt = f"{prompt}\n\nArguments: {args.strip()}"
+        ok, text = await _invoke_in_proactor_thread(
+            lambda: _agnostic_call(proj, prompt)
+        )
+        # Only when the agnostic runner is unavailable do we fall back to the
+        # Claude slash resolver (keeps Claude-only environments working).
+        if not ok and text.startswith("oneshot runner not available"):
+            ok, text = await _invoke_in_proactor_thread(
+                lambda: _sdk_call(proj, display)
+            )
+        if ok:
+            return {"success": True, "prompt": display, "result": text}
+        return {"success": False, "prompt": display, "error": text}
+
+    # No agnostic/mirror definition found → legacy Claude slash resolver.
+    ok, text = await _invoke_in_proactor_thread(lambda: _sdk_call(proj, display))
     if ok:
-        return {"success": True, "prompt": prompt, "result": text}
-    return {"success": False, "prompt": prompt, "error": text}
+        return {"success": True, "prompt": display, "result": text}
+    return {"success": False, "prompt": display, "error": text}
