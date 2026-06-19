@@ -39,6 +39,7 @@ _DEFAULT_MODELS = {
     "copilot": "gpt-4o-mini",
     "openai": "gpt-4o-mini",
     "windsurf": "claude-3.5-haiku",
+    "google": "gemini-2.0-flash",
 }
 _FALLBACK_MODEL = "claude-haiku-4-5"
 
@@ -151,6 +152,17 @@ def _build_client(
             system_prompt=system_prompt,
             max_turns=max_turns,
             project_dir=cwd or ".",
+            agent_type="commit_message",
+        )
+
+    if provider == "google":
+        from core.agent_client import GoogleAgentClient
+
+        return GoogleAgentClient(
+            model=model,
+            system_prompt=system_prompt,
+            max_turns=max_turns,
+            project_dir=cwd,
             agent_type="commit_message",
         )
 
