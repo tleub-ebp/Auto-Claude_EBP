@@ -260,7 +260,10 @@
 			"errorTitle": "Échec de la commande",
 			"successTitle": "Commande terminée",
 			"successBody": "La sortie a été écrite dans la console.",
-			"ariaListLabel": "Commandes slash disponibles"
+			"ariaListLabel": "Commandes slash disponibles",
+			"runAsTaskLabel": "Lancer en tâche",
+			"runAsTaskHint": "Lancer comme une tâche Kanban interactive (planification, revue, conversation) plutôt qu'un tir unique.",
+			"taskCreated": "Tâche créée : {{name}}"
 		}
 	},
 	"queue": {

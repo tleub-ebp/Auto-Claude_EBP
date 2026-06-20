@@ -2254,6 +2254,54 @@ class OpenAIAgentClient(AgentClient):
 
 
 # =============================================================================
+# Google Gemini Agent Client — OpenAI-compatible endpoint
+# =============================================================================
+
+
+class GoogleAgentClient(OpenAIAgentClient):
+    """Agent client for Google Gemini via its OpenAI-compatible API.
+
+    Gemini exposes an OpenAI-compatible Chat Completions endpoint
+    (https://generativelanguage.googleapis.com/v1beta/openai/), so we reuse the
+    proven OpenAI tool-use loop verbatim and only swap three things:
+      - the base URL,
+      - the API key (GEMINI_API_KEY, falling back to GOOGLE_API_KEY),
+      - the default model.
+
+    The OpenAI-only `reasoning_effort` / `prompt_cache_key` payload params are
+    not part of Gemini's compatibility layer, so they are forced off here.
+    """
+
+    def __init__(
+        self,
+        model: str = "gemini-2.5-pro",
+        system_prompt: str | None = None,
+        max_turns: int = 50,
+        project_dir: str | None = None,
+        agent_type: str = "coder",
+        reasoning_effort: str | None = None,  # accepted for parity; unused on Gemini
+        prompt_cache_key: str | None = None,  # accepted for parity; unused on Gemini
+    ):
+        import os as _os
+
+        super().__init__(
+            model=model,
+            system_prompt=system_prompt,
+            max_turns=max_turns,
+            project_dir=project_dir,
+            agent_type=agent_type,
+            reasoning_effort=None,
+            prompt_cache_key=None,
+        )
+        self._api_key = _os.environ.get("GEMINI_API_KEY") or _os.environ.get(
+            "GOOGLE_API_KEY", ""
+        )
+        self._api_base = (
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        )
+
+
+# =============================================================================
 # Windsurf Agent Client — dual-mode (gRPC proxy + REST fallback)
 # =============================================================================
 

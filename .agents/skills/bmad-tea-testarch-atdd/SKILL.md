@@ -1,6 +1,6 @@
 ---
 name: bmad-tea-testarch-atdd
-description: Generate failing acceptance tests using TDD cycle. Use when the user says ""lets write acceptance tests"" or ""I want to do ATDD""
+description: Generate failing acceptance tests using TDD cycle. Use when the user says "lets write acceptance tests" or "I want to do ATDD"
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:
