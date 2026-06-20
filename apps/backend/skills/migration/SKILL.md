@@ -1,10 +1,10 @@
 ---
 name: framework-migration
-description: Automate framework migrations with dependency resolution and rollback. Use for framework upgrades, version updates, or technology stack changes.
-triggers: ["migration", "upgrade", "framework switch", "version update", "technology change", "angular", "@angular", "angular upgrade", "angular migration"]
+description: Automate framework migrations with dependency resolution, breaking-change auto-fix, and rollback. Use for framework upgrades (React, Express), version updates, JS→TS, or build-tool/stack changes. For Angular-specific upgrades, use the angular-development skill.
+triggers: ["migration", "framework upgrade", "version update", "technology change", "stack migration"]
 category: development
 version: "1.0.0"
-author: "Workforce AI Team"
+author: "WorkPilot AI Team"
 ---
 
 # Framework Migration Skill

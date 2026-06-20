@@ -1899,8 +1899,38 @@ def create_agent_client(
             prompt_cache_key=prompt_cache_key,
         )
 
+    elif provider == "google":
+        # Google Gemini via its OpenAI-compatible endpoint — reuses the proven
+        # OpenAI tool-use loop (GoogleAgentClient subclasses OpenAIAgentClient).
+        from core.agent_client import GoogleAgentClient
+        from core.llm_optimization import build_base_system_prompt
+
+        if system_prompt:
+            gemini_system_prompt = system_prompt
+        else:
+            gemini_system_prompt = build_base_system_prompt(
+                project_dir, tool_use_hint=True
+            )
+            gemini_system_prompt = _inject_domain_addendum(
+                gemini_system_prompt, agent_type, spec_dir
+            )
+
+        resolved_gemini_model = model or "gemini-2.5-pro"
+        logger.info(
+            "[create_agent_client] Using GoogleAgentClient (model=%s, agent_type=%s)",
+            resolved_gemini_model,
+            agent_type,
+        )
+        return GoogleAgentClient(
+            model=resolved_gemini_model,
+            system_prompt=gemini_system_prompt,
+            max_turns=50,
+            project_dir=str(project_dir),
+            agent_type=agent_type,
+        )
+
     else:
-        # For other providers (google, ollama, etc.), fall back to Claude SDK
+        # For other providers (ollama, mistral, etc.), fall back to Claude SDK
         logger.warning(
             f"Provider '{provider}' not directly supported, falling back to Claude SDK with provider selection"
         )

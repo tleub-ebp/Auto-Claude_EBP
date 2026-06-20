@@ -1,6 +1,6 @@
 ---
 name: bmad-bmm-correct-course
-description: Manage significant changes during sprint execution. Use when the user says ""correct course"" or ""propose sprint change""
+description: Manage significant changes during sprint execution. Use when the user says "correct course" or "propose sprint change"
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:

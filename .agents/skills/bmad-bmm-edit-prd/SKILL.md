@@ -1,6 +1,6 @@
 ---
 name: bmad-bmm-edit-prd
-description: Edit an existing PRD. Use when the user says ""edit this PRD"".
+description: Edit an existing PRD. Use when the user says "edit this PRD".
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:
