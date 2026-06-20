@@ -1,6 +1,6 @@
 ---
 name: bmad-cis-storytelling
-description: Craft compelling narratives using story frameworks. Use when the user says ""help me with storytelling"" or ""I want to create a narrative through storytelling""
+description: Craft compelling narratives using story frameworks. Use when the user says "help me with storytelling" or "I want to create a narrative through storytelling"
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:
