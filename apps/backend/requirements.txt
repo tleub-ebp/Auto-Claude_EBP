@@ -22,7 +22,7 @@ real_ladybug>=0.14.1; python_version >= "3.12"
 graphiti-core>=0.5.0; python_version >= "3.12"
 # pandas is required by real_ladybug for get_as_df() method
 # pandas 2.2.0+ required for pre-built wheels on Python 3.12
-pandas>=3.0.2; python_version >= "3.12"
+pandas>=3.0.3; python_version >= "3.12"
 
 # Windows-specific dependency for LadybugDB/Graphiti
 # pywin32 provides Windows system bindings required by real_ladybug
@@ -59,8 +59,8 @@ alembic>=1.13.0          # DB schema migrations
 asyncpg>=0.29.0          # PostgreSQL async driver (server mode)
 aiosqlite>=0.20.0        # SQLite async driver (dev/tests fallback)
 argon2-cffi>=23.1.0      # Password hashing for local accounts
-PyJWT[crypto]>=2.8.0     # JWT access/refresh tokens + Entra ID JWKS validation
-cryptography>=49.0.0     # Fernet encryption for per-user integration secrets
+PyJWT[crypto]>=2.13.0     # JWT access/refresh tokens + Entra ID JWKS validation
+cryptography>=42.0.0     # Fernet encryption for per-user integration secrets
 email-validator>=2.0.0   # pydantic EmailStr support (auth schemas)
 requests>=2.33.1
 httpx[http2]>=0.27.0

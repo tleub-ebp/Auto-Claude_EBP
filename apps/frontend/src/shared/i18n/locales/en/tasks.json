@@ -260,7 +260,10 @@
 			"errorTitle": "Slash command failed",
 			"successTitle": "Slash command completed",
 			"successBody": "Output was logged to the console.",
-			"ariaListLabel": "Available slash commands"
+			"ariaListLabel": "Available slash commands",
+			"runAsTaskLabel": "Run as task",
+			"runAsTaskHint": "Run as an interactive Kanban task (planning, review, conversation) instead of a one-shot.",
+			"taskCreated": "Task created: {{name}}"
 		}
 	},
 	"queue": {
