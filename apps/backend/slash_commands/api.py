@@ -239,6 +239,29 @@ def list_slash_commands(project_dir: Annotated[str, Query()]):
     }
 
 
+@router.get("/api/slash-commands/body")
+def get_slash_command_body(
+    project_dir: Annotated[str, Query()],
+    command: Annotated[str, Query()],
+):
+    """Return a command's resolved instruction body WITHOUT executing it.
+
+    Used by the Kanban "Run as task" action: it seeds a real, interactive task
+    with these instructions (rather than firing the one-shot run), so the
+    command flows through the normal task pipeline (planning, plan-approval,
+    conversation). Resolution mirrors `_resolve_command_body`.
+    """
+    if not _COMMAND_NAME_RE.match(command):
+        raise HTTPException(
+            status_code=400, detail=f"invalid command name: {command!r}"
+        )
+    proj = _safe_project_dir(project_dir)
+    body = _resolve_command_body(proj, command)
+    if body is None:
+        raise HTTPException(status_code=404, detail=f"command not found: {command}")
+    return {"success": True, "name": command, "body": body}
+
+
 async def _invoke_in_proactor_thread(coro_factory) -> tuple[bool, str]:
     """Run an async (success, text) call on a thread with its own Proactor loop.
 
