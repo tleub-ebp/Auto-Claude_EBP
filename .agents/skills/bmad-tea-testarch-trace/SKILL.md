@@ -1,6 +1,6 @@
 ---
 name: bmad-tea-testarch-trace
-description: Generate traceability matrix and quality gate decision. Use when the user says ""lets create traceability matrix"" or ""I want to analyze test coverage""
+description: Generate traceability matrix and quality gate decision. Use when the user says "lets create traceability matrix" or "I want to analyze test coverage"
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:
