@@ -1,6 +1,6 @@
 ---
 name: bmad-cis-design-thinking
-description: Guide human-centered design processes using empathy-driven methodologies. Use when the user says ""lets run design thinking"" or ""I want to apply design thinking""
+description: Guide human-centered design processes using empathy-driven methodologies. Use when the user says "lets run design thinking" or "I want to apply design thinking"
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:

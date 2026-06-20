@@ -1,6 +1,6 @@
 ---
 name: bmad-bmm-document-project
-description: Document brownfield projects for AI context. Use when the user says ""document this project"" or ""generate project docs""
+description: Document brownfield projects for AI context. Use when the user says "document this project" or "generate project docs"
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:
