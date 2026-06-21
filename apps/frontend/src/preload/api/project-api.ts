@@ -10,6 +10,7 @@ import type {
 	InfrastructureStatus,
 	InitializationResult,
 	IPCResult,
+	KanbanBoardState,
 	KanbanPreferences,
 	Project,
 	ProjectEnvConfig,
@@ -72,6 +73,15 @@ export interface ProjectAPI {
 	saveKanbanPreferences: (
 		projectId: string,
 		preferences: KanbanPreferences,
+	) => Promise<IPCResult>;
+
+	// Kanban board view-state (per-project column order, filters, saved views)
+	getKanbanBoardState: (
+		projectId: string,
+	) => Promise<IPCResult<KanbanBoardState | null>>;
+	saveKanbanBoardState: (
+		projectId: string,
+		state: KanbanBoardState,
 	) => Promise<IPCResult>;
 
 	// Context Operations
@@ -301,6 +311,17 @@ export const createProjectAPI = (): ProjectAPI => ({
 		preferences: KanbanPreferences,
 	): Promise<IPCResult> =>
 		ipcRenderer.invoke(IPC_CHANNELS.KANBAN_PREFS_SAVE, projectId, preferences),
+
+	getKanbanBoardState: (
+		projectId: string,
+	): Promise<IPCResult<KanbanBoardState | null>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.KANBAN_STATE_GET, projectId),
+
+	saveKanbanBoardState: (
+		projectId: string,
+		state: KanbanBoardState,
+	): Promise<IPCResult> =>
+		ipcRenderer.invoke(IPC_CHANNELS.KANBAN_STATE_SAVE, projectId, state),
 
 	// Context Operations
 	getProjectContext: (projectId: string) =>

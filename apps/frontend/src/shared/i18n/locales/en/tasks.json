@@ -214,6 +214,51 @@
 		"expandAll": "Expand all columns",
 		"azureDevOpsNotConnected": "Azure DevOps not connected — click to configure",
 		"jiraNotConnected": "Jira not connected — click to configure",
+		"bulkRestoreSuccess": "{{count}} task(s) restored",
+		"sortActiveDragHint": "Manual reordering is disabled while a sort is active. Switch back to \"Manual order\" to drag and drop.",
+		"aging": {
+			"idleFor": "Idle for {{duration}}"
+		},
+		"stale": {
+			"chip": "{{count}} idle",
+			"title": "Idle tasks",
+			"subtitle": "No update in a while — click to open the task.",
+			"rowMeta": "{{column}} · for {{duration}}"
+		},
+		"cost": {
+			"forecastTooltipTitle": "Board cost forecast",
+			"tooltipActive": "Active: {{cost}}",
+			"tooltipPending": "Upcoming: {{cost}}",
+			"tooltipNoEstimate": "{{count}} ticket(s) without estimate"
+		},
+		"conflict": {
+			"badge": "Potential conflict: {{count}} shared file(s) with {{tasks}}"
+		},
+		"views": {
+			"button": "Views",
+			"title": "Saved views",
+			"empty": "No saved views yet. Set your filters, then save them here.",
+			"namePlaceholder": "View name…",
+			"save": "Save current view",
+			"delete": "Delete view"
+		},
+		"wipLimit": {
+			"label": "WIP limit",
+			"description": "Visual alert when the column exceeds this number of tasks.",
+			"placeholder": "No limit",
+			"set": "Set WIP limit",
+			"clear": "Remove limit",
+			"exceeded": "WIP limit exceeded ({{count}}/{{limit}})"
+		},
+		"a11y": {
+			"pickedUp": "Picked up task: {{title}}. Use arrow keys to move, Enter to drop, Escape to cancel.",
+			"overColumn": "Over column {{column}}.",
+			"dropped": "Dropped task \"{{title}}\" into {{column}}.",
+			"droppedSimple": "Dropped task \"{{title}}\".",
+			"cancelled": "Move cancelled.",
+			"columnPickedUp": "Picked up column {{column}}. Use arrow keys to reorder.",
+			"columnReordered": "Column {{column}} moved."
+		},
 		"filter": {
 			"button": "Filter",
 			"title": "Filters",

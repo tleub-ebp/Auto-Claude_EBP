@@ -1,8 +1,16 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { GitMerge } from "lucide-react";
 import { memo, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import type { Task, TaskStatus } from "../../shared/types";
+import {
+	formatAgingDuration,
+	getTaskAgingHours,
+	getTaskAgingLevel,
+} from "../lib/kanban-aging";
 import { cn } from "../lib/utils";
+import { useKanbanConflictStore } from "../stores/kanban-conflict-store";
 import { TaskCard } from "./TaskCard";
 
 interface SortableTaskCardProps {
@@ -52,6 +60,10 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 	isSelected,
 	onToggleSelect,
 }: SortableTaskCardProps) {
+	const { t } = useTranslation(["tasks"]);
+	// Subscribe to this card's own conflict entry only — re-renders just this
+	// card when its plan-overlap status changes, not the whole board.
+	const conflict = useKanbanConflictStore((s) => s.conflicts[task.id]);
 	const {
 		attributes,
 		listeners,
@@ -69,6 +81,24 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 		zIndex: isDragging ? 50 : undefined,
 	};
 
+	// Aging heat: a left accent flags cards that have idled too long in an
+	// actionable column. Hidden while dragging to keep the overlay clean.
+	const agingLevel = isDragging ? "none" : getTaskAgingLevel(task);
+	const agingLabel =
+		agingLevel === "none"
+			? undefined
+			: t("kanban.aging.idleFor", {
+					duration: formatAgingDuration(getTaskAgingHours(task)),
+				});
+
+	const conflictLabel =
+		conflict && !isDragging
+			? t("kanban.conflict.badge", {
+					count: conflict.files,
+					tasks: conflict.titles.join(", "),
+				})
+			: undefined;
+
 	// Memoize onClick to prevent unnecessary TaskCard re-renders
 	const handleClick = useCallback(() => {
 		onClick();
@@ -79,7 +109,7 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 			ref={setNodeRef}
 			style={style}
 			className={cn(
-				"touch-none transition-all duration-200",
+				"relative touch-none transition-all duration-200",
 				isDragging && "dragging-placeholder opacity-40 scale-[0.98]",
 				isOver &&
 					!isDragging &&
@@ -88,6 +118,30 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 			{...attributes}
 			{...listeners}
 		>
+			{agingLevel !== "none" && (
+				<span
+					role="img"
+					title={agingLabel}
+					aria-label={agingLabel}
+					className={cn(
+						"pointer-events-none absolute left-0 top-2 bottom-2 z-10 w-1 rounded-full",
+						agingLevel === "stuck"
+							? "bg-destructive/80"
+							: "bg-amber-500/70",
+					)}
+				/>
+			)}
+			{conflictLabel && (
+				<span
+					role="img"
+					title={conflictLabel}
+					aria-label={conflictLabel}
+					className="pointer-events-none absolute -right-1.5 -top-1.5 z-10 flex h-5 items-center gap-0.5 rounded-full bg-destructive px-1.5 text-[10px] font-bold text-destructive-foreground shadow-md"
+				>
+					<GitMerge className="h-3 w-3" />
+					{conflict?.titles.length}
+				</span>
+			)}
 			<TaskCard
 				task={task}
 				onClick={handleClick}

@@ -728,7 +728,12 @@ export function registerProjectHandlers(
 		): Promise<
 			IPCResult<Record<
 				string,
-				{ width: number; isCollapsed: boolean; isLocked: boolean }
+				{
+					width: number;
+					isCollapsed: boolean;
+					isLocked: boolean;
+					wipLimit?: number;
+				}
 			> | null>
 		> => {
 			try {
@@ -750,11 +755,65 @@ export function registerProjectHandlers(
 			projectId: string,
 			preferences: Record<
 				string,
-				{ width: number; isCollapsed: boolean; isLocked: boolean }
+				{
+					width: number;
+					isCollapsed: boolean;
+					isLocked: boolean;
+					wipLimit?: number;
+				}
 			>,
 		): Promise<IPCResult> => {
 			try {
 				projectStore.saveKanbanPreferences(projectId, preferences);
+				return { success: true };
+			} catch (error) {
+				return {
+					success: false,
+					error: error instanceof Error ? error.message : "Unknown error",
+				};
+			}
+		},
+	);
+
+	ipcMain.handle(
+		IPC_CHANNELS.KANBAN_STATE_GET,
+		async (
+			_,
+			projectId: string,
+		): Promise<
+			IPCResult<{
+				columnOrder?: string[];
+				filters?: unknown;
+				sort?: unknown;
+				savedViews?: unknown;
+			} | null>
+		> => {
+			try {
+				const state = projectStore.getKanbanBoardState(projectId);
+				return { success: true, data: state };
+			} catch (error) {
+				return {
+					success: false,
+					error: error instanceof Error ? error.message : "Unknown error",
+				};
+			}
+		},
+	);
+
+	ipcMain.handle(
+		IPC_CHANNELS.KANBAN_STATE_SAVE,
+		async (
+			_,
+			projectId: string,
+			state: {
+				columnOrder?: string[];
+				filters?: unknown;
+				sort?: unknown;
+				savedViews?: unknown;
+			},
+		): Promise<IPCResult> => {
+			try {
+				projectStore.saveKanbanBoardState(projectId, state);
 				return { success: true };
 			} catch (error) {
 				return {
