@@ -150,6 +150,13 @@ function isValidDropColumn(
 	return VALID_DROP_COLUMNS.has(id);
 }
 
+// Max cards a single column renders before collapsing the tail behind a
+// "show more" toggle. Huge columns (e.g. a freshly bulk-imported backlog)
+// otherwise mount hundreds of cards and jank the board. Capping keeps the DOM
+// bounded while reusing the exact same (drag-enabled) render path for the
+// visible slice — no change to drag-and-drop behaviour.
+const COLUMN_RENDER_CAP = 60;
+
 // Columns where external work items (Azure DevOps / Jira) can be dropped
 const IMPORT_ALLOWED_COLUMNS = new Set<string>([
 	"backlog",
@@ -556,8 +563,21 @@ const DroppableColumn = memo(function DroppableColumn({
 		}
 	}, [isAllSelected, onSelectAll, onDeselectAll]);
 
+	// Render cap: a very large column only mounts its first COLUMN_RENDER_CAP
+	// cards until the user opts to reveal the rest. The common case (columns
+	// under the cap) is byte-for-byte the previous behaviour.
+	const [showAllCards, setShowAllCards] = useState(false);
+	const visibleTasks = useMemo(
+		() =>
+			showAllCards || tasks.length <= COLUMN_RENDER_CAP
+				? tasks
+				: tasks.slice(0, COLUMN_RENDER_CAP),
+		[tasks, showAllCards],
+	);
+	const hiddenCardCount = tasks.length - visibleTasks.length;
+
 	// Memoize taskIds to prevent SortableContext from re-rendering unnecessarily
-	const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
+	const taskIds = useMemo(() => visibleTasks.map((t) => t.id), [visibleTasks]);
 
 	// Create stable onClick handlers for each task to prevent unnecessary re-renders
 	const onClickHandlers = useMemo(() => {
@@ -636,7 +656,7 @@ const DroppableColumn = memo(function DroppableColumn({
 	const taskCards = useMemo(() => {
 		if (tasks.length === 0) return null;
 		const isSelectable = !!onToggleSelectHandlers;
-		return tasks.map((task) => (
+		const cards: React.ReactNode[] = visibleTasks.map((task) => (
 			<SortableTaskCard
 				key={task.id}
 				task={task}
@@ -652,8 +672,31 @@ const DroppableColumn = memo(function DroppableColumn({
 				onPreviewApp={onPreviewAppHandlers?.get(task.id)}
 			/>
 		));
+		// "Show more / less" toggle for capped columns (expanded columns only —
+		// the collapsed strip is a glance preview). It's not a sortable item, so
+		// it sits inside SortableContext harmlessly.
+		if (!isCollapsed && tasks.length > COLUMN_RENDER_CAP) {
+			cards.push(
+				<button
+					key="__show_more_toggle__"
+					type="button"
+					onClick={() => setShowAllCards((v) => !v)}
+					className="w-full rounded-md border border-dashed border-border/60 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+				>
+					{showAllCards
+						? t("kanban.showLess")
+						: t("kanban.showMore", { count: hiddenCardCount })}
+				</button>,
+			);
+		}
+		return cards;
 	}, [
-		tasks,
+		visibleTasks,
+		tasks.length,
+		isCollapsed,
+		showAllCards,
+		hiddenCardCount,
+		t,
 		onClickHandlers,
 		onStatusChangeHandlers,
 		onToggleSelectHandlers,

@@ -212,6 +212,8 @@
 		"unlockColumn": "Déverrouiller la largeur de la colonne",
 		"columnLocked": "La largeur de la colonne est verrouillée",
 		"expandAll": "Développer toutes les colonnes",
+		"showMore": "Afficher les {{count}} restantes",
+		"showLess": "Réduire la liste",
 		"azureDevOpsNotConnected": "Azure DevOps non connecté — cliquez pour configurer",
 		"jiraNotConnected": "Jira non connecté — cliquez pour configurer",
 		"bulkRestoreSuccess": "{{count}} tâche(s) restaurée(s)",
