@@ -258,3 +258,35 @@ export interface McpMarketplaceFilters {
 
 /** Active tab in the marketplace */
 export type McpMarketplaceTab = "catalog" | "installed" | "builder";
+
+// ============================================
+// Hugging Face Hub discovery (via the official HF MCP server)
+// ============================================
+
+/** Parameters for a live Hub model search. */
+export interface HuggingFaceModelSearchParams {
+	/** Free-text query (model name / keyword). */
+	query?: string;
+	/** Pipeline task filter (default: "text-generation"). */
+	task?: string;
+	/** Sort order. */
+	sort?: "trending" | "downloads" | "likes" | "created";
+	/** Max results to return. */
+	limit?: number;
+	/** Optional HF read token (raises rate limits, unlocks gated repos). */
+	token?: string;
+}
+
+/** A single model returned from the Hub. */
+export interface HuggingFaceModelInfo {
+	/** Repo id, e.g. "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF". */
+	id: string;
+	/** Lifetime downloads, when available. */
+	downloads?: number;
+	/** Likes, when available. */
+	likes?: number;
+	/** Pipeline tag, e.g. "text-generation". */
+	pipelineTag?: string;
+	/** Canonical Hub URL for the repo. */
+	url: string;
+}

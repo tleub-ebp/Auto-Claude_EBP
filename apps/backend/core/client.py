@@ -1929,8 +1929,41 @@ def create_agent_client(
             agent_type=agent_type,
         )
 
+    elif provider in ("ollama", "local", "lmstudio"):
+        # Local LLM via any OpenAI-compatible server (Ollama, LM Studio,
+        # llama.cpp, vLLM, LocalAI). Reuses the proven OpenAI tool-use loop
+        # (LocalAgentClient subclasses OpenAIAgentClient) and only swaps the
+        # base URL (from OLLAMA_BASE_URL / saved config) and the key (optional).
+        from core.agent_client import LocalAgentClient
+        from core.llm_optimization import build_base_system_prompt
+
+        if system_prompt:
+            local_system_prompt = system_prompt
+        else:
+            local_system_prompt = build_base_system_prompt(
+                project_dir, tool_use_hint=True
+            )
+            local_system_prompt = _inject_domain_addendum(
+                local_system_prompt, agent_type, spec_dir
+            )
+
+        resolved_local_model = model or "llama3.3"
+        logger.info(
+            "[create_agent_client] Using LocalAgentClient (model=%s, agent_type=%s)",
+            resolved_local_model,
+            agent_type,
+        )
+        return LocalAgentClient(
+            model=resolved_local_model,
+            system_prompt=local_system_prompt,
+            max_turns=50,
+            project_dir=str(project_dir),
+            agent_type=agent_type,
+        )
+
     else:
-        # For other providers (ollama, mistral, etc.), fall back to Claude SDK
+        # For other providers (mistral, deepseek, grok, meta, …), fall back to
+        # Claude SDK with provider selection.
         logger.warning(
             f"Provider '{provider}' not directly supported, falling back to Claude SDK with provider selection"
         )

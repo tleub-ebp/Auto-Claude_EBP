@@ -4,6 +4,7 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { HuggingFaceModelDiscovery } from "./HuggingFaceModelDiscovery";
 import type { ProviderConfig } from "./providerConfig";
 
 interface ApiKeyConfigContentProps {
@@ -63,6 +64,16 @@ export function ApiKeyConfigContent({
 					value={formData.model || ""}
 					onChange={(value) => onFormDataChange({ ...formData, model: value })}
 					t={t}
+				/>
+			)}
+
+			{/* Local LLM (Ollama / LM Studio / …): live Hub discovery to find a
+			    model to pull. The model actually used still comes from the local
+			    server; this panel only helps locate one. */}
+			{providerId === "ollama" && (
+				<HuggingFaceModelDiscovery
+					className="pt-2 border-t border-border"
+					hfToken={formData.apiKey}
 				/>
 			)}
 

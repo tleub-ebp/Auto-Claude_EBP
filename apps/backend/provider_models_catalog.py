@@ -443,15 +443,68 @@ def _fetch_grok() -> list[dict[str, Any]]:
     return _fetch_openai_compatible("grok", "https://api.x.ai", _GROK_KEEP, _GROK_DROP)
 
 
+def _local_llm_root() -> str:
+    """Resolve the local LLM server root (no path), honouring env + saved config.
+
+    Covers any OpenAI-compatible local server: Ollama (11434), LM Studio (1234),
+    llama.cpp, vLLM, LocalAI. Falls back to the Ollama default.
+    """
+    root = (
+        os.environ.get("OLLAMA_BASE_URL")
+        or os.environ.get("LOCAL_LLM_BASE_URL")
+        or os.environ.get("LMSTUDIO_BASE_URL")
+    )
+    if not root:
+        try:
+            from src.connectors.llm_config import load_provider_config
+
+            cfg = load_provider_config("ollama") or load_provider_config("local") or {}
+            root = cfg.get("base_url")
+        except Exception:  # noqa: BLE001
+            root = None
+    root = (root or "http://localhost:11434").strip().rstrip("/")
+    # Strip an OpenAI-style suffix so we have the bare server root.
+    if root.endswith("/chat/completions"):
+        root = root[: -len("/chat/completions")].rstrip("/")
+    if root.endswith("/v1"):
+        root = root[: -len("/v1")].rstrip("/")
+    return root
+
+
 def _fetch_ollama() -> list[dict[str, Any]]:
+    """List models from any OpenAI-compatible local server.
+
+    Tries the OpenAI-compatible ``/v1/models`` endpoint first (works for LM
+    Studio *and* Ollama), then falls back to Ollama's native ``/api/tags``.
+    """
+    root = _local_llm_root()
+
+    # 1) OpenAI-compatible endpoint (LM Studio, vLLM, llama.cpp, Ollama ≥ /v1)
     try:
         with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            resp = client.get("http://localhost:11434/api/tags")
+            resp = client.get(f"{root}/v1/models")
+        resp.raise_for_status()
+        items = resp.json().get("data", [])
+        out: list[dict[str, Any]] = []
+        for it in items:
+            name = it.get("id", "")
+            if not name:
+                continue
+            out.append({"value": name, "label": name, "tier": "local"})
+        if out:
+            return out
+    except (httpx.HTTPError, OSError, ValueError, KeyError):
+        pass
+
+    # 2) Ollama-native endpoint
+    try:
+        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
+            resp = client.get(f"{root}/api/tags")
         resp.raise_for_status()
     except (httpx.HTTPError, OSError):
         return []
     items = resp.json().get("models", [])
-    out: list[dict[str, Any]] = []
+    out = []
     for it in items:
         name = it.get("name", "")
         if not name:

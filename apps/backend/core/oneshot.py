@@ -78,6 +78,18 @@ def _resolve_model(provider: str, explicit: str | None, spec_dir: Path | None) -
     default = _DEFAULT_MODELS.get(provider)
     if default:
         return default
+    # Local providers have no fixed cheap default — prefer a model the task
+    # already uses, then an env override, then a sensible local default. Never
+    # fall back to _FALLBACK_MODEL (a Claude model) for a local provider.
+    if provider in ("ollama", "local", "lmstudio"):
+        import os
+
+        return (
+            _model_from_task(spec_dir)
+            or os.environ.get("OLLAMA_MODEL")
+            or os.environ.get("LOCAL_LLM_MODEL")
+            or "llama3.3"
+        )
     return _model_from_task(spec_dir) or _FALLBACK_MODEL
 
 
@@ -166,7 +178,20 @@ def _build_client(
             agent_type="commit_message",
         )
 
-    # Exotic provider (google/ollama/mistral/…): use the full factory when a
+    if provider in ("ollama", "local", "lmstudio"):
+        # Local OpenAI-compatible server — no project context required, so
+        # context-free utilities (title, terminal name, …) run locally too.
+        from core.agent_client import LocalAgentClient
+
+        return LocalAgentClient(
+            model=model,
+            system_prompt=system_prompt,
+            max_turns=max_turns,
+            project_dir=cwd,
+            agent_type="commit_message",
+        )
+
+    # Exotic provider (mistral/deepseek/…): use the full factory when a
     # project/spec context is available (it carries the provider routing +
     # fallback), otherwise degrade to the Claude lightweight client.
     if project_dir and spec_dir:

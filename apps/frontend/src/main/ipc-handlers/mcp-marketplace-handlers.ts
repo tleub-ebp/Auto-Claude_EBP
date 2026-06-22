@@ -10,11 +10,13 @@ import * as path from "node:path";
 import { app, ipcMain } from "electron";
 import { IPC_CHANNELS } from "../../shared/constants/ipc";
 import type {
+	HuggingFaceModelSearchParams,
 	McpBuilderProject,
 	McpInstalledServer,
 	McpMarketplaceServer,
 } from "../../shared/types/mcp-marketplace";
 import { appLog } from "../app-logger";
+import { searchHuggingFaceModels } from "../services/hf-mcp-client";
 
 // ============================================
 // Storage paths
@@ -41,14 +43,13 @@ function getBuilderProjectsPath(): string {
 // Built-in MCP Server Catalog
 // ============================================
 
-function buildCatalog(): McpMarketplaceServer[] {
+export function buildCatalog(): McpMarketplaceServer[] {
 	return [
 		{
 			id: "github",
 			name: "GitHub",
 			tagline: "Complete GitHub integration for repos, issues, PRs",
-			description:
-				"Access GitHub repositories, manage issues and pull requests, review code, and automate workflows directly from WorkPilot agents.",
+			description: "Access GitHub repositories, manage issues and pull requests, review code, and automate workflows directly from WorkPilot agents.",
 			author: "GitHub / MCP Community",
 			category: "version-control",
 			icon: "Github",
@@ -113,8 +114,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "gitlab",
 			name: "GitLab",
 			tagline: "GitLab API integration for projects and merge requests",
-			description:
-				"Manage GitLab projects, issues, merge requests, and CI/CD pipelines through MCP protocol.",
+			description: "Manage GitLab projects, issues, merge requests, and CI/CD pipelines through MCP protocol.",
 			author: "MCP Community",
 			category: "version-control",
 			icon: "GitlabIcon",
@@ -233,8 +233,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "jira",
 			name: "Jira",
 			tagline: "Manage Jira issues, sprints, and boards",
-			description:
-				"Full Jira integration: create and update issues, manage sprints, search with JQL, and sync project boards.",
+			description: "Full Jira integration: create and update issues, manage sprints, search with JQL, and sync project boards.",
 			author: "Atlassian Community",
 			category: "project-management",
 			icon: "ClipboardList",
@@ -298,8 +297,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "figma",
 			name: "Figma",
 			tagline: "Access Figma designs, components, and variables",
-			description:
-				"Read Figma files, extract design tokens, access component libraries, and bridge design-to-code workflows.",
+			description: "Read Figma files, extract design tokens, access component libraries, and bridge design-to-code workflows.",
 			author: "Figma Community",
 			category: "design",
 			icon: "Figma",
@@ -338,8 +336,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "sentry",
 			name: "Sentry",
 			tagline: "Monitor errors, performance, and releases",
-			description:
-				"Access Sentry error tracking: view issues, search events, manage releases, and monitor application performance.",
+			description: "Access Sentry error tracking: view issues, search events, manage releases, and monitor application performance.",
 			author: "Sentry",
 			category: "monitoring",
 			icon: "Bug",
@@ -389,8 +386,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "datadog",
 			name: "Datadog",
 			tagline: "Query metrics, logs, and traces",
-			description:
-				"Access Datadog monitoring data: query metrics, search logs, view traces, and manage dashboards.",
+			description: "Access Datadog monitoring data: query metrics, search logs, view traces, and manage dashboards.",
 			author: "Datadog Community",
 			category: "monitoring",
 			icon: "BarChart3",
@@ -444,8 +440,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "azure-devops",
 			name: "Azure DevOps",
 			tagline: "Manage work items, repos, and pipelines",
-			description:
-				"Complete Azure DevOps integration: manage work items, access repositories, run pipelines, and track boards.",
+			description: "Complete Azure DevOps integration: manage work items, access repositories, run pipelines, and track boards.",
 			author: "Microsoft Community",
 			category: "project-management",
 			icon: "Cloud",
@@ -500,8 +495,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "confluence",
 			name: "Confluence",
 			tagline: "Search and manage Confluence pages and spaces",
-			description:
-				"Access Confluence wiki: search pages, read content, create and update pages, manage spaces.",
+			description: "Access Confluence wiki: search pages, read content, create and update pages, manage spaces.",
 			author: "Atlassian Community",
 			category: "documentation",
 			icon: "BookOpen",
@@ -561,8 +555,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "notion",
 			name: "Notion",
 			tagline: "Access Notion pages, databases, and blocks",
-			description:
-				"Full Notion integration: read and write pages, query databases, manage blocks, and search across workspace.",
+			description: "Full Notion integration: read and write pages, query databases, manage blocks, and search across workspace.",
 			author: "MCP Community",
 			category: "documentation",
 			icon: "FileText",
@@ -609,8 +602,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "postgres",
 			name: "PostgreSQL",
 			tagline: "Query and manage PostgreSQL databases",
-			description:
-				"Connect to PostgreSQL databases: run queries, inspect schemas, manage tables, and explore data.",
+			description: "Connect to PostgreSQL databases: run queries, inspect schemas, manage tables, and explore data.",
 			author: "MCP Community",
 			category: "database",
 			icon: "Database",
@@ -648,8 +640,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "filesystem",
 			name: "Filesystem",
 			tagline: "Secure file system access with configurable paths",
-			description:
-				"Give agents controlled access to the filesystem: read, write, search files, and manage directories within allowed paths.",
+			description: "Give agents controlled access to the filesystem: read, write, search files, and manage directories within allowed paths.",
 			author: "Anthropic",
 			category: "cloud",
 			icon: "FolderOpen",
@@ -683,8 +674,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "brave-search",
 			name: "Brave Search",
 			tagline: "Web and local search via Brave Search API",
-			description:
-				"Enable agents to search the web using Brave Search API. Supports both web search and local business search.",
+			description: "Enable agents to search the web using Brave Search API. Supports both web search and local business search.",
 			author: "Anthropic",
 			category: "ai",
 			icon: "Search",
@@ -722,8 +712,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "puppeteer",
 			name: "Puppeteer",
 			tagline: "Browser automation and web scraping",
-			description:
-				"Control a headless browser: navigate pages, take screenshots, extract content, fill forms, and automate web interactions.",
+			description: "Control a headless browser: navigate pages, take screenshots, extract content, fill forms, and automate web interactions.",
 			author: "MCP Community",
 			category: "ai",
 			icon: "Globe",
@@ -760,8 +749,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "linear",
 			name: "Linear",
 			tagline: "Manage Linear issues, projects, and cycles",
-			description:
-				"Full Linear integration: create issues, manage projects, track cycles, and automate workflows.",
+			description: "Full Linear integration: create issues, manage projects, track cycles, and automate workflows.",
 			author: "Linear Community",
 			category: "project-management",
 			icon: "Layers",
@@ -800,8 +788,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "memory",
 			name: "Memory",
 			tagline: "Persistent memory using knowledge graph",
-			description:
-				"Give agents persistent memory across sessions using a local knowledge graph. Store and retrieve entities, relations, and observations.",
+			description: "Give agents persistent memory across sessions using a local knowledge graph. Store and retrieve entities, relations, and observations.",
 			author: "Anthropic",
 			category: "ai",
 			icon: "Brain",
@@ -836,8 +823,7 @@ function buildCatalog(): McpMarketplaceServer[] {
 			id: "fetch",
 			name: "Fetch",
 			tagline: "Fetch and convert web content for LLM consumption",
-			description:
-				"Fetch web pages and convert them to markdown or text format optimized for LLM consumption. Handles robots.txt compliance.",
+			description: "Fetch web pages and convert them to markdown or text format optimized for LLM consumption. Handles robots.txt compliance.",
 			author: "Anthropic",
 			category: "ai",
 			icon: "Download",
@@ -861,6 +847,60 @@ function buildCatalog(): McpMarketplaceServer[] {
 			homepage: "https://github.com/modelcontextprotocol/servers",
 			addedAt: "2024-11-01T00:00:00Z",
 			updatedAt: "2025-03-01T00:00:00Z",
+		},
+		{
+			id: "huggingface",
+			name: "Hugging Face",
+			tagline: "Search the Hub for models, datasets, and papers (live)",
+			description: "Official Hugging Face MCP server. Lets agents search the Hub in real time — models, datasets, Spaces and papers — so they always see the latest releases. Useful to discover local LLMs (GGUF) to run via Ollama/LM Studio. A free HF token (optional) raises rate limits and unlocks gated content.",
+			author: "Hugging Face",
+			category: "ai",
+			icon: "Bot",
+			color: "#FFD21E",
+			packageName: "https://huggingface.co/mcp",
+			version: "1.0.0",
+			downloads: 0,
+			rating: 0,
+			ratingCount: 0,
+			verified: true,
+			transport: "http",
+			url: "https://huggingface.co/mcp",
+			optionalEnvVars: [
+				{
+					name: "HF_TOKEN",
+					label: "Hugging Face Token",
+					description:
+						"Optional read token — raises rate limits and unlocks gated repos.",
+					required: false,
+					placeholder: "hf_xxxxxxxxxxxx",
+					secret: true,
+					helpUrl: "https://huggingface.co/settings/tokens",
+				},
+			],
+			tools: [
+				{
+					name: "model_search",
+					description:
+						"Search the Hub for models (filters: task, library, sort)",
+				},
+				{
+					name: "model_details",
+					description: "Get detailed metadata for a specific model repo",
+				},
+				{
+					name: "dataset_search",
+					description: "Search the Hub for datasets",
+				},
+				{
+					name: "paper_search",
+					description: "Search Hugging Face papers",
+				},
+			],
+			tags: ["huggingface", "models", "hub", "llm", "discovery", "ai"],
+			homepage: "https://huggingface.co/mcp",
+			repository: "https://github.com/huggingface/hugging-face-mcp-server",
+			addedAt: "2026-06-22T00:00:00Z",
+			updatedAt: "2026-06-22T00:00:00Z",
 		},
 	];
 }
@@ -1204,6 +1244,15 @@ export function registerMcpMarketplaceHandlers(): void {
 				appLog.error("[MCP Marketplace] exportBuilder error:", error);
 				return { success: false, error: "Export failed" };
 			}
+		},
+	);
+
+	// Live Hugging Face Hub model search (via the official HF MCP server).
+	// Powers the "Discover models" settings panel.
+	ipcMain.handle(
+		IPC_CHANNELS.HUGGINGFACE_SEARCH_MODELS,
+		async (_event, params: HuggingFaceModelSearchParams) => {
+			return searchHuggingFaceModels(params || {});
 		},
 	);
 

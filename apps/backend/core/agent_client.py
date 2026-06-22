@@ -2302,6 +2302,137 @@ class GoogleAgentClient(OpenAIAgentClient):
 
 
 # =============================================================================
+# Local LLM Agent Client — any OpenAI-compatible local server
+# =============================================================================
+
+
+def _normalize_local_base_url(raw: str | None) -> str:
+    """Normalize a local LLM base URL into a full chat-completions endpoint.
+
+    Accepts whatever the user typed (root, ``/v1``, or the full path, with or
+    without a trailing slash) and returns ``{root}/v1/chat/completions``.
+    Works for any OpenAI-compatible local server — Ollama (11434), LM Studio
+    (1234), llama.cpp, vLLM, LocalAI.
+
+    Examples::
+
+        http://localhost:11434              -> http://localhost:11434/v1/chat/completions
+        http://localhost:1234/v1            -> http://localhost:1234/v1/chat/completions
+        http://localhost:1234/v1/chat/completions (idempotent)
+    """
+    base = (raw or "").strip().rstrip("/")
+    if not base:
+        base = "http://localhost:11434"
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")].rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    return base + "/chat/completions"
+
+
+def _resolve_local_base_url(explicit: str | None) -> str:
+    """Resolve the local LLM base URL by priority: explicit arg → env →
+    saved provider config → default Ollama localhost. Returns the full
+    chat-completions endpoint (already normalized)."""
+    import os as _os
+
+    resolved = (
+        explicit
+        or _os.environ.get("OLLAMA_BASE_URL")
+        or _os.environ.get("LOCAL_LLM_BASE_URL")
+        or _os.environ.get("LMSTUDIO_BASE_URL")
+    )
+    if not resolved:
+        # Fall back to the saved provider config (~/.work_pilot_ai_llm_providers.json).
+        # Lazy import — src.connectors may not be on sys.path in every caller.
+        try:
+            from src.connectors.llm_config import load_provider_config
+
+            cfg = load_provider_config("ollama") or load_provider_config("local") or {}
+            resolved = cfg.get("base_url")
+        except Exception:  # noqa: BLE001 — never block client creation on this
+            resolved = None
+    return _normalize_local_base_url(resolved)
+
+
+class LocalAgentClient(OpenAIAgentClient):
+    """Agent client for any OpenAI-compatible **local** LLM server.
+
+    Reuses the proven OpenAI tool-use loop verbatim and only swaps:
+      - the base URL (Ollama / LM Studio / llama.cpp / vLLM / LocalAI),
+      - the API key (optional — local servers usually accept any value; a
+        placeholder is used so the inherited ``if not self._api_key`` guard
+        passes),
+      - the default model.
+
+    The OpenAI-only ``reasoning_effort`` / ``prompt_cache_key`` payload params
+    are not part of these servers' compatibility layer, so they are forced off.
+    """
+
+    def __init__(
+        self,
+        model: str = "llama3.3",
+        system_prompt: str | None = None,
+        max_turns: int = 50,
+        project_dir: str | None = None,
+        agent_type: str = "coder",
+        base_url: str | None = None,
+        reasoning_effort: str | None = None,  # accepted for parity; unused locally
+        prompt_cache_key: str | None = None,  # accepted for parity; unused locally
+    ):
+        import os as _os
+
+        super().__init__(
+            model=model or "llama3.3",
+            system_prompt=system_prompt,
+            max_turns=max_turns,
+            project_dir=project_dir,
+            agent_type=agent_type,
+            reasoning_effort=None,
+            prompt_cache_key=None,
+        )
+        # Optional key — local servers don't need one. Placeholder keeps the
+        # inherited missing-key guard from aborting; "Bearer local" is harmless.
+        self._api_key = (
+            _os.environ.get("OLLAMA_API_KEY")
+            or _os.environ.get("LOCAL_LLM_API_KEY")
+            or _os.environ.get("LMSTUDIO_API_KEY")
+            or "local"
+        )
+        self._api_base = _resolve_local_base_url(base_url)
+        # A large local model in non-streaming mode can legitimately take
+        # minutes to produce a full completion; the aiohttp default (5 min)
+        # would cut healthy slow turns. Generous, env-overridable ceiling.
+        self._request_timeout = _env_float("LOCAL_LLM_REQUEST_TIMEOUT", 600.0)
+
+    def _get_http_client(self):
+        """Lazy-init an aiohttp ClientSession with a generous local timeout."""
+        if self._http_client is None:
+            try:
+                import aiohttp
+
+                timeout = aiohttp.ClientTimeout(
+                    total=self._request_timeout, sock_connect=20.0
+                )
+                self._http_client = aiohttp.ClientSession(
+                    headers={
+                        "Content-Type": CONTENT_TYPE_JSON,
+                        "Accept": CONTENT_TYPE_JSON,
+                    },
+                    timeout=timeout,
+                )
+            except ImportError:
+                raise ImportError(
+                    "aiohttp is required for LocalAgentClient. "
+                    "Install it with: pip install aiohttp"
+                )
+        return self._http_client
+
+    def provider_name(self) -> str:
+        return "ollama"
+
+
+# =============================================================================
 # Windsurf Agent Client — dual-mode (gRPC proxy + REST fallback)
 # =============================================================================
 

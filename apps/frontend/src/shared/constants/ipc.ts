@@ -667,6 +667,9 @@ export const IPC_CHANNELS = {
 	MCP_MARKETPLACE_DELETE_BUILDER: "mcpMarketplace:deleteBuilder", // Delete builder project
 	MCP_MARKETPLACE_EXPORT_BUILDER: "mcpMarketplace:exportBuilder", // Export builder as MCP server
 
+	// Hugging Face Hub discovery (via the official HF MCP server)
+	HUGGINGFACE_SEARCH_MODELS: "huggingface:searchModels", // Live model search on the Hub
+
 	// Sentry error reporting
 	SENTRY_STATE_CHANGED: "sentry:state-changed", // Notify main process when setting changes
 	GET_SENTRY_DSN: "sentry:get-dsn", // Get DSN from main process (env var)

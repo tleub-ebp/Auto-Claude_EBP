@@ -1601,10 +1601,16 @@ export class CredentialManager extends EventEmitter {
 				const baseUrlVar = baseUrlMap[selectedProvider];
 				if (baseUrlVar && baseUrl) env[baseUrlVar] = baseUrl;
 
-				// Ollama: just inject base URL if configured
+				// Ollama / local LLM: inject base URL if configured.
+				// The provider form, detection and service all persist this under
+				// `globalOllamaApiUrl` — read that first (the legacy
+				// `globalOllamaBaseUrl` key was never written anywhere). Without this
+				// the configured URL never reached the backend, so LM Studio (1234)
+				// and custom Ollama ports silently fell back to the default.
 				if (selectedProvider === "ollama") {
 					// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
-					const ollamaUrl = (settings as any)?.globalOllamaBaseUrl as
+					const s = settings as any;
+					const ollamaUrl = (s?.globalOllamaApiUrl ?? s?.globalOllamaBaseUrl) as
 						| string
 						| undefined;
 					if (ollamaUrl?.trim()) env.OLLAMA_BASE_URL = ollamaUrl.trim();
