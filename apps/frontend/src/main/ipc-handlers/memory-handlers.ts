@@ -1055,6 +1055,19 @@ export function registerMemoryHandlers(): void {
 							try {
 								const result = JSON.parse(stdout);
 								if (result.success) {
+									// Bake a larger context into the freshly-pulled model so it
+									// loads with num_ctx=8192 (Ollama's 4096 default is too small
+									// for an agent prompt). Best-effort — never fails the pull.
+									const ctxRes = await applyModelContext(
+										baseUrl?.trim() || "http://localhost:11434",
+										modelName,
+									);
+									if (!ctxRes.success) {
+										console.warn(
+											"[Ollama] applyModelContext failed:",
+											ctxRes.error,
+										);
+									}
 									resolve({
 										success: true,
 										data: result.data as OllamaPullResult,
