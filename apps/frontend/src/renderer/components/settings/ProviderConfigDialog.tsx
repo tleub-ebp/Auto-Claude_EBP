@@ -1,6 +1,7 @@
 import { AlertCircle, CheckCircle, Globe, Key, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
 	Dialog,
@@ -50,6 +51,24 @@ export function ProviderConfigDialog({
 	onProviderActivated,
 }: ProviderConfigDialogProps) {
 	const { t } = useTranslation("settings");
+	const { toast } = useToast();
+
+	// Confirmation visible après sauvegarde — sans ce retour, le dialogue se
+	// ferme en silence et l'utilisateur a l'impression que "rien ne se passe".
+	const notifySaved = useCallback(
+		(providerName: string, model?: string) => {
+			toast({
+				title: t("sections.accounts.providerConfig.savedTitle", {
+					defaultValue: "Fournisseur enregistré",
+				}),
+				description:
+					model && model.trim()
+						? `${providerName} enregistré (modèle : ${model.trim()}) et défini comme fournisseur actif.`
+						: `${providerName} enregistré et défini comme fournisseur actif.`,
+			});
+		},
+		[toast, t],
+	);
 
 	// Mémoriser providerFields pour éviter les recréations infinies
 	const providerFields: Record<string, ProviderConfig> = useMemo(
@@ -329,6 +348,7 @@ export function ProviderConfigDialog({
 
 		onSettingsChange(newSettings);
 		onProviderActivated?.(provider.id);
+		notifySaved(provider.name, formData.model);
 		onOpenChange(false);
 	};
 

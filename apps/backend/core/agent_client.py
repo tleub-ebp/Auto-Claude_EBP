@@ -2115,7 +2115,8 @@ class OpenAIAgentClient(AgentClient):
                     role=MessageRole.SYSTEM,
                     content=[
                         ContentBlock(
-                            type=ContentBlockType.TEXT, text=f"OpenAI API error: {e}"
+                            type=ContentBlockType.TEXT,
+                            text=self._describe_request_error(e),
                         )
                     ],
                 )
@@ -2280,6 +2281,29 @@ class OpenAIAgentClient(AgentClient):
 
     def provider_name(self) -> str:
         return "openai"
+
+    @staticmethod
+    def _is_connection_error(exc: Exception) -> bool:
+        """True when the request failed to even reach the server (vs an API error).
+
+        Covers aiohttp's ClientConnectorError, raw ConnectionRefusedError, and the
+        textual forms seen on Windows ("Cannot connect to host", "refused").
+        """
+        if isinstance(exc, (ConnectionRefusedError, OSError)):
+            return True
+        try:
+            import aiohttp
+
+            if isinstance(exc, aiohttp.ClientConnectorError):
+                return True
+        except ImportError:
+            pass
+        text = str(exc).lower()
+        return "cannot connect to host" in text or "refused" in text
+
+    def _describe_request_error(self, exc: Exception) -> str:
+        """Human-friendly text for a failed chat request. Overridable per provider."""
+        return f"OpenAI API error: {exc}"
 
     def supports_subagents(self) -> bool:
         return False
@@ -2470,6 +2494,75 @@ class LocalAgentClient(OpenAIAgentClient):
 
     def provider_name(self) -> str:
         return "ollama"
+
+    async def resume(self, history: list[AgentMessage]) -> None:
+        """Truncate a replayed transcript to fit the local context window.
+
+        Local servers load models with a modest context (``num_ctx``; the managed
+        launcher raises the floor to 8192). Replaying a long transcript — e.g.
+        150+ messages after switching from Claude mid-task — overflows it and the
+        request fails with ``exceeds the available context size``. Drop the oldest
+        messages until the rendered preamble fits a conservative budget derived
+        from ``OLLAMA_CONTEXT_LENGTH``. Mirrors ``CopilotAgentClient.resume``.
+        """
+        if not history:
+            await super().resume(history)
+            return
+
+        import os as _os
+
+        try:
+            ctx_tokens = int(_os.environ.get("OLLAMA_CONTEXT_LENGTH", "8192"))
+        except (TypeError, ValueError):
+            ctx_tokens = 8192
+        # Spend ~55 % of the window on replayed history; reserve the rest for the
+        # system prompt, tool definitions, the current turn and the reply.
+        # ~3 chars/token is a safe average for mixed code + prose.
+        char_limit = max(512, int(ctx_tokens * 0.55)) * 3
+
+        truncated = list(history)
+        while len(truncated) > 1:
+            if len(self._format_history_as_preamble(truncated)) <= char_limit:
+                break
+            truncated = truncated[1:]  # drop oldest
+
+        dropped = len(history) - len(truncated)
+        if dropped:
+            logger.warning(
+                "[LocalAgentClient] History truncated on provider switch: dropped "
+                "%d oldest message(s) to fit the local context window "
+                "(~%d tokens, %d → %d messages).",
+                dropped,
+                ctx_tokens,
+                len(history),
+                len(truncated),
+            )
+            print(
+                f"[LocalAgentClient] ⚠️  Historique tronqué : {dropped} ancien(s) "
+                f"message(s) retiré(s) pour tenir dans le contexte local "
+                f"(~{ctx_tokens} tokens).",
+                flush=True,
+            )
+
+        await super().resume(truncated)
+
+    def _describe_request_error(self, exc: Exception) -> str:
+        """Turn a raw connection failure into an actionable, localized hint.
+
+        A local server that isn't running surfaces as a cryptic aiohttp
+        "Cannot connect to host …" line. For a local LLM that almost always
+        means the daemon isn't started, so we say exactly that and how to fix it.
+        """
+        if self._is_connection_error(exc):
+            # Show the server root (strip the /v1/chat/completions suffix).
+            root = self._api_base.split("/v1/")[0] or self._api_base
+            return (
+                f"⚠️ Ollama ne répond pas sur {root} — le serveur local n'est pas "
+                "démarré. Ouvrez les réglages du fournisseur « Ollama (Local) » et "
+                "cliquez « Télécharger & démarrer » (installation et lancement "
+                "automatiques), ou lancez « ollama serve » manuellement."
+            )
+        return f"Erreur API LLM local: {exc}"
 
 
 # =============================================================================

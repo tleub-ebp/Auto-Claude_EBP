@@ -234,7 +234,12 @@
 			"tooltipNoEstimate": "{{count}} ticket(s) sans estimation"
 		},
 		"conflict": {
-			"badge": "Conflit potentiel : {{count}} fichier(s) partagé(s) avec {{tasks}}"
+			"badge": "Conflit potentiel : {{count}} fichier(s) partagé(s) avec {{tasks}}",
+			"label": "Conflit",
+			"title": "Conflit de plan potentiel",
+			"description": "Le plan de cette tâche prévoit de modifier des fichiers que d'autres tâches comptent aussi toucher. Les lancer en parallèle risque de provoquer des conflits de fusion.",
+			"files": "{{count}} fichier(s) en commun",
+			"withTasks": "En conflit avec : {{tasks}}"
 		},
 		"views": {
 			"button": "Vues",

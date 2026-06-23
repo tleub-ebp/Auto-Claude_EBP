@@ -234,7 +234,12 @@
 			"tooltipNoEstimate": "{{count}} ticket(s) without estimate"
 		},
 		"conflict": {
-			"badge": "Potential conflict: {{count}} shared file(s) with {{tasks}}"
+			"badge": "Potential conflict: {{count}} shared file(s) with {{tasks}}",
+			"label": "Conflict",
+			"title": "Potential plan conflict",
+			"description": "This task's plan expects to edit files that other tasks also intend to touch. Running them in parallel may lead to merge conflicts.",
+			"files": "{{count}} file(s) in common",
+			"withTasks": "Conflicts with: {{tasks}}"
 		},
 		"views": {
 			"button": "Views",

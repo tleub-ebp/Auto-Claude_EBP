@@ -150,6 +150,18 @@ function isValidDropColumn(
 	return VALID_DROP_COLUMNS.has(id);
 }
 
+// Statuses whose plan is (or will be) carried by a live worktree, and thus can
+// collide with another task's plan. Mirrors CONFLICT_RELEVANT_STATUSES in the
+// main-process plan-conflicts util (kept in sync manually — the main util can't
+// be imported into the renderer bundle).
+const CONFLICT_RELEVANT_STATUSES = new Set<TaskStatus>([
+	"queue",
+	"in_progress",
+	"ai_review",
+	"human_review",
+	"error",
+]);
+
 // Max cards a single column renders before collapsing the tail behind a
 // "show more" toggle. Huge columns (e.g. a freshly bulk-imported backlog)
 // otherwise mount hundreds of cards and jank the board. Capping keeps the DOM
@@ -1517,17 +1529,17 @@ export function KanbanBoard({
 		[filteredTasks],
 	);
 
-	// Plan-conflict surfacing: recompute file overlaps for the actively-parallel
-	// tasks (in_progress / ai_review — bounded by the WIP limit) and publish them
-	// to the conflict store the cards subscribe to. Keyed on the relevant id set
-	// so it only re-runs when that set changes, not on every render.
+	// Plan-conflict surfacing: recompute file overlaps for every task whose plan
+	// is carried by a (current or pending) worktree and publish them to the
+	// conflict store the cards subscribe to. The status set mirrors the backend's
+	// CONFLICT_RELEVANT_STATUSES so a task in queue / human_review involved in a
+	// conflict gets a badge on its own card, not just the actively-running ones.
+	// Keyed on the relevant id set so it only re-runs when that set changes.
 	const setBoardConflicts = useKanbanConflictStore((s) => s.setConflicts);
 	const conflictRelevantIds = useMemo(
 		() =>
 			filteredTasks
-				.filter(
-					(t) => t.status === "in_progress" || t.status === "ai_review",
-				)
+				.filter((t) => CONFLICT_RELEVANT_STATUSES.has(t.status))
 				.map((t) => t.id)
 				.sort()
 				.join(","),

@@ -36,7 +36,10 @@ AnthropicProvider = import_module_from_file("src.connectors.llm_anthropic", conn
 @pytest.mark.parametrize("provider_cls,kwargs,should_validate", [
     (OpenAIProvider, {"api_key": "sk-test", "model": "gpt-3.5-turbo"}, False),
     (ClaudeProvider, {"api_key": "sk-ant-test", "model": "claude-3-sonnet-20240229"}, True),
-    (OllamaProvider, {"model": "llama2"}, False),
+    # Point at an unreachable port so validation is deterministic regardless of
+    # whether a real Ollama happens to be running on the default port locally
+    # (it now often is, since the app can auto-start a portable server).
+    (OllamaProvider, {"model": "llama2", "base_url": "http://127.0.0.1:1"}, False),
     (GoogleLLMProvider, {"api_key": "test", "model": "gemini-2.0-flash"}, True),
     (AnthropicProvider, {"api_key": "sk-ant-test", "model": "claude-3-sonnet-20240229"}, True),
 ])

@@ -1657,6 +1657,16 @@ export class CredentialManager extends EventEmitter {
 						| string
 						| undefined;
 					if (ollamaUrl?.trim()) env.OLLAMA_BASE_URL = ollamaUrl.trim();
+					// The model the user picked (incl. HF-discovered ids like
+					// "hf.co/org/model") is stored under `globalOllamaModel`. Inject it
+					// so the backend asks the local server for THIS model instead of
+					// falling back to the registry default ("llama3.3"). LOCAL_LLM_MODEL
+					// is the generic alias consumed by the same backend resolution.
+					const ollamaModel = s?.globalOllamaModel as string | undefined;
+					if (ollamaModel?.trim()) {
+						env.OLLAMA_MODEL = ollamaModel.trim();
+						env.LOCAL_LLM_MODEL = ollamaModel.trim();
+					}
 				}
 
 				return Object.fromEntries(
