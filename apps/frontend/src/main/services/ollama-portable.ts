@@ -421,18 +421,43 @@ export async function ensureOllamaReady(
 ): Promise<EnsureResult> {
 	const url = baseUrl?.trim() || "http://localhost:11434";
 	try {
+		// The context the managed server should run with, and a marker recording
+		// what it was last (re)started with. A managed daemon left over from a
+		// previous launch keeps its old (often 4096) context, so when the marker
+		// is stale we restart it ONCE — automatically, even from a task launch —
+		// instead of forcing a slow restart on every call.
+		const desiredCtx = process.env.OLLAMA_CONTEXT_LENGTH || "8192";
+		const markerPath = path.join(managedDir(), ".server-ctx");
+		const readMarker = (): string => {
+			try {
+				return fs.readFileSync(markerPath, "utf-8").trim();
+			} catch {
+				return "";
+			}
+		};
+		const writeMarker = (): void => {
+			try {
+				fs.mkdirSync(managedDir(), { recursive: true });
+				fs.writeFileSync(markerPath, desiredCtx);
+			} catch {
+				/* best effort */
+			}
+		};
+
 		const alreadyRunning = await isServerRunning(url);
-		if (alreadyRunning && !opts.forceRestart) {
+		// Resolve without downloading, so we know whether a running server is ours.
+		const managedRunning = resolveOllamaBinary()?.managed === true;
+		const ctxStale = managedRunning && readMarker() !== desiredCtx;
+
+		if (alreadyRunning && !opts.forceRestart && !ctxStale) {
 			onProgress({ phase: "ready", percentage: 100, message: "Ollama est prêt." });
-			return { success: true, running: true, url, managed: false };
+			return { success: true, running: true, url, managed: managedRunning };
 		}
 
 		const { path: binary, managed } = await ensureOllamaBinary(onProgress);
 
-		// A running server keeps its original context window, so a stale daemon
-		// started before OLLAMA_CONTEXT_LENGTH was set stays at 4096. When asked
-		// to force a restart, replace OUR managed server; leave a system one be.
-		if (alreadyRunning && opts.forceRestart) {
+		// Restart OUR managed server to apply the context; never touch a system one.
+		if (alreadyRunning && (opts.forceRestart || ctxStale)) {
 			if (!managed) {
 				onProgress({
 					phase: "ready",
@@ -461,6 +486,7 @@ export async function ensureOllamaReady(
 		while (Date.now() < deadline) {
 			await new Promise((r) => setTimeout(r, 800));
 			if (await isServerRunning(url)) {
+				if (managed) writeMarker();
 				onProgress({
 					phase: "ready",
 					percentage: 100,
