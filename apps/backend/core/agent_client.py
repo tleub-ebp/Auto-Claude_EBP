@@ -2560,6 +2560,34 @@ class LocalAgentClient(OpenAIAgentClient):
         except (TypeError, ValueError):
             return 8192
 
+    async def _pull_ollama_model(self) -> tuple[bool, str]:
+        """Pull ``self.model`` into the server (Ollama API: POST /api/pull).
+
+        Returns ``(ok, error)``. Uses a long per-request timeout since a model
+        can be several GB. Never raises.
+        """
+        import json as _json
+
+        import aiohttp
+
+        root = self._api_base.split("/v1/")[0] or self._api_base
+        url = f"{root.rstrip('/')}/api/pull"
+        try:
+            async with self._get_http_client().post(
+                url,
+                json={"name": self.model, "stream": False},
+                timeout=aiohttp.ClientTimeout(total=1800, sock_connect=20),
+            ) as resp:
+                text = await resp.text()
+                if resp.status == 200 and '"error"' not in text:
+                    return True, ""
+                try:
+                    return False, _json.loads(text).get("error", text)
+                except (_json.JSONDecodeError, AttributeError, TypeError):
+                    return False, text
+        except Exception as e:  # noqa: BLE001 — surface as a soft failure
+            return False, str(e)
+
     async def receive_response(self) -> AsyncIterator[AgentMessage]:
         """Run the tool-use loop against Ollama's NATIVE ``/api/chat`` endpoint.
 
@@ -2609,6 +2637,10 @@ class LocalAgentClient(OpenAIAgentClient):
         session = self._get_http_client()
         _total_in = 0
         _total_out = 0
+        # Pull-on-demand guard: if the requested model isn't installed, we pull
+        # it once (it may be a library name like "qwen2.5-coder" the user never
+        # ran `ollama pull` on) and retry, instead of failing with a 404.
+        model_pull_attempted = False
 
         logger.info(
             f"[LocalAgentClient] Starting session (model={self.model}, "
@@ -2634,6 +2666,46 @@ class LocalAgentClient(OpenAIAgentClient):
                 async with session.post(url, json=payload) as resp:
                     if resp.status != 200:
                         error_text = await resp.text()
+                        # Model not installed → pull it once, then retry the turn.
+                        if (
+                            "not found" in error_text.lower()
+                            and not model_pull_attempted
+                        ):
+                            model_pull_attempted = True
+                            logger.warning(
+                                "[LocalAgentClient] Model %s not installed — "
+                                "pulling on demand.",
+                                self.model,
+                            )
+                            yield AgentMessage(
+                                role=MessageRole.SYSTEM,
+                                content=[
+                                    ContentBlock(
+                                        type=ContentBlockType.TEXT,
+                                        text=(
+                                            f"📥 Modèle « {self.model} » non installé "
+                                            "— téléchargement automatique en cours "
+                                            "(cela peut prendre plusieurs minutes)…"
+                                        ),
+                                    )
+                                ],
+                            )
+                            pulled, pull_err = await self._pull_ollama_model()
+                            if pulled:
+                                continue  # retry the same turn now that it exists
+                            yield AgentMessage(
+                                role=MessageRole.SYSTEM,
+                                content=[
+                                    ContentBlock(
+                                        type=ContentBlockType.TEXT,
+                                        text=(
+                                            f"Échec du téléchargement du modèle "
+                                            f"« {self.model} » : {pull_err}"
+                                        ),
+                                    )
+                                ],
+                            )
+                            return
                         logger.error(
                             f"[LocalAgentClient] API error ({resp.status}): "
                             f"{error_text[:500]}"
