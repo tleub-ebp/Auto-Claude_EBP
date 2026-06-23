@@ -367,21 +367,87 @@ function startServer(
 }
 
 /**
+ * Stop the server listening on the given port (best-effort, cross-OS). Only call
+ * this for a server WE manage — never for a user's system Ollama.
+ */
+async function stopManagedServer(baseUrl: string): Promise<void> {
+	let port = "11434";
+	try {
+		port = new URL(baseUrl).port || "11434";
+	} catch {
+		/* keep default */
+	}
+	try {
+		if (process.platform === "win32") {
+			await execFileAsync("powershell", [
+				"-NoProfile",
+				"-Command",
+				`Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
+					"Select-Object -ExpandProperty OwningProcess | " +
+					"ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }",
+			]);
+		} else {
+			const { stdout } = await execFileAsync("sh", [
+				"-c",
+				`lsof -ti tcp:${port} -sTCP:LISTEN || true`,
+			]);
+			for (const pid of stdout.split(/\s+/).filter(Boolean)) {
+				try {
+					process.kill(Number(pid), "SIGTERM");
+				} catch {
+					/* already gone */
+				}
+			}
+		}
+		// Give the OS a moment to release the port before we rebind.
+		await new Promise((r) => setTimeout(r, 1000));
+	} catch {
+		/* best effort — if we can't stop it, startServer will surface the error */
+	}
+}
+
+/**
  * Top-level entry point: make sure an Ollama server is reachable on `baseUrl`,
  * installing the portable build and starting the daemon as needed.
+ *
+ * @param opts.forceRestart When true, a server we manage is restarted so it
+ *   picks up the current OLLAMA_CONTEXT_LENGTH (an already-running daemon keeps
+ *   its old, possibly too-small, context). A system Ollama is never restarted.
  */
 export async function ensureOllamaReady(
 	baseUrl: string,
 	onProgress: (p: EnsureProgress) => void,
+	opts: { forceRestart?: boolean } = {},
 ): Promise<EnsureResult> {
 	const url = baseUrl?.trim() || "http://localhost:11434";
 	try {
-		if (await isServerRunning(url)) {
+		const alreadyRunning = await isServerRunning(url);
+		if (alreadyRunning && !opts.forceRestart) {
 			onProgress({ phase: "ready", percentage: 100, message: "Ollama est prêt." });
 			return { success: true, running: true, url, managed: false };
 		}
 
 		const { path: binary, managed } = await ensureOllamaBinary(onProgress);
+
+		// A running server keeps its original context window, so a stale daemon
+		// started before OLLAMA_CONTEXT_LENGTH was set stays at 4096. When asked
+		// to force a restart, replace OUR managed server; leave a system one be.
+		if (alreadyRunning && opts.forceRestart) {
+			if (!managed) {
+				onProgress({
+					phase: "ready",
+					percentage: 100,
+					message: "Ollama (système) est prêt.",
+				});
+				return { success: true, running: true, url, managed: false };
+			}
+			onProgress({
+				phase: "starting",
+				percentage: -1,
+				message: "Redémarrage du serveur Ollama (contexte élargi)…",
+			});
+			await stopManagedServer(url);
+		}
 
 		onProgress({
 			phase: "starting",

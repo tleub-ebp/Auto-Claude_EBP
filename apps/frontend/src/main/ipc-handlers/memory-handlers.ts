@@ -737,6 +737,10 @@ export function registerMemoryHandlers(): void {
 			const res = await ensureOllamaReady(
 				baseUrl?.trim() || "http://localhost:11434",
 				onProgress,
+				// Restart our managed server so it picks up OLLAMA_CONTEXT_LENGTH —
+				// a daemon already running from a previous launch keeps its small
+				// default context (the "exceeds context size 4096" failure).
+				{ forceRestart: true },
 			);
 			if (res.success) {
 				return {
