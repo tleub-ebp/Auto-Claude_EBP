@@ -804,7 +804,9 @@
 			"updatedTitle": "Model updated",
 			"updatedDesc": "The model will be applied when this phase starts.",
 			"installed": "✓ installed",
-			"downloadable": "to download"
+			"downloadable": "to download",
+			"downloadStartedTitle": "Downloading model",
+			"downloadStartedDesc": "{{model}} is downloading in the background."
 		}
 	},
 	"modal": {

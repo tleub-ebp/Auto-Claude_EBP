@@ -804,7 +804,9 @@
 			"updatedTitle": "Modèle mis à jour",
 			"updatedDesc": "Le modèle sera appliqué au démarrage de cette phase.",
 			"installed": "✓ installé",
-			"downloadable": "à télécharger"
+			"downloadable": "à télécharger",
+			"downloadStartedTitle": "Téléchargement du modèle",
+			"downloadStartedDesc": "{{model}} se télécharge en arrière-plan."
 		}
 	},
 	"modal": {

@@ -555,6 +555,14 @@ def list_models(provider: str, *, force_refresh: bool = False) -> dict[str, Any]
     """
     provider = (provider or "").lower()
 
+    # Local servers (Ollama / LM Studio / …) change their installed-model list
+    # frequently and answer instantly, so a 24h-cached list goes stale and shows
+    # the wrong "installed" set. Always fetch them live and never fall back to a
+    # stale cache for them.
+    is_local = provider in {"ollama", "local", "lmstudio"}
+    if is_local:
+        force_refresh = True
+
     # 1) Cache hit, unless force_refresh
     if not force_refresh:
         cached = _cached_entry(provider)
@@ -589,8 +597,9 @@ def list_models(provider: str, *, force_refresh: bool = False) -> dict[str, Any]
             error = type(e).__name__
             logger.warning("Live model fetch failed for %s: %s", provider, e)
 
-    # 3) Stale cache (better than nothing)
-    cache = _read_cache().get(provider)
+    # 3) Stale cache (better than nothing) — but never for local providers, where
+    # a stale list would falsely mark uninstalled models as installed.
+    cache = None if is_local else _read_cache().get(provider)
     if cache and cache.get("models"):
         return {
             "provider": provider,
