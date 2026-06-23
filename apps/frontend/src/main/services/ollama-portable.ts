@@ -215,6 +215,53 @@ export async function deleteModel(
 	});
 }
 
+/**
+ * Bake a larger context window into a model so it loads with the right `num_ctx`
+ * regardless of how the server was started (system or portable) and which API is
+ * used. Ollama's OpenAI-compatible endpoint ignores per-request `num_ctx`, and a
+ * system daemon can't be safely restarted, so we re-tag the model in place via
+ * `ollama create <model> -f Modelfile(FROM <model> + PARAMETER num_ctx)`. This is
+ * a manifest-only operation (no re-download) and is the reliable cross-OS fix for
+ * "request exceeds the available context size (4096 tokens)". Best-effort.
+ */
+export async function applyModelContext(
+	baseUrl: string,
+	modelName: string,
+	ctx?: number,
+): Promise<{ success: boolean; error?: string }> {
+	const name = modelName?.trim();
+	if (!name) return { success: false, error: "Nom de modèle manquant." };
+	const resolved = resolveOllamaBinary();
+	if (!resolved) return { success: false, error: "Binaire Ollama introuvable." };
+	const numCtx =
+		ctx || Number(process.env.OLLAMA_CONTEXT_LENGTH || "8192") || 8192;
+	let dir = "";
+	try {
+		dir = fs.mkdtempSync(path.join(os.tmpdir(), "wp-ollama-"));
+		const modelfile = path.join(dir, "Modelfile");
+		fs.writeFileSync(modelfile, `FROM ${name}\nPARAMETER num_ctx ${numCtx}\n`);
+		await execFileAsync(resolved.path, ["create", name, "-f", modelfile], {
+			env: { ...process.env, OLLAMA_HOST: ollamaHostFromUrl(baseUrl) },
+			timeout: 120_000,
+			windowsHide: true,
+		});
+		return { success: true };
+	} catch (err) {
+		return {
+			success: false,
+			error: err instanceof Error ? err.message : String(err),
+		};
+	} finally {
+		if (dir) {
+			try {
+				fs.rmSync(dir, { recursive: true, force: true });
+			} catch {
+				/* temp dir cleanup is best-effort */
+			}
+		}
+	}
+}
+
 /** Download a URL to a file, following redirects, reporting 0–1 progress. */
 function downloadFile(
 	url: string,

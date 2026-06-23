@@ -8,7 +8,10 @@ import {
 	getClaudeProfileManager,
 	initializeClaudeProfileManager,
 } from "../claude-profile-manager";
-import { ensureOllamaReady } from "../services/ollama-portable";
+import {
+	applyModelContext,
+	ensureOllamaReady,
+} from "../services/ollama-portable";
 import { readSettingsFile } from "../settings-utils";
 import { AgentEvents } from "./agent-events";
 import { AgentProcessManager } from "./agent-process";
@@ -87,6 +90,20 @@ export class AgentManager extends EventEmitter {
 					"[AgentManager] Ollama auto-start before task failed:",
 					res.error,
 				);
+				return;
+			}
+			// Ensure the configured model serves with a usable context window
+			// (bakes num_ctx into the model — fixes models pulled before this was
+			// added). Idempotent and manifest-only, so cheap to repeat.
+			const model = (settings?.globalOllamaModel as string | undefined)?.trim();
+			if (model) {
+				const ctxRes = await applyModelContext(baseUrl, model);
+				if (!ctxRes.success) {
+					console.warn(
+						"[AgentManager] applyModelContext before task failed:",
+						ctxRes.error,
+					);
+				}
 			}
 		} catch (err) {
 			console.warn("[AgentManager] ensureLocalServerIfNeeded error:", err);
