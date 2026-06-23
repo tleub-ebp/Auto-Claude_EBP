@@ -5,10 +5,9 @@
  * A live "Discover models" panel backed by the official Hugging Face MCP
  * server (via window.electronAPI.searchHuggingFaceModels → main → HF MCP).
  *
- * Two actions per row:
- *   - "Choisir" sets the provider's default model to `hf.co/<id>` (the id Ollama
- *     uses after `ollama pull hf.co/<id>`), wired to the parent config form.
- *   - "ollama pull" copies the pull command to fetch the GGUF repo locally.
+ * Click a row to set the provider's default model to `hf.co/<id>`; "Download &
+ * start" launches Ollama and pulls the GGUF repo locally. A copy button yields
+ * the equivalent `ollama pull` command.
  *
  * The filter bar mirrors the facets on https://huggingface.co/models (task,
  * library, language, license, sort). Parameter-size filtering is intentionally
@@ -27,6 +26,7 @@ import {
 	Search,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { HuggingFaceModelInfo } from "../../../shared/types/mcp-marketplace";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -60,11 +60,13 @@ type ProvisionPhase =
 	| "info"
 	| "error";
 
+/** Sentinel returned by detectNonOllamaServer for an unrecognised foreign port. */
+const GENERIC_FOREIGN = "__generic__";
+
 /**
  * Common default ports of OpenAI-compatible local servers that are NOT Ollama.
  * Auto-start + `ollama pull` only make sense for Ollama (port 11434); for these
- * the user runs their own server and loads the model there. We use this to warn
- * instead of mis-starting `ollama serve` on someone else's port.
+ * the user runs their own server and loads the model there.
  */
 const NON_OLLAMA_SERVER_PORTS: Record<string, string> = {
 	"1234": "LM Studio",
@@ -74,8 +76,9 @@ const NON_OLLAMA_SERVER_PORTS: Record<string, string> = {
 };
 
 /**
- * Returns the name of the non-Ollama server the URL appears to target, or null
- * when the URL looks like Ollama (default port 11434, or empty = default).
+ * Returns the non-Ollama server the URL appears to target (brand name, or the
+ * GENERIC_FOREIGN sentinel), or null when the URL looks like Ollama (default
+ * port 11434, or empty = default).
  */
 function detectNonOllamaServer(baseUrl?: string): string | null {
 	const raw = baseUrl?.trim();
@@ -84,7 +87,7 @@ function detectNonOllamaServer(baseUrl?: string): string | null {
 		const parsed = new URL(raw);
 		const port = parsed.port || "11434"; // no port → Ollama default
 		if (port === "11434") return null;
-		return NON_OLLAMA_SERVER_PORTS[port] ?? "un serveur local non-Ollama";
+		return NON_OLLAMA_SERVER_PORTS[port] ?? GENERIC_FOREIGN;
 	} catch {
 		return null; // unparseable → don't block; let the pipeline surface errors
 	}
@@ -102,59 +105,54 @@ interface ProvisionState {
 
 type SortOption = "trending" | "downloads" | "likes" | "created" | "modified";
 
-interface SelectOption {
-	value: string;
-	label: string;
-}
+/** Filter facets: stable `value` sent to the API + i18n key for the label. */
+const TASK_OPTIONS = [
+	{ value: "text-generation", key: "textGeneration" },
+	{ value: "image-text-to-text", key: "vision" },
+	{ value: "text2text-generation", key: "text2text" },
+	{ value: "text-to-image", key: "textToImage" },
+	{ value: "automatic-speech-recognition", key: "asr" },
+	{ value: "feature-extraction", key: "embeddings" },
+	{ value: "", key: "all" },
+] as const;
 
-/** Curated task facets, LLM-discovery first. Empty value = any task. */
-const TASK_OPTIONS: SelectOption[] = [
-	{ value: "text-generation", label: "Génération de texte" },
-	{ value: "image-text-to-text", label: "Vision (image→texte)" },
-	{ value: "text2text-generation", label: "Text2Text" },
-	{ value: "text-to-image", label: "Texte→image" },
-	{ value: "automatic-speech-recognition", label: "Reconnaissance vocale" },
-	{ value: "feature-extraction", label: "Embeddings" },
-	{ value: "", label: "Toutes les tâches" },
-];
+const LIBRARY_OPTIONS = [
+	{ value: "", key: "all" },
+	{ value: "gguf", key: "gguf" },
+	{ value: "transformers", key: "transformers" },
+	{ value: "safetensors", key: "safetensors" },
+	{ value: "gptq", key: "gptq" },
+	{ value: "awq", key: "awq" },
+	{ value: "mlx", key: "mlx" },
+] as const;
 
-const LIBRARY_OPTIONS: SelectOption[] = [
-	{ value: "", label: "Toutes les libs" },
-	{ value: "gguf", label: "GGUF (Ollama)" },
-	{ value: "transformers", label: "Transformers" },
-	{ value: "safetensors", label: "Safetensors" },
-	{ value: "gptq", label: "GPTQ" },
-	{ value: "awq", label: "AWQ" },
-	{ value: "mlx", label: "MLX" },
-];
+const LANGUAGE_OPTIONS = [
+	{ value: "", key: "all" },
+	{ value: "en", key: "en" },
+	{ value: "fr", key: "fr" },
+	{ value: "zh", key: "zh" },
+	{ value: "es", key: "es" },
+	{ value: "de", key: "de" },
+	{ value: "multilingual", key: "multilingual" },
+] as const;
 
-const LANGUAGE_OPTIONS: SelectOption[] = [
-	{ value: "", label: "Toutes langues" },
-	{ value: "en", label: "Anglais" },
-	{ value: "fr", label: "Français" },
-	{ value: "zh", label: "Chinois" },
-	{ value: "es", label: "Espagnol" },
-	{ value: "de", label: "Allemand" },
-	{ value: "multilingual", label: "Multilingue" },
-];
+const LICENSE_OPTIONS = [
+	{ value: "", key: "all" },
+	{ value: "apache-2.0", key: "apache" },
+	{ value: "mit", key: "mit" },
+	{ value: "llama3.1", key: "llama31" },
+	{ value: "llama3", key: "llama3" },
+	{ value: "gemma", key: "gemma" },
+	{ value: "cc-by-nc-4.0", key: "ccByNc" },
+] as const;
 
-const LICENSE_OPTIONS: SelectOption[] = [
-	{ value: "", label: "Toutes licences" },
-	{ value: "apache-2.0", label: "Apache 2.0" },
-	{ value: "mit", label: "MIT" },
-	{ value: "llama3.1", label: "Llama 3.1" },
-	{ value: "llama3", label: "Llama 3" },
-	{ value: "gemma", label: "Gemma" },
-	{ value: "cc-by-nc-4.0", label: "CC BY-NC 4.0" },
-];
-
-const SORT_OPTIONS: SelectOption[] = [
-	{ value: "trending", label: "Tendances" },
-	{ value: "downloads", label: "Téléchargements" },
-	{ value: "likes", label: "Likes" },
-	{ value: "created", label: "Récents" },
-	{ value: "modified", label: "Modifiés" },
-];
+const SORT_OPTIONS = [
+	{ value: "trending", key: "trending" },
+	{ value: "downloads", key: "downloads" },
+	{ value: "likes", key: "likes" },
+	{ value: "created", key: "created" },
+	{ value: "modified", key: "modified" },
+] as const;
 
 function formatCount(n?: number): string {
 	if (n == null) return "—";
@@ -173,11 +171,19 @@ export function HuggingFaceModelDiscovery({
 	baseUrl,
 	onSelectModel,
 }: HuggingFaceModelDiscoveryProps) {
+	const { t } = useTranslation("settings");
+	/** Shorthand for the model-discovery namespace. */
+	const td = useCallback(
+		(key: string, opts?: Record<string, unknown>) =>
+			t(`sections.accounts.modelDiscovery.${key}`, opts ?? {}),
+		[t],
+	);
+
 	const [query, setQuery] = useState("");
 	const [task, setTask] = useState("text-generation");
 	// Default to GGUF: Ollama can only pull GGUF repos from the Hub, so showing
 	// GGUF first stops users from picking a transformers/safetensors repo that
-	// fails with "no GGUF file". They can still switch to "Toutes les libs".
+	// fails with "no GGUF file". They can still switch to "All libraries".
 	const [library, setLibrary] = useState("gguf");
 	const [language, setLanguage] = useState("");
 	const [license, setLicense] = useState("");
@@ -219,19 +225,19 @@ export function HuggingFaceModelDiscovery({
 			if (result.success && result.data) {
 				setModels(result.data);
 				if (result.data.length === 0) {
-					setError("Aucun modèle trouvé pour ces critères.");
+					setError(td("noResults"));
 				}
 			} else {
 				setModels([]);
-				setError(result.error || "La recherche Hugging Face a échoué.");
+				setError(result.error || td("searchFailed"));
 			}
 		} catch (err) {
 			setModels([]);
-			setError(err instanceof Error ? err.message : "Erreur inattendue.");
+			setError(err instanceof Error ? err.message : td("unexpectedError"));
 		} finally {
 			setIsLoading(false);
 		}
-	}, [hfToken, task, library, language, license, sort]);
+	}, [hfToken, task, library, language, license, sort, td]);
 
 	// Initial load + re-run whenever any dropdown filter changes (runSearch's
 	// identity changes with those deps).
@@ -272,7 +278,7 @@ export function HuggingFaceModelDiscovery({
 				setProvision({
 					phase: "error",
 					model,
-					message: "Indisponible : API Ollama non chargée.",
+					message: td("apiUnavailable"),
 					percentage: 0,
 				});
 				return;
@@ -286,13 +292,18 @@ export function HuggingFaceModelDiscovery({
 			// rather than booting `ollama serve` on that server's port.
 			const foreignServer = detectNonOllamaServer(baseUrl);
 			if (foreignServer) {
+				const serverName =
+					foreignServer === GENERIC_FOREIGN
+						? td("foreignServerGeneric")
+						: foreignServer;
 				setProvision({
 					phase: "info",
 					model,
-					message:
-						`L'URL configurée (${baseUrl?.trim()}) vise ${foreignServer}, pas Ollama. ` +
-						`Le téléchargement et le démarrage automatiques ne sont disponibles que pour Ollama. ` +
-						`Démarrez votre serveur et chargez-y « ${model} » manuellement (le modèle a bien été défini par défaut).`,
+					message: td("foreignServer", {
+						url: baseUrl?.trim(),
+						server: serverName,
+						model,
+					}),
 					percentage: 0,
 				});
 				return;
@@ -304,7 +315,7 @@ export function HuggingFaceModelDiscovery({
 				setProvision({
 					phase: "checking",
 					model,
-					message: "Préparation d'Ollama…",
+					message: td("preparing"),
 					percentage: 0,
 				});
 				const ensureUnsub = api.onOllamaInstallProgress?.(
@@ -340,10 +351,7 @@ export function HuggingFaceModelDiscovery({
 					setProvision({
 						phase: "error",
 						model,
-						message:
-							(ensured?.error ||
-								"Impossible de préparer Ollama automatiquement.") +
-							" Vous pouvez aussi l'installer manuellement depuis ollama.com.",
+						message: ensured?.error || td("ensureFailed"),
 						percentage: 0,
 						action: "install-ollama",
 					});
@@ -354,7 +362,7 @@ export function HuggingFaceModelDiscovery({
 				setProvision({
 					phase: "pulling",
 					model,
-					message: `Téléchargement de ${model}…`,
+					message: td("downloadingModel", { model }),
 					percentage: 0,
 				});
 				progressUnsubRef.current?.();
@@ -377,14 +385,14 @@ export function HuggingFaceModelDiscovery({
 					setProvision({
 						phase: "done",
 						model,
-						message: `${model} est prêt et servi localement.`,
+						message: td("ready", { model }),
 						percentage: 100,
 					});
 				} else {
 					setProvision({
 						phase: "error",
 						model,
-						message: pulled?.error || `Échec du téléchargement de ${model}.`,
+						message: pulled?.error || td("pullFailed", { model }),
 						percentage: 0,
 					});
 				}
@@ -394,12 +402,12 @@ export function HuggingFaceModelDiscovery({
 				setProvision({
 					phase: "error",
 					model,
-					message: err instanceof Error ? err.message : "Erreur inattendue.",
+					message: err instanceof Error ? err.message : td("unexpectedError"),
 					percentage: 0,
 				});
 			}
 		},
-		[baseUrl, onSelectModel],
+		[baseUrl, onSelectModel, td],
 	);
 
 	// Open the platform installer (terminal with the official install command).
@@ -411,30 +419,28 @@ export function HuggingFaceModelDiscovery({
 				...p,
 				phase: res?.success ? "info" : "error",
 				message: res?.success
-					? "Installation lancée dans un terminal. Une fois terminée, relancez « Télécharger & démarrer »."
-					: res?.error || "Impossible de lancer l'installation d'Ollama.",
+					? td("installLaunched")
+					: res?.error || td("installFailed"),
 				action: undefined,
 			}));
 		} catch (err) {
 			setProvision((p) => ({
 				...p,
 				phase: "error",
-				message: err instanceof Error ? err.message : "Erreur inattendue.",
+				message: err instanceof Error ? err.message : td("unexpectedError"),
 				action: undefined,
 			}));
 		}
-	}, []);
+	}, [td]);
+
+	const fb = "sections.accounts.modelDiscovery.filters";
 
 	return (
 		<div className={cn("flex flex-col gap-3", className)}>
 			<div>
-				<h3 className="text-sm font-medium text-foreground">
-					Découvrir des modèles (Hugging Face)
-				</h3>
+				<h3 className="text-sm font-medium text-foreground">{td("title")}</h3>
 				<p className="text-xs text-muted-foreground mt-0.5">
-					Liste en direct du Hub via le MCP Hugging Face. Cliquez une ligne pour
-					la définir par défaut ; « Télécharger & démarrer » lance Ollama et
-					récupère le modèle localement.
+					{td("description")}
 				</p>
 			</div>
 
@@ -493,7 +499,7 @@ export function HuggingFaceModelDiscovery({
 						<div className="mt-2 flex items-center gap-2">
 							<Button type="button" size="sm" onClick={installOllama}>
 								<Download className="h-4 w-4 mr-1.5" />
-								Installer Ollama
+								{td("installOllama")}
 							</Button>
 							<Button
 								type="button"
@@ -524,12 +530,16 @@ export function HuggingFaceModelDiscovery({
 						type="text"
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
-						placeholder="Rechercher (ex. qwen2.5-coder, llama 3.1, mistral)…"
+						placeholder={td("searchPlaceholder")}
 						className="w-full pl-8 pr-2 py-1.5 text-sm rounded-md border border-input bg-background text-foreground"
 					/>
 				</div>
 				<Button type="submit" size="sm" disabled={isLoading}>
-					{isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Rechercher"}
+					{isLoading ? (
+						<Loader2 className="h-4 w-4 animate-spin" />
+					) : (
+						td("search")
+					)}
 				</Button>
 			</form>
 
@@ -539,11 +549,11 @@ export function HuggingFaceModelDiscovery({
 					value={task}
 					onChange={(e) => setTask(e.target.value)}
 					className={selectClass}
-					aria-label="Tâche"
+					aria-label={t(`${fb}.taskAria`)}
 				>
 					{TASK_OPTIONS.map((o) => (
 						<option key={o.value || "all"} value={o.value}>
-							{o.label}
+							{t(`${fb}.task.${o.key}`)}
 						</option>
 					))}
 				</select>
@@ -551,11 +561,11 @@ export function HuggingFaceModelDiscovery({
 					value={library}
 					onChange={(e) => setLibrary(e.target.value)}
 					className={selectClass}
-					aria-label="Bibliothèque"
+					aria-label={t(`${fb}.libAria`)}
 				>
 					{LIBRARY_OPTIONS.map((o) => (
 						<option key={o.value || "all"} value={o.value}>
-							{o.label}
+							{t(`${fb}.lib.${o.key}`)}
 						</option>
 					))}
 				</select>
@@ -563,11 +573,11 @@ export function HuggingFaceModelDiscovery({
 					value={language}
 					onChange={(e) => setLanguage(e.target.value)}
 					className={selectClass}
-					aria-label="Langue"
+					aria-label={t(`${fb}.langAria`)}
 				>
 					{LANGUAGE_OPTIONS.map((o) => (
 						<option key={o.value || "all"} value={o.value}>
-							{o.label}
+							{t(`${fb}.lang.${o.key}`)}
 						</option>
 					))}
 				</select>
@@ -575,11 +585,11 @@ export function HuggingFaceModelDiscovery({
 					value={license}
 					onChange={(e) => setLicense(e.target.value)}
 					className={selectClass}
-					aria-label="Licence"
+					aria-label={t(`${fb}.licenseAria`)}
 				>
 					{LICENSE_OPTIONS.map((o) => (
 						<option key={o.value || "all"} value={o.value}>
-							{o.label}
+							{t(`${fb}.license.${o.key}`)}
 						</option>
 					))}
 				</select>
@@ -587,11 +597,11 @@ export function HuggingFaceModelDiscovery({
 					value={sort}
 					onChange={(e) => setSort(e.target.value as SortOption)}
 					className={cn(selectClass, "ml-auto")}
-					aria-label="Trier les modèles"
+					aria-label={t(`${fb}.sortAria`)}
 				>
 					{SORT_OPTIONS.map((o) => (
 						<option key={o.value} value={o.value}>
-							{o.label}
+							{t(`${fb}.sort.${o.key}`)}
 						</option>
 					))}
 				</select>
@@ -629,7 +639,7 @@ export function HuggingFaceModelDiscovery({
 									onSelectModel?.(localName);
 								}
 							}}
-							title={`Définir ${localName} comme modèle par défaut`}
+							title={td("setDefaultTooltip", { name: localName })}
 							className={cn(
 								"flex items-center justify-between gap-3 p-2 rounded-md border cursor-pointer hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
 								isSelected ? "border-primary bg-primary/5" : "border-border",
@@ -643,7 +653,7 @@ export function HuggingFaceModelDiscovery({
 									{m.id}
 									{isSelected && (
 										<span className="text-[10px] font-normal text-primary">
-											(par défaut)
+											{td("default")}
 										</span>
 									)}
 								</p>
@@ -673,9 +683,12 @@ export function HuggingFaceModelDiscovery({
 									type="button"
 									variant={isSelected ? "default" : "outline"}
 									size="sm"
-									onClick={(e) => { e.stopPropagation(); provisionModel(localName); }}
+									onClick={(e) => {
+										e.stopPropagation();
+										provisionModel(localName);
+									}}
 									disabled={isProvisioningThis || isBusyElsewhere}
-									title={`Démarrer Ollama et télécharger ${localName}`}
+									title={td("setDefaultTooltip", { name: localName })}
 								>
 									{isProvisioningThis ? (
 										<Loader2 className="h-4 w-4 animate-spin" />
@@ -683,15 +696,18 @@ export function HuggingFaceModelDiscovery({
 										<Download className="h-4 w-4" />
 									)}
 									<span className="ml-1.5 hidden sm:inline">
-										Télécharger & démarrer
+										{td("downloadStart")}
 									</span>
 								</Button>
 								<Button
 									type="button"
 									variant="ghost"
 									size="sm"
-									onClick={(e) => { e.stopPropagation(); copyPullCommand(m.id); }}
-									title={`Copier : ollama pull hf.co/${m.id}`}
+									onClick={(e) => {
+										e.stopPropagation();
+										copyPullCommand(m.id);
+									}}
+									title={td("copyTooltip", { id: m.id })}
 								>
 									{copiedId === m.id ? (
 										<Check className="h-4 w-4 text-success" />

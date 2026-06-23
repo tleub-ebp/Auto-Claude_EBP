@@ -176,6 +176,93 @@
 				"description": "{{providerId}} has been {{action}} successfully",
 				"error": "Error",
 				"errorDescription": "Failed to {{action}} provider {{providerId}}"
+			},
+			"localModels": {
+				"title": "Locally installed models",
+				"summary": "{{count}} model(s) · {{size}} on disk",
+				"empty": "No models yet.",
+				"refresh": "Refresh the list",
+				"deleteTooltip": "Delete {{name}} from disk",
+				"deleteConfirm": "Delete model \"{{name}}\" from disk? This cannot be undone (you'll have to download it again to reuse it).",
+				"deleteError": "Failed to delete {{name}}.",
+				"unexpectedError": "Unexpected error.",
+				"unitMb": "MB",
+				"unitGb": "GB"
+			},
+			"modelDiscovery": {
+				"title": "Discover models (Hugging Face)",
+				"description": "Live list from the Hub via the Hugging Face MCP. Click a row to set it as default; \"Download & start\" launches Ollama and fetches the model locally.",
+				"searchPlaceholder": "Search (e.g. qwen2.5-coder, llama 3.1, mistral)…",
+				"search": "Search",
+				"downloadStart": "Download & start",
+				"copyTooltip": "Copy: ollama pull hf.co/{{id}}",
+				"setDefaultTooltip": "Set {{name}} as the default model",
+				"default": "(default)",
+				"noResults": "No models found for these filters.",
+				"searchFailed": "Hugging Face search failed.",
+				"unexpectedError": "Unexpected error.",
+				"apiUnavailable": "Unavailable: Ollama API not loaded.",
+				"preparing": "Preparing Ollama…",
+				"startingServer": "Starting the Ollama server…",
+				"downloadingModel": "Downloading {{model}}…",
+				"ready": "{{model}} is ready and served locally.",
+				"pullFailed": "Failed to download {{model}}.",
+				"ensureFailed": "Could not prepare Ollama automatically. You can also install it manually from ollama.com.",
+				"installOllama": "Install Ollama",
+				"installLaunched": "Installation launched in a terminal. Once done, run \"Download & start\" again.",
+				"installFailed": "Could not launch the Ollama installation.",
+				"foreignServer": "The configured URL ({{url}}) targets {{server}}, not Ollama. Automatic download and start are only available for Ollama. Start your server and load \"{{model}}\" manually (the model has been set as default).",
+				"foreignServerGeneric": "a non-Ollama local server",
+				"filters": {
+					"taskAria": "Task",
+					"libAria": "Library",
+					"langAria": "Language",
+					"licenseAria": "License",
+					"sortAria": "Sort models",
+					"task": {
+						"textGeneration": "Text generation",
+						"vision": "Vision (image→text)",
+						"text2text": "Text2Text",
+						"textToImage": "Text→image",
+						"asr": "Speech recognition",
+						"embeddings": "Embeddings",
+						"all": "All tasks"
+					},
+					"lib": {
+						"all": "All libraries",
+						"gguf": "GGUF (Ollama)",
+						"transformers": "Transformers",
+						"safetensors": "Safetensors",
+						"gptq": "GPTQ",
+						"awq": "AWQ",
+						"mlx": "MLX"
+					},
+					"lang": {
+						"all": "All languages",
+						"en": "English",
+						"fr": "French",
+						"zh": "Chinese",
+						"es": "Spanish",
+						"de": "German",
+						"multilingual": "Multilingual"
+					},
+					"license": {
+						"all": "All licenses",
+						"apache": "Apache 2.0",
+						"mit": "MIT",
+						"llama31": "Llama 3.1",
+						"llama3": "Llama 3",
+						"gemma": "Gemma",
+						"ccByNc": "CC BY-NC 4.0"
+					},
+					"sort": {
+						"trending": "Trending",
+						"downloads": "Downloads",
+						"likes": "Likes",
+						"created": "Recent",
+						"modified": "Modified"
+					}
+				}
 			}
 		},
 		"updates": {

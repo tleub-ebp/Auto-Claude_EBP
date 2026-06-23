@@ -819,6 +819,12 @@ function PhaseLogSection({
 
 	const hasEntries = displayedEntries.length > 0;
 
+	// Local providers expose a static catalog of pullable models; flag it so the
+	// model dropdown can mark which entries are actually installed vs downloadable.
+	const isLocalProvider = ((phaseConfig?.provider ?? "") as string)
+		.toLowerCase()
+		.match(/^(ollama|local|lmstudio)$/) != null;
+
 	// Table « entrée → libellé de sous-étape » pour cette phase : bornes
 	// structurées (nouveaux logs) ou repli sur les anciens logs (sous-tâche pour
 	// le codage, session QA numérotée pour la validation). Cf. buildPhaseSubSteps.
@@ -1005,7 +1011,18 @@ function PhaseLogSection({
 									<SelectContent>
 										{modelOptions.map((m) => (
 											<SelectItem key={m.value} value={m.value}>
-												{m.label}
+												<span className="flex items-center gap-1.5">
+													<span>{m.label}</span>
+													{m.installed ? (
+														<span className="text-[10px] text-success">
+															{t("tasks:logs.model.installed", "✓ installed")}
+														</span>
+													) : isLocalProvider ? (
+														<span className="text-[10px] text-muted-foreground">
+															{t("tasks:logs.model.downloadable", "to download")}
+														</span>
+													) : null}
+												</span>
 											</SelectItem>
 										))}
 									</SelectContent>

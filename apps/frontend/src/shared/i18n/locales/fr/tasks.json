@@ -802,7 +802,9 @@
 			"selectAria": "Modèle pour cette phase",
 			"selectTooltip": "Changer le modèle pour cette phase",
 			"updatedTitle": "Modèle mis à jour",
-			"updatedDesc": "Le modèle sera appliqué au démarrage de cette phase."
+			"updatedDesc": "Le modèle sera appliqué au démarrage de cette phase.",
+			"installed": "✓ installé",
+			"downloadable": "à télécharger"
 		}
 	},
 	"modal": {

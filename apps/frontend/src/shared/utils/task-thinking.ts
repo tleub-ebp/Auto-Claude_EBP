@@ -206,6 +206,8 @@ export function buildProviderMetadataUpdate(
 interface ModelSelectOption {
 	value: string;
 	label: string;
+	/** Local providers only: model is pulled on the server (vs catalog-only). */
+	installed?: boolean;
 }
 
 /**
@@ -234,6 +236,7 @@ export function buildModelSelectOptions(
 	const options: ModelSelectOption[] = catalog.map((m) => ({
 		value: m.value,
 		label: m.label,
+		installed: m.installed,
 	}));
 	const current = currentValue ?? "";
 	if (!current) return { options, value: current };

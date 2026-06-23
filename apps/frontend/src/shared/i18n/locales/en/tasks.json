@@ -802,7 +802,9 @@
 			"selectAria": "Model for this phase",
 			"selectTooltip": "Change the model for this phase",
 			"updatedTitle": "Model updated",
-			"updatedDesc": "The model will be applied when this phase starts."
+			"updatedDesc": "The model will be applied when this phase starts.",
+			"installed": "✓ installed",
+			"downloadable": "to download"
 		}
 	},
 	"modal": {
