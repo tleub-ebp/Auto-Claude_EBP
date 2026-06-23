@@ -23,6 +23,9 @@ const HF_MCP_URL = "https://huggingface.co/mcp";
 
 /** Names we accept for the Hub model-search tool, in priority order. */
 const MODEL_SEARCH_TOOL_NAMES = [
+	// Modern HF MCP: a single unified models/datasets/spaces search tool.
+	"hub_repo_search",
+	// Older HF MCP deployments exposed a dedicated model search.
 	"model_search",
 	"hf_model_search",
 	"search_models",
@@ -76,27 +79,27 @@ function normalizeModelObject(
 export function parseModelSearchResult(raw: unknown): HuggingFaceModelInfo[] {
 	if (raw == null) return [];
 
-	// 1) MCP tool-result shape: { content: [{ type: "text", text }] }
+	// 1) Extract the text payload from the MCP tool-result shape, if present.
 	let payload: unknown = raw;
+	let text = "";
 	if (
 		typeof raw === "object" &&
 		raw !== null &&
 		Array.isArray((raw as { content?: unknown }).content)
 	) {
 		const blocks = (raw as { content: Array<Record<string, unknown>> }).content;
-		const text = blocks
+		text = blocks
 			.filter((b) => b && (b.type === "text" || typeof b.text === "string"))
 			.map((b) => String(b.text ?? ""))
 			.join("\n")
 			.trim();
-		// Prefer structured JSON in the text; fall back to markdown line scan.
-		const parsed = tryParseJson(text);
-		payload = parsed ?? markdownIdsToModels(text);
+		payload = tryParseJson(text);
 	} else if (typeof raw === "string") {
-		payload = tryParseJson(raw) ?? markdownIdsToModels(raw);
+		text = raw;
+		payload = tryParseJson(raw);
 	}
 
-	// 2) Unwrap common container shapes.
+	// 2) Prefer structured JSON, unwrapping common container shapes.
 	let items: unknown[] = [];
 	if (Array.isArray(payload)) {
 		items = payload;
@@ -106,17 +109,29 @@ export function parseModelSearchResult(raw: unknown): HuggingFaceModelInfo[] {
 		if (Array.isArray(container)) items = container;
 	}
 
-	const out: HuggingFaceModelInfo[] = [];
-	for (const item of items) {
-		if (typeof item === "string") {
-			const m = normalizeModelObject({ id: item });
-			if (m) out.push(m);
-		} else if (item && typeof item === "object") {
-			const m = normalizeModelObject(item as Record<string, unknown>);
-			if (m) out.push(m);
+	if (items.length > 0) {
+		const out: HuggingFaceModelInfo[] = [];
+		for (const item of items) {
+			if (typeof item === "string") {
+				const m = normalizeModelObject({ id: item });
+				if (m) out.push(m);
+			} else if (item && typeof item === "object") {
+				const m = normalizeModelObject(item as Record<string, unknown>);
+				if (m) out.push(m);
+			}
 		}
+		return out;
 	}
-	return out;
+
+	// 3) No structured payload: parse the markdown that `hub_repo_search`
+	//    returns (### owner/name blocks with rich metadata), then fall back to
+	//    a crude id scan for older/plainer text shapes.
+	if (text) {
+		const rich = parseHubMarkdown(text);
+		if (rich.length > 0) return rich;
+		return markdownIdsToModels(text);
+	}
+	return [];
 }
 
 function tryParseJson(text: string): unknown {
@@ -141,6 +156,132 @@ function markdownIdsToModels(text: string): HuggingFaceModelInfo[] {
 	return [...ids].map((id) => ({ id, url: hubUrlFor(id) }));
 }
 
+/** Pull a `**Label:** value` field (pipe/newline-delimited) from a block. */
+function markdownField(block: string, label: string): string | undefined {
+	const re = new RegExp(`\\*\\*${label}:\\*\\*\\s*([^|\\n]+)`);
+	const value = block.match(re)?.[1]?.trim();
+	return value || undefined;
+}
+
+/** Parse a human-formatted count ("4.1M", "52.8K", "2,110") into a number. */
+function parseHumanCount(value?: string): number | undefined {
+	if (!value) return undefined;
+	const m = value.trim().match(/^([\d.,]+)\s*([KkMmBb])?/);
+	if (!m) return undefined;
+	let n = Number(m[1].replace(/,/g, ""));
+	if (!Number.isFinite(n)) return undefined;
+	switch ((m[2] || "").toLowerCase()) {
+		case "k":
+			n *= 1e3;
+			break;
+		case "m":
+			n *= 1e6;
+			break;
+		case "b":
+			n *= 1e9;
+			break;
+	}
+	return Math.round(n);
+}
+
+/**
+ * Parse the markdown document returned by `hub_repo_search` into models. Each
+ * repo is a `### owner/name` heading followed by a metadata line of the form
+ * `**Task:** … | **Library:** … | **Downloads:** … | **Likes:** …`. Returns []
+ * when the text isn't in this shape so the caller can fall back to an id scan.
+ */
+function parseHubMarkdown(text: string): HuggingFaceModelInfo[] {
+	if (!text.includes("### ")) return [];
+	const out: HuggingFaceModelInfo[] = [];
+	const seen = new Set<string>();
+	// Lead with a newline so a heading at offset 0 is also a valid split point.
+	const blocks = `\n${text}`.split(/\n###\s+/);
+	for (let i = 1; i < blocks.length; i++) {
+		const block = blocks[i];
+		const firstLine = (block.split("\n", 1)[0] ?? "").trim();
+		const id = firstLine.split(/\s/)[0] ?? "";
+		// Repo ids are exactly "owner/name" — skip section headers and noise.
+		if (!/^[^/\s]+\/[^/\s]+$/.test(id) || seen.has(id)) continue;
+		seen.add(id);
+		out.push({
+			id,
+			downloads: parseHumanCount(markdownField(block, "Downloads")),
+			likes: parseHumanCount(markdownField(block, "Likes")),
+			pipelineTag: markdownField(block, "Task"),
+			library: markdownField(block, "Library"),
+			url: hubUrlFor(id),
+		});
+	}
+	return out;
+}
+
+/** Map a UI sort key to the `hub_repo_search` enum value. */
+function mapHubSort(sort?: string): string | undefined {
+	switch (sort) {
+		case "trending":
+			return "trendingScore";
+		case "downloads":
+			return "downloads";
+		case "likes":
+			return "likes";
+		case "created":
+			return "createdAt";
+		case "modified":
+			return "lastModified";
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Build the tool arguments for the selected HF search tool. The modern HF MCP
+ * exposes `hub_repo_search` (unified models/datasets/spaces) whose filters are
+ * plain hub tags; older deployments used `model_search` with discrete fields.
+ *
+ * Filter-tag formats are quirky and verified against the LIVE server — the
+ * tool's own JSON-schema docs are partly wrong (they suggest `library:gguf` and
+ * `language:fr`, neither of which match anything):
+ *   task / library / language → bare tags ("text-generation", "gguf", "en")
+ *   license                   → prefixed ("license:apache-2.0")
+ */
+function buildSearchArgs(
+	toolName: string,
+	p: {
+		query: string;
+		task?: string;
+		library?: string;
+		language?: string;
+		license?: string;
+		author?: string;
+		sort?: string;
+		limit: number;
+	},
+): Record<string, unknown> {
+	if (toolName === "hub_repo_search") {
+		const filters: string[] = [];
+		if (p.task) filters.push(p.task);
+		if (p.library) filters.push(p.library);
+		if (p.language) filters.push(p.language);
+		if (p.license) filters.push(`license:${p.license}`);
+		const args: Record<string, unknown> = {
+			repo_types: ["model"],
+			limit: p.limit,
+		};
+		if (p.query) args.query = p.query;
+		if (filters.length) args.filters = filters;
+		if (p.author) args.author = p.author;
+		const sort = mapHubSort(p.sort);
+		if (sort) args.sort = sort;
+		return args;
+	}
+	// Legacy model_search-style tools: discrete fields, UI-level sort keys.
+	const args: Record<string, unknown> = { limit: p.limit };
+	if (p.query) args.query = p.query;
+	if (p.task) args.task = p.task;
+	if (p.sort) args.sort = p.sort;
+	return args;
+}
+
 /**
  * Search the Hugging Face Hub for models via the HF MCP server.
  * Returns a normalized list, or an error result that the UI can surface.
@@ -148,8 +289,17 @@ function markdownIdsToModels(text: string): HuggingFaceModelInfo[] {
 export async function searchHuggingFaceModels(
 	params: HuggingFaceModelSearchParams = {},
 ): Promise<IPCResult<HuggingFaceModelInfo[]>> {
-	const { query = "", task = "text-generation", sort, limit = 30, token } =
-		params;
+	const {
+		query = "",
+		task = "text-generation",
+		library,
+		language,
+		license,
+		author,
+		sort,
+		limit = 30,
+		token,
+	} = params;
 
 	// The MCP SDK is imported dynamically (string specifier) and is therefore
 	// untyped here; `any` is intentional for this thin glue client.
@@ -181,7 +331,9 @@ export async function searchHuggingFaceModels(
 		const tools: Array<{ name: string }> = toolList?.tools ?? [];
 		const tool =
 			tools.find((t) => MODEL_SEARCH_TOOL_NAMES.includes(t.name)) ??
-			tools.find((t) => /model.*search|search.*model/i.test(t.name));
+			tools.find((t) =>
+				/(?:model|repo).*search|search.*(?:model|repo)/i.test(t.name),
+			);
 		if (!tool) {
 			return {
 				success: false,
@@ -189,10 +341,16 @@ export async function searchHuggingFaceModels(
 			};
 		}
 
-		const args: Record<string, unknown> = { limit };
-		if (query) args.query = query;
-		if (task) args.task = task;
-		if (sort) args.sort = sort;
+		const args = buildSearchArgs(tool.name, {
+			query,
+			task,
+			library,
+			language,
+			license,
+			author,
+			sort,
+			limit,
+		});
 
 		const result = await client.callTool({ name: tool.name, arguments: args });
 		if (result?.isError) {

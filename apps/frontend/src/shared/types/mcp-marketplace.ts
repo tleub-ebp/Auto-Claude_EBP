@@ -267,10 +267,18 @@ export type McpMarketplaceTab = "catalog" | "installed" | "builder";
 export interface HuggingFaceModelSearchParams {
 	/** Free-text query (model name / keyword). */
 	query?: string;
-	/** Pipeline task filter (default: "text-generation"). */
+	/** Pipeline task tag, e.g. "text-generation" (default). Empty = any task. */
 	task?: string;
+	/** Library tag, e.g. "gguf", "transformers". */
+	library?: string;
+	/** Language code, e.g. "en", "fr". */
+	language?: string;
+	/** License id, e.g. "apache-2.0", "mit". */
+	license?: string;
+	/** Organization / user namespace to filter by, e.g. "meta-llama". */
+	author?: string;
 	/** Sort order. */
-	sort?: "trending" | "downloads" | "likes" | "created";
+	sort?: "trending" | "downloads" | "likes" | "created" | "modified";
 	/** Max results to return. */
 	limit?: number;
 	/** Optional HF read token (raises rate limits, unlocks gated repos). */
@@ -287,6 +295,8 @@ export interface HuggingFaceModelInfo {
 	likes?: number;
 	/** Pipeline tag, e.g. "text-generation". */
 	pipelineTag?: string;
+	/** Primary library, e.g. "gguf", "transformers", when available. */
+	library?: string;
 	/** Canonical Hub URL for the repo. */
 	url: string;
 }

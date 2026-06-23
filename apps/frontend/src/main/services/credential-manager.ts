@@ -427,6 +427,49 @@ export class CredentialManager extends EventEmitter {
 				return await this.testWindsurfProvider();
 			}
 
+			// Cas spécial pour le LLM local (Ollama / LM Studio / llama.cpp / vLLM):
+			// aucune clé API requise — on sonde la connectivité du serveur local au
+			// lieu d'exiger une clé (sinon "Provider not configured" à tort).
+			if (provider === "ollama" || provider === "local" || provider === "lmstudio") {
+				let raw = "";
+				try {
+					const settings = readSettingsFile();
+					// biome-ignore lint/suspicious/noExplicitAny: settings shape is loose
+					const s = settings as any;
+					raw = (s?.globalOllamaApiUrl || s?.globalOllamaBaseUrl || "") as string;
+				} catch {
+					/* settings unavailable — fall back to default below */
+				}
+				let root = (raw.trim() || "http://localhost:11434").replace(/\/+$/, "");
+				root = root
+					.replace(/\/v1\/chat\/completions$/, "")
+					.replace(/\/chat\/completions$/, "")
+					.replace(/\/v1$/, "");
+				// Probe the OpenAI-compatible endpoint first (LM Studio, vLLM,
+				// llama.cpp, Ollama >= /v1), then Ollama's native /api/tags.
+				for (const apiPath of ["/v1/models", "/api/tags"]) {
+					try {
+						const resp = await fetch(`${root}${apiPath}`, {
+							method: "GET",
+							signal: AbortSignal.timeout(5000),
+						});
+						if (resp.ok) {
+							return {
+								success: true,
+								message: `Serveur LLM local accessible (${root})`,
+								details: { baseUrl: root, endpoint: apiPath },
+							};
+						}
+					} catch {
+						/* try the next path */
+					}
+				}
+				return {
+					success: false,
+					message: `Serveur LLM local injoignable à ${root}. Vérifie qu'Ollama/LM Studio tourne et que l'URL est correcte.`,
+				};
+			}
+
 			// Pour les autres providers (openai, mistral, google, deepseek, grok, ollama, etc.)
 			// Source 1: Chercher un profil API dans profiles.json (Custom Endpoints)
 			let apiKey: string | undefined;

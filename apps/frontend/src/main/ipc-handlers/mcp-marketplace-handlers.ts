@@ -879,17 +879,17 @@ export function buildCatalog(): McpMarketplaceServer[] {
 			],
 			tools: [
 				{
-					name: "model_search",
+					name: "hub_repo_search",
 					description:
-						"Search the Hub for models (filters: task, library, sort)",
+						"Search the Hub for models/datasets/spaces (filters: task, library, language, license, sort)",
 				},
 				{
-					name: "model_details",
-					description: "Get detailed metadata for a specific model repo",
+					name: "hub_repo_details",
+					description: "Get detailed metadata for specific Hub repos",
 				},
 				{
-					name: "dataset_search",
-					description: "Search the Hub for datasets",
+					name: "space_search",
+					description: "Search the Hub for Spaces (apps/demos)",
 				},
 				{
 					name: "paper_search",

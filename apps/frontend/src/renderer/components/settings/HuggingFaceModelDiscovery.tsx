@@ -9,6 +9,10 @@
  * a model to run locally. The models actually selectable for inference still
  * come from the local server's /v1/models (Ollama / LM Studio). Each row offers
  * a one-click "ollama pull hf.co/<id>" copy to fetch a GGUF repo.
+ *
+ * The filter bar mirrors the facets on https://huggingface.co/models (task,
+ * library, language, license, sort). Parameter-size filtering is intentionally
+ * absent: the HF MCP `hub_repo_search` tool exposes no size facet.
  */
 
 import { Check, Copy, Download, Heart, Loader2, Search } from "lucide-react";
@@ -23,7 +27,61 @@ interface HuggingFaceModelDiscoveryProps {
 	hfToken?: string;
 }
 
-type SortOption = "trending" | "downloads" | "likes" | "created";
+type SortOption = "trending" | "downloads" | "likes" | "created" | "modified";
+
+interface SelectOption {
+	value: string;
+	label: string;
+}
+
+/** Curated task facets, LLM-discovery first. Empty value = any task. */
+const TASK_OPTIONS: SelectOption[] = [
+	{ value: "text-generation", label: "Génération de texte" },
+	{ value: "image-text-to-text", label: "Vision (image→texte)" },
+	{ value: "text2text-generation", label: "Text2Text" },
+	{ value: "text-to-image", label: "Texte→image" },
+	{ value: "automatic-speech-recognition", label: "Reconnaissance vocale" },
+	{ value: "feature-extraction", label: "Embeddings" },
+	{ value: "", label: "Toutes les tâches" },
+];
+
+const LIBRARY_OPTIONS: SelectOption[] = [
+	{ value: "", label: "Toutes les libs" },
+	{ value: "gguf", label: "GGUF (Ollama)" },
+	{ value: "transformers", label: "Transformers" },
+	{ value: "safetensors", label: "Safetensors" },
+	{ value: "gptq", label: "GPTQ" },
+	{ value: "awq", label: "AWQ" },
+	{ value: "mlx", label: "MLX" },
+];
+
+const LANGUAGE_OPTIONS: SelectOption[] = [
+	{ value: "", label: "Toutes langues" },
+	{ value: "en", label: "Anglais" },
+	{ value: "fr", label: "Français" },
+	{ value: "zh", label: "Chinois" },
+	{ value: "es", label: "Espagnol" },
+	{ value: "de", label: "Allemand" },
+	{ value: "multilingual", label: "Multilingue" },
+];
+
+const LICENSE_OPTIONS: SelectOption[] = [
+	{ value: "", label: "Toutes licences" },
+	{ value: "apache-2.0", label: "Apache 2.0" },
+	{ value: "mit", label: "MIT" },
+	{ value: "llama3.1", label: "Llama 3.1" },
+	{ value: "llama3", label: "Llama 3" },
+	{ value: "gemma", label: "Gemma" },
+	{ value: "cc-by-nc-4.0", label: "CC BY-NC 4.0" },
+];
+
+const SORT_OPTIONS: SelectOption[] = [
+	{ value: "trending", label: "Tendances" },
+	{ value: "downloads", label: "Téléchargements" },
+	{ value: "likes", label: "Likes" },
+	{ value: "created", label: "Récents" },
+	{ value: "modified", label: "Modifiés" },
+];
 
 function formatCount(n?: number): string {
 	if (n == null) return "—";
@@ -32,57 +90,66 @@ function formatCount(n?: number): string {
 	return String(n);
 }
 
+const selectClass =
+	"text-xs rounded-md border border-input bg-background text-foreground px-2 py-1.5";
+
 export function HuggingFaceModelDiscovery({
 	className,
 	hfToken,
 }: HuggingFaceModelDiscoveryProps) {
 	const [query, setQuery] = useState("");
+	const [task, setTask] = useState("text-generation");
+	const [library, setLibrary] = useState("");
+	const [language, setLanguage] = useState("");
+	const [license, setLicense] = useState("");
 	const [sort, setSort] = useState<SortOption>("trending");
 	const [models, setModels] = useState<HuggingFaceModelInfo[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [copiedId, setCopiedId] = useState<string | null>(null);
 
-	// Keep the latest query in a ref so the auto-run effect can read it without
-	// re-firing on every keystroke (it should only re-run when `sort` changes).
+	// Keep the latest free-text query in a ref so dropdown-driven auto-searches
+	// read it without making `query` a dependency (which would re-fire on every
+	// keystroke). The query itself is applied manually (Enter / button).
 	const queryRef = useRef(query);
 	queryRef.current = query;
 
-	const runSearch = useCallback(
-		async (sortOrder: SortOption) => {
-			setIsLoading(true);
-			setError(null);
-			try {
-				const result = await window.electronAPI.searchHuggingFaceModels({
-					query: queryRef.current.trim(),
-					task: "text-generation",
-					sort: sortOrder,
-					limit: 30,
-					token: hfToken,
-				});
-				if (result.success && result.data) {
-					setModels(result.data);
-					if (result.data.length === 0) {
-						setError("Aucun modèle trouvé pour cette recherche.");
-					}
-				} else {
-					setModels([]);
-					setError(result.error || "La recherche Hugging Face a échoué.");
+	const runSearch = useCallback(async () => {
+		setIsLoading(true);
+		setError(null);
+		try {
+			const result = await window.electronAPI.searchHuggingFaceModels({
+				query: queryRef.current.trim(),
+				task,
+				library,
+				language,
+				license,
+				sort,
+				limit: 30,
+				token: hfToken,
+			});
+			if (result.success && result.data) {
+				setModels(result.data);
+				if (result.data.length === 0) {
+					setError("Aucun modèle trouvé pour ces critères.");
 				}
-			} catch (err) {
+			} else {
 				setModels([]);
-				setError(err instanceof Error ? err.message : "Erreur inattendue.");
-			} finally {
-				setIsLoading(false);
+				setError(result.error || "La recherche Hugging Face a échoué.");
 			}
-		},
-		[hfToken],
-	);
+		} catch (err) {
+			setModels([]);
+			setError(err instanceof Error ? err.message : "Erreur inattendue.");
+		} finally {
+			setIsLoading(false);
+		}
+	}, [hfToken, task, library, language, license, sort]);
 
-	// Initial load + re-run whenever the sort order changes.
+	// Initial load + re-run whenever any dropdown filter changes (runSearch's
+	// identity changes with those deps).
 	useEffect(() => {
-		void runSearch(sort);
-	}, [runSearch, sort]);
+		void runSearch();
+	}, [runSearch]);
 
 	const copyPullCommand = useCallback(async (id: string) => {
 		try {
@@ -111,7 +178,7 @@ export function HuggingFaceModelDiscovery({
 				className="flex items-center gap-2"
 				onSubmit={(e) => {
 					e.preventDefault();
-					void runSearch(sort);
+					void runSearch();
 				}}
 			>
 				<div className="relative flex-1">
@@ -124,17 +191,6 @@ export function HuggingFaceModelDiscovery({
 						className="w-full pl-8 pr-2 py-1.5 text-sm rounded-md border border-input bg-background text-foreground"
 					/>
 				</div>
-				<select
-					value={sort}
-					onChange={(e) => setSort(e.target.value as SortOption)}
-					className="text-sm rounded-md border border-input bg-background text-foreground px-2 py-1.5"
-					aria-label="Trier les modèles"
-				>
-					<option value="trending">Tendances</option>
-					<option value="downloads">Téléchargements</option>
-					<option value="likes">Likes</option>
-					<option value="created">Récents</option>
-				</select>
 				<Button type="submit" size="sm" disabled={isLoading}>
 					{isLoading ? (
 						<Loader2 className="h-4 w-4 animate-spin" />
@@ -143,6 +199,70 @@ export function HuggingFaceModelDiscovery({
 					)}
 				</Button>
 			</form>
+
+			{/* Filter bar — mirrors the facets on huggingface.co/models. */}
+			<div className="flex flex-wrap items-center gap-2">
+				<select
+					value={task}
+					onChange={(e) => setTask(e.target.value)}
+					className={selectClass}
+					aria-label="Tâche"
+				>
+					{TASK_OPTIONS.map((o) => (
+						<option key={o.value || "all"} value={o.value}>
+							{o.label}
+						</option>
+					))}
+				</select>
+				<select
+					value={library}
+					onChange={(e) => setLibrary(e.target.value)}
+					className={selectClass}
+					aria-label="Bibliothèque"
+				>
+					{LIBRARY_OPTIONS.map((o) => (
+						<option key={o.value || "all"} value={o.value}>
+							{o.label}
+						</option>
+					))}
+				</select>
+				<select
+					value={language}
+					onChange={(e) => setLanguage(e.target.value)}
+					className={selectClass}
+					aria-label="Langue"
+				>
+					{LANGUAGE_OPTIONS.map((o) => (
+						<option key={o.value || "all"} value={o.value}>
+							{o.label}
+						</option>
+					))}
+				</select>
+				<select
+					value={license}
+					onChange={(e) => setLicense(e.target.value)}
+					className={selectClass}
+					aria-label="Licence"
+				>
+					{LICENSE_OPTIONS.map((o) => (
+						<option key={o.value || "all"} value={o.value}>
+							{o.label}
+						</option>
+					))}
+				</select>
+				<select
+					value={sort}
+					onChange={(e) => setSort(e.target.value as SortOption)}
+					className={cn(selectClass, "ml-auto")}
+					aria-label="Trier les modèles"
+				>
+					{SORT_OPTIONS.map((o) => (
+						<option key={o.value} value={o.value}>
+							{o.label}
+						</option>
+					))}
+				</select>
+			</div>
 
 			{error && (
 				<div className="p-2 rounded-md bg-destructive/10 border border-destructive/30">
@@ -172,6 +292,11 @@ export function HuggingFaceModelDiscovery({
 								{m.pipelineTag && (
 									<span className="px-1.5 py-0.5 rounded bg-muted text-[10px]">
 										{m.pipelineTag}
+									</span>
+								)}
+								{m.library && (
+									<span className="px-1.5 py-0.5 rounded bg-muted text-[10px]">
+										{m.library}
 									</span>
 								)}
 							</div>
