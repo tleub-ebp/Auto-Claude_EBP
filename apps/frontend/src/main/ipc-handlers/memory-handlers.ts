@@ -39,6 +39,12 @@ import {
 	getConfiguredPythonPath,
 	pythonEnvManager,
 } from "../python-env-manager";
+import {
+	deleteModel as deleteOllamaModelFromServer,
+	type EnsureProgress,
+	ensureOllamaReady,
+	resolveOllamaBinary,
+} from "../services/ollama-portable";
 import { openTerminalWithCommand } from "./claude-code-handlers";
 
 /**
@@ -193,6 +199,27 @@ function checkOllamaInstalled(): OllamaInstallStatus {
 		}
 	} catch {
 		// Not in PATH
+	}
+
+	// Finally, count the app-managed portable binary as "installed" so the
+	// portable auto-install path is reflected in every status check.
+	const portable = resolveOllamaBinary();
+	if (portable?.managed) {
+		let version: string | undefined;
+		try {
+			const versionOutput = execFileSync(portable.path, ["--version"], {
+				encoding: "utf-8",
+				timeout: 5000,
+				windowsHide: true,
+			})
+				.toString()
+				.trim();
+			const match = versionOutput.match(/(\d+\.\d+\.\d+)/);
+			if (match) version = match[1];
+		} catch {
+			// binary exists but version probe failed — still installed
+		}
+		return { installed: true, path: portable.path, version };
 	}
 
 	return { installed: false };
@@ -694,6 +721,79 @@ export function registerMemoryHandlers(): void {
 		},
 	);
 
+	// Ensure Ollama is ready end-to-end: download+extract the portable binary if
+	// neither a system nor a previous portable install exists, then start the
+	// daemon on the configured host/port — no admin, no terminal, all OSes.
+	// Streams OLLAMA_INSTALL_PROGRESS so the UI can show download/start status.
+	ipcMain.handle(
+		IPC_CHANNELS.OLLAMA_ENSURE,
+		async (
+			event,
+			baseUrl?: string,
+		): Promise<IPCResult<{ running: boolean; url: string; managed: boolean }>> => {
+			const onProgress = (p: EnsureProgress) => {
+				event.sender.send(IPC_CHANNELS.OLLAMA_INSTALL_PROGRESS, p);
+			};
+			const res = await ensureOllamaReady(
+				baseUrl?.trim() || "http://localhost:11434",
+				onProgress,
+			);
+			if (res.success) {
+				return {
+					success: true,
+					data: { running: res.running, url: res.url, managed: res.managed },
+				};
+			}
+			return { success: false, error: res.error || "Échec de la préparation d'Ollama." };
+		},
+	);
+
+	// Back-compat alias: start the server (auto-installing the portable build if
+	// needed). Delegates to the same portable manager, without progress events.
+	ipcMain.handle(
+		IPC_CHANNELS.OLLAMA_START_SERVER,
+		async (
+			_,
+			baseUrl?: string,
+		): Promise<IPCResult<{ running: boolean; url: string }>> => {
+			const res = await ensureOllamaReady(
+				baseUrl?.trim() || "http://localhost:11434",
+				() => {
+					/* back-compat alias: no progress stream */
+				},
+			);
+			if (res.success) {
+				return { success: true, data: { running: res.running, url: res.url } };
+			}
+			return { success: false, error: res.error || "Échec du démarrage d'Ollama." };
+		},
+	);
+
+	// Delete a pulled model to reclaim disk space (Ollama API: DELETE /api/delete).
+	ipcMain.handle(
+		IPC_CHANNELS.OLLAMA_DELETE_MODEL,
+		async (
+			_,
+			modelName: string,
+			baseUrl?: string,
+		): Promise<IPCResult<{ deleted: string }>> => {
+			if (!modelName?.trim()) {
+				return { success: false, error: "Nom de modèle manquant." };
+			}
+			const res = await deleteOllamaModelFromServer(
+				baseUrl?.trim() || "http://localhost:11434",
+				modelName.trim(),
+			);
+			if (res.success) {
+				return { success: true, data: { deleted: modelName.trim() } };
+			}
+			return {
+				success: false,
+				error: res.error || `Échec de la suppression de ${modelName}.`,
+			};
+		},
+	);
+
 	// ============================================
 	// Ollama Model Discovery & Management
 	// ============================================
@@ -823,7 +923,7 @@ export function registerMemoryHandlers(): void {
 		async (
 			event,
 			modelName: string,
-			_baseUrl?: string,
+			baseUrl?: string,
 		): Promise<IPCResult<OllamaPullResult>> => {
 			try {
 				// Use configured Python path (venv if ready, otherwise bundled/system)
@@ -875,6 +975,11 @@ export function registerMemoryHandlers(): void {
 
 				const [pythonExe, baseArgs] = parsePythonCommand(pythonCmd);
 				const args = [...baseArgs, scriptPath, "pull-model", modelName];
+				// Pull against the configured server so a custom host/port (or a
+				// non-default Ollama instance) actually receives the download.
+				if (baseUrl?.trim()) {
+					args.push("--base-url", baseUrl.trim());
+				}
 
 				return new Promise((resolve) => {
 					const proc = spawn(pythonExe, args, {

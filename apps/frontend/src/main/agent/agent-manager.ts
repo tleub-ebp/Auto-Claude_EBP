@@ -8,6 +8,7 @@ import {
 	getClaudeProfileManager,
 	initializeClaudeProfileManager,
 } from "../claude-profile-manager";
+import { ensureOllamaReady } from "../services/ollama-portable";
 import { readSettingsFile } from "../settings-utils";
 import { AgentEvents } from "./agent-events";
 import { AgentProcessManager } from "./agent-process";
@@ -57,6 +58,39 @@ export class AgentManager extends EventEmitter {
 			settings?.selectedProvider as string | undefined
 		)?.toLowerCase();
 		return !provider || provider === "claude" || provider === "anthropic";
+	}
+
+	/**
+	 * When the active provider is Ollama, make sure the local server is up before
+	 * spawning the agent — installing the portable binary and starting `ollama
+	 * serve` if needed. Best-effort: a failure here is logged but never blocks the
+	 * task (the agent will then surface the friendly "Ollama ne répond pas" hint).
+	 * Does NOT pull models (that stays an explicit user action in the provider UI).
+	 */
+	private async ensureLocalServerIfNeeded(metadata?: {
+		provider?: string;
+	}): Promise<void> {
+		try {
+			const settings = readSettingsFile();
+			const provider = (
+				metadata?.provider || (settings?.selectedProvider as string | undefined)
+			)?.toLowerCase();
+			if (provider !== "ollama") return;
+			const baseUrl =
+				((settings?.globalOllamaApiUrl as string) || "").trim() ||
+				"http://localhost:11434";
+			const res = await ensureOllamaReady(baseUrl, () => {
+				/* no progress stream needed at task launch */
+			});
+			if (!res.success) {
+				console.warn(
+					"[AgentManager] Ollama auto-start before task failed:",
+					res.error,
+				);
+			}
+		} catch (err) {
+			console.warn("[AgentManager] ensureLocalServerIfNeeded error:", err);
+		}
 	}
 
 	constructor() {
@@ -335,6 +369,9 @@ export class AgentManager extends EventEmitter {
 			specDir,
 		});
 
+		// Auto-start the local Ollama server if that's the active provider.
+		await this.ensureLocalServerIfNeeded(metadata);
+
 		// Note: This is spec-creation but it chains to task-execution via run.py
 		await this.processManager.spawnProcess(
 			taskId,
@@ -477,6 +514,9 @@ export class AgentManager extends EventEmitter {
 			? { ...combinedEnv, AUTO_CLAUDE_RESUME_SESSION_ID: options.resumeSessionId }
 			: combinedEnv;
 
+		// Auto-start the local Ollama server if that's the active provider.
+		await this.ensureLocalServerIfNeeded();
+
 		await this.processManager.spawnProcess(
 			taskId,
 			autoBuildSource,
@@ -537,6 +577,9 @@ export class AgentManager extends EventEmitter {
 			projectPath,
 			"--qa",
 		];
+
+		// Auto-start the local Ollama server if that's the active provider.
+		await this.ensureLocalServerIfNeeded();
 
 		await this.processManager.spawnProcess(
 			taskId,

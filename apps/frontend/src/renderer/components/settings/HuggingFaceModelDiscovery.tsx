@@ -16,10 +16,12 @@
  */
 
 import {
+	AlertCircle,
 	Check,
 	CircleCheck,
 	Copy,
 	Download,
+	ExternalLink,
 	Heart,
 	Loader2,
 	Search,
@@ -36,11 +38,66 @@ interface HuggingFaceModelDiscoveryProps {
 	/** Currently-selected default model (to highlight the active row). */
 	selectedModel?: string;
 	/**
+	 * Configured local server URL (Ollama). Used to start the server on the right
+	 * port and pull the model into the right instance. Defaults to localhost:11434.
+	 */
+	baseUrl?: string;
+	/**
 	 * Called when the user picks a model. Receives the local-runnable name
 	 * (`hf.co/<id>` — the id Ollama uses after `ollama pull hf.co/<id>`), which
 	 * the parent stores as the provider's default model.
 	 */
 	onSelectModel?: (model: string) => void;
+}
+
+/** Stages of the "make this model actually runnable locally" pipeline. */
+type ProvisionPhase =
+	| "idle"
+	| "checking"
+	| "starting"
+	| "pulling"
+	| "done"
+	| "info"
+	| "error";
+
+/**
+ * Common default ports of OpenAI-compatible local servers that are NOT Ollama.
+ * Auto-start + `ollama pull` only make sense for Ollama (port 11434); for these
+ * the user runs their own server and loads the model there. We use this to warn
+ * instead of mis-starting `ollama serve` on someone else's port.
+ */
+const NON_OLLAMA_SERVER_PORTS: Record<string, string> = {
+	"1234": "LM Studio",
+	"8000": "vLLM",
+	"8080": "llama.cpp / LocalAI",
+	"5000": "LocalAI",
+};
+
+/**
+ * Returns the name of the non-Ollama server the URL appears to target, or null
+ * when the URL looks like Ollama (default port 11434, or empty = default).
+ */
+function detectNonOllamaServer(baseUrl?: string): string | null {
+	const raw = baseUrl?.trim();
+	if (!raw) return null; // empty → backend default (Ollama on 11434)
+	try {
+		const parsed = new URL(raw);
+		const port = parsed.port || "11434"; // no port → Ollama default
+		if (port === "11434") return null;
+		return NON_OLLAMA_SERVER_PORTS[port] ?? "un serveur local non-Ollama";
+	} catch {
+		return null; // unparseable → don't block; let the pipeline surface errors
+	}
+}
+
+interface ProvisionState {
+	phase: ProvisionPhase;
+	/** Model being provisioned (the `hf.co/<id>` name). */
+	model: string;
+	message: string;
+	percentage: number;
+	/** Optional follow-up the user can take from the status panel. */
+	action?: "install-ollama";
 }
 
 type SortOption = "trending" | "downloads" | "likes" | "created" | "modified";
@@ -113,6 +170,7 @@ export function HuggingFaceModelDiscovery({
 	className,
 	hfToken,
 	selectedModel,
+	baseUrl,
 	onSelectModel,
 }: HuggingFaceModelDiscoveryProps) {
 	const [query, setQuery] = useState("");
@@ -125,6 +183,15 @@ export function HuggingFaceModelDiscovery({
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [copiedId, setCopiedId] = useState<string | null>(null);
+	const [provision, setProvision] = useState<ProvisionState>({
+		phase: "idle",
+		model: "",
+		message: "",
+		percentage: 0,
+	});
+	// Holds the active pull-progress unsubscribe so we can detach it when the
+	// download ends or the component unmounts.
+	const progressUnsubRef = useRef<(() => void) | null>(null);
 
 	// Keep the latest free-text query in a ref so dropdown-driven auto-searches
 	// read it without making `query` a dependency (which would re-fire on every
@@ -179,6 +246,182 @@ export function HuggingFaceModelDiscovery({
 		}
 	}, []);
 
+	// Detach any live progress listener on unmount.
+	useEffect(
+		() => () => {
+			progressUnsubRef.current?.();
+			progressUnsubRef.current = null;
+		},
+		[],
+	);
+
+	/**
+	 * The actual "plumbing": take a picked model and make it runnable locally.
+	 *   1. ensure Ollama is installed,
+	 *   2. start the server on the configured port if it isn't running,
+	 *   3. pull the model into that server, streaming progress.
+	 * Picking a model only stores a string; THIS is what downloads and serves it.
+	 */
+	const provisionModel = useCallback(
+		async (model: string) => {
+			const api = globalThis.electronAPI;
+			if (!api?.pullOllamaModel) {
+				setProvision({
+					phase: "error",
+					model,
+					message: "Indisponible : API Ollama non chargée.",
+					percentage: 0,
+				});
+				return;
+			}
+
+			// Make sure the picked model is also the stored default.
+			onSelectModel?.(model);
+
+			// Auto-start + pull is Ollama-only. If the configured URL targets a
+			// different local server, we can't drive it — tell the user plainly
+			// rather than booting `ollama serve` on that server's port.
+			const foreignServer = detectNonOllamaServer(baseUrl);
+			if (foreignServer) {
+				setProvision({
+					phase: "info",
+					model,
+					message:
+						`L'URL configurée (${baseUrl?.trim()}) vise ${foreignServer}, pas Ollama. ` +
+						`Le téléchargement et le démarrage automatiques ne sont disponibles que pour Ollama. ` +
+						`Démarrez votre serveur et chargez-y « ${model} » manuellement (le modèle a bien été défini par défaut).`,
+					percentage: 0,
+				});
+				return;
+			}
+
+			try {
+				// 1. Ensure Ollama is ready — downloads the portable binary if it
+				// isn't installed, then starts the server. Fully automatic, no admin.
+				setProvision({
+					phase: "checking",
+					model,
+					message: "Préparation d'Ollama…",
+					percentage: 0,
+				});
+				const ensureUnsub = api.onOllamaInstallProgress?.(
+					(p: {
+						phase:
+							| "resolving"
+							| "downloading"
+							| "extracting"
+							| "starting"
+							| "ready";
+						percentage: number;
+						message: string;
+					}) => {
+						setProvision((prev) =>
+							prev.model === model
+								? {
+										...prev,
+										phase: p.phase === "downloading" ? "pulling" : "starting",
+										message: p.message,
+										percentage: p.percentage < 0 ? 0 : p.percentage,
+									}
+								: prev,
+						);
+					},
+				);
+				let ensured: Awaited<ReturnType<NonNullable<typeof api.ensureOllama>>>;
+				try {
+					ensured = await api.ensureOllama?.(baseUrl);
+				} finally {
+					ensureUnsub?.();
+				}
+				if (!ensured?.success) {
+					setProvision({
+						phase: "error",
+						model,
+						message:
+							(ensured?.error ||
+								"Impossible de préparer Ollama automatiquement.") +
+							" Vous pouvez aussi l'installer manuellement depuis ollama.com.",
+						percentage: 0,
+						action: "install-ollama",
+					});
+					return;
+				}
+
+				// 2. Pull, streaming progress for this model.
+				setProvision({
+					phase: "pulling",
+					model,
+					message: `Téléchargement de ${model}…`,
+					percentage: 0,
+				});
+				progressUnsubRef.current?.();
+				progressUnsubRef.current =
+					api.onDownloadProgress?.((data) => {
+						if (data.modelName === model) {
+							setProvision((p) =>
+								p.phase === "pulling" && p.model === model
+									? { ...p, percentage: data.percentage }
+									: p,
+							);
+						}
+					}) ?? null;
+
+				const pulled = await api.pullOllamaModel(model, baseUrl);
+				progressUnsubRef.current?.();
+				progressUnsubRef.current = null;
+
+				if (pulled?.success) {
+					setProvision({
+						phase: "done",
+						model,
+						message: `${model} est prêt et servi localement.`,
+						percentage: 100,
+					});
+				} else {
+					setProvision({
+						phase: "error",
+						model,
+						message: pulled?.error || `Échec du téléchargement de ${model}.`,
+						percentage: 0,
+					});
+				}
+			} catch (err) {
+				progressUnsubRef.current?.();
+				progressUnsubRef.current = null;
+				setProvision({
+					phase: "error",
+					model,
+					message: err instanceof Error ? err.message : "Erreur inattendue.",
+					percentage: 0,
+				});
+			}
+		},
+		[baseUrl, onSelectModel],
+	);
+
+	// Open the platform installer (terminal with the official install command).
+	const installOllama = useCallback(async () => {
+		const api = globalThis.electronAPI;
+		try {
+			const res = await api?.installOllama?.();
+			setProvision((p) => ({
+				...p,
+				phase: res?.success ? "info" : "error",
+				message: res?.success
+					? "Installation lancée dans un terminal. Une fois terminée, relancez « Télécharger & démarrer »."
+					: res?.error || "Impossible de lancer l'installation d'Ollama.",
+				action: undefined,
+			}));
+		} catch (err) {
+			setProvision((p) => ({
+				...p,
+				phase: "error",
+				message: err instanceof Error ? err.message : "Erreur inattendue.",
+				action: undefined,
+			}));
+		}
+	}, []);
+
 	return (
 		<div className={cn("flex flex-col gap-3", className)}>
 			<div>
@@ -186,10 +429,84 @@ export function HuggingFaceModelDiscovery({
 					Découvrir des modèles (Hugging Face)
 				</h3>
 				<p className="text-xs text-muted-foreground mt-0.5">
-					Liste en direct du Hub via le MCP Hugging Face. « Choisir » définit le
-					modèle par défaut (pensez à le récupérer avec « ollama pull »).
+					Liste en direct du Hub via le MCP Hugging Face. Cliquez une ligne pour
+					la définir par défaut ; « Télécharger & démarrer » lance Ollama et
+					récupère le modèle localement.
 				</p>
 			</div>
+
+			{provision.phase !== "idle" && (
+				<div
+					className={cn(
+						"rounded-md border p-2.5",
+						provision.phase === "error"
+							? "border-destructive/30 bg-destructive/10"
+							: provision.phase === "done"
+								? "border-success/30 bg-success/10"
+								: provision.phase === "info"
+									? "border-warning/30 bg-warning/10"
+									: "border-primary/30 bg-primary/5",
+					)}
+				>
+					<div className="flex items-start gap-2 text-sm">
+						{provision.phase === "error" ? (
+							<AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+						) : provision.phase === "done" ? (
+							<CircleCheck className="h-4 w-4 text-success shrink-0 mt-0.5" />
+						) : provision.phase === "info" ? (
+							<AlertCircle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+						) : (
+							<Loader2 className="h-4 w-4 animate-spin text-primary shrink-0 mt-0.5" />
+						)}
+						<span
+							className={cn(
+								provision.phase === "error"
+									? "text-destructive"
+									: provision.phase === "done"
+										? "text-success"
+										: provision.phase === "info"
+											? "text-warning"
+											: "text-foreground",
+							)}
+						>
+							{provision.message}
+						</span>
+					</div>
+					{provision.phase === "pulling" && (
+						<div className="mt-2 w-full bg-muted rounded-full h-2 overflow-hidden">
+							{provision.percentage > 0 ? (
+								<div
+									className="h-full rounded-full bg-primary transition-all duration-300"
+									style={{
+										width: `${Math.max(0, Math.min(100, provision.percentage))}%`,
+									}}
+								/>
+							) : (
+								<div className="h-full w-1/4 rounded-full bg-primary animate-indeterminate" />
+							)}
+						</div>
+					)}
+					{provision.action === "install-ollama" && (
+						<div className="mt-2 flex items-center gap-2">
+							<Button type="button" size="sm" onClick={installOllama}>
+								<Download className="h-4 w-4 mr-1.5" />
+								Installer Ollama
+							</Button>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								onClick={() =>
+									globalThis.electronAPI?.openExternal?.("https://ollama.com")
+								}
+							>
+								<ExternalLink className="h-4 w-4 mr-1.5" />
+								ollama.com
+							</Button>
+						</div>
+					)}
+				</div>
+			)}
 
 			<form
 				className="flex items-center gap-2"
@@ -287,17 +604,45 @@ export function HuggingFaceModelDiscovery({
 				{models.map((m) => {
 					const localName = `hf.co/${m.id}`;
 					const isSelected = selectedModel === localName;
+					const isActiveProvision =
+						provision.phase === "checking" ||
+						provision.phase === "starting" ||
+						provision.phase === "pulling";
+					const isProvisioningThis =
+						isActiveProvision && provision.model === localName;
+					const isBusyElsewhere =
+						isActiveProvision && provision.model !== localName;
 					return (
+						// biome-ignore lint/a11y/useSemanticElements: row wraps action <button>s, so it cannot itself be a <button>
 						<div
 							key={m.id}
+							role="button"
+							tabIndex={0}
+							aria-pressed={isSelected}
+							onClick={() => onSelectModel?.(localName)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" || e.key === " ") {
+									e.preventDefault();
+									onSelectModel?.(localName);
+								}
+							}}
+							title={`Définir ${localName} comme modèle par défaut`}
 							className={cn(
-								"flex items-center justify-between gap-3 p-2 rounded-md border hover:bg-muted/40",
+								"flex items-center justify-between gap-3 p-2 rounded-md border cursor-pointer hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
 								isSelected ? "border-primary bg-primary/5" : "border-border",
 							)}
 						>
 							<div className="min-w-0">
-								<p className="text-sm font-medium text-foreground truncate">
+								<p className="text-sm font-medium text-foreground truncate flex items-center gap-1.5">
+									{isSelected && (
+										<CircleCheck className="h-4 w-4 text-primary shrink-0" />
+									)}
 									{m.id}
+									{isSelected && (
+										<span className="text-[10px] font-normal text-primary">
+											(par défaut)
+										</span>
+									)}
 								</p>
 								<div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
 									<span className="inline-flex items-center gap-1">
@@ -321,31 +666,35 @@ export function HuggingFaceModelDiscovery({
 								</div>
 							</div>
 							<div className="flex shrink-0 items-center gap-2">
-								{onSelectModel && (
-									<Button
-										type="button"
-										variant={isSelected ? "default" : "secondary"}
-										size="sm"
-										onClick={() => onSelectModel(localName)}
-										title={`Définir ${localName} comme modèle par défaut`}
-									>
-										{isSelected && <CircleCheck className="h-4 w-4 mr-1.5" />}
-										{isSelected ? "Choisi" : "Choisir"}
-									</Button>
-								)}
 								<Button
 									type="button"
-									variant="outline"
+									variant={isSelected ? "default" : "outline"}
 									size="sm"
-									onClick={() => copyPullCommand(m.id)}
-									title={`ollama pull hf.co/${m.id}`}
+									onClick={(e) => { e.stopPropagation(); provisionModel(localName); }}
+									disabled={isProvisioningThis || isBusyElsewhere}
+									title={`Démarrer Ollama et télécharger ${localName}`}
+								>
+									{isProvisioningThis ? (
+										<Loader2 className="h-4 w-4 animate-spin" />
+									) : (
+										<Download className="h-4 w-4" />
+									)}
+									<span className="ml-1.5 hidden sm:inline">
+										Télécharger & démarrer
+									</span>
+								</Button>
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									onClick={(e) => { e.stopPropagation(); copyPullCommand(m.id); }}
+									title={`Copier : ollama pull hf.co/${m.id}`}
 								>
 									{copiedId === m.id ? (
 										<Check className="h-4 w-4 text-success" />
 									) : (
 										<Copy className="h-4 w-4" />
 									)}
-									<span className="ml-1.5 hidden sm:inline">ollama pull</span>
 								</Button>
 							</div>
 						</div>
