@@ -77,7 +77,16 @@ _AWS_ENTRY = get_default("aws")
 AWS_BEDROCK_MODEL = _AWS_ENTRY.model_id if _AWS_ENTRY else "anthropic.claude-opus-4-7"
 
 _OLLAMA_ENTRY = get_default("ollama")
-OLLAMA_MODEL = _OLLAMA_ENTRY.model_id if _OLLAMA_ENTRY else "llama3.3"
+# Honour the model the user actually picked for their local server (Ollama /
+# LM Studio / llama.cpp …). The frontend injects it as OLLAMA_MODEL (mirrored as
+# LOCAL_LLM_MODEL) from the provider config. Without this, every local run was
+# forced onto the registry default ("llama3.3") and the user's selected model —
+# e.g. an HF-discovered "hf.co/org/model" — was silently ignored.
+OLLAMA_MODEL = (
+    os.getenv("OLLAMA_MODEL")
+    or os.getenv("LOCAL_LLM_MODEL")
+    or (_OLLAMA_ENTRY.model_id if _OLLAMA_ENTRY else "llama3.3")
+)
 
 _WINDSURF_ENTRY = get_default("windsurf")
 WINDSURF_MODEL = _WINDSURF_ENTRY.model_id if _WINDSURF_ENTRY else "swe-1.6"

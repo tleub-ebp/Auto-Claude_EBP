@@ -344,6 +344,70 @@ def _compute_tokens_from_history(
     return expected_in, expected_out, 0
 
 
+# Rough energy estimate (kWh per 1M tokens) for a locally-served model when we
+# can't tell its size — same order of magnitude as the catalog's built-in ones.
+_DEFAULT_LOCAL_ENERGY_KWH = 0.07
+
+
+def discover_local_models(
+    base_url: str | None = None, timeout: float = 1.5
+) -> list[str]:
+    """Best-effort list of models actually pulled into the local Ollama server.
+
+    Lets the Formula Lab compare the user's REAL local LLMs (including
+    HF-discovered ``hf.co/org/model`` ones) — not just the generic catalog
+    entries. Reads ``{base}/api/tags``. Never raises and never blocks for long:
+    on any error (server down, timeout) it returns an empty list.
+    """
+    import json as _json
+    import os as _os
+    import urllib.request as _req
+
+    base = (
+        base_url
+        or _os.environ.get("OLLAMA_BASE_URL")
+        or _os.environ.get("LOCAL_LLM_BASE_URL")
+        or "http://localhost:11434"
+    ).rstrip("/")
+    # Strip an OpenAI-style suffix if the configured URL carries one.
+    for suffix in ("/v1/chat/completions", "/v1"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    try:
+        if not base.startswith(("http://", "https://")):
+            return []
+        with _req.urlopen(f"{base}/api/tags", timeout=timeout) as resp:  # noqa: S310
+            data = _json.loads(resp.read().decode())
+    except Exception:  # noqa: BLE001 — discovery is optional, never fatal
+        return []
+    names: list[str] = []
+    for m in data.get("models", []) or []:
+        name = m.get("name") or m.get("model")
+        if name:
+            names.append(str(name))
+    # Always include the explicitly configured default, even if not pulled yet.
+    configured = _os.environ.get("OLLAMA_MODEL") or _os.environ.get("LOCAL_LLM_MODEL")
+    if configured and configured not in names:
+        names.append(configured)
+    return names
+
+
+def _register_local_models(catalog: PricingCatalog, models: list[str]) -> None:
+    """Add user-supplied local model names to the catalog (priced at $0)."""
+    for name in models:
+        if not name or catalog.get_pricing("ollama", name):
+            continue
+        catalog.add_pricing(
+            ModelPricing(
+                provider="ollama",
+                model=name,
+                input=0.0,
+                output=0.0,
+                energy_kwh_per_million_tok=_DEFAULT_LOCAL_ENERGY_KWH,
+            )
+        )
+
+
 def _default_value_score(success: float, cost: float, per_token: bool) -> float:
     """Initial ranking score: success per dollar, with a floor for free models.
 
@@ -366,6 +430,7 @@ def compute_formula_matrix(
     providers: list[str] | None = None,
     complexity_score: float | None = None,
     catalog: PricingCatalog | None = None,
+    local_models: list[str] | None = None,
 ) -> FormulaMatrix:
     """Compute the full formula matrix for one ticket. Never raises.
 
@@ -381,6 +446,10 @@ def compute_formula_matrix(
     """
     catalog = catalog or PricingCatalog()
     warnings: list[str] = []
+
+    # Make the user's real local LLMs first-class in the matrix (priced at $0).
+    if local_models:
+        _register_local_models(catalog, local_models)
 
     # --- footprint + complexity -------------------------------------------
     footprint: SpecFootprint
