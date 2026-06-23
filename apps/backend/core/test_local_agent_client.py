@@ -124,3 +124,22 @@ class TestLocalAgentClient:
     def test_default_model(self):
         client = LocalAgentClient()
         assert client.model == "llama3.3"
+
+    def test_connection_error_message_is_friendly(self):
+        """A connection failure is rephrased into an actionable Ollama hint."""
+        client = LocalAgentClient(model="m", base_url="http://localhost:11434")
+        msg = client._describe_request_error(
+            OSError("Cannot connect to host localhost:11434 ssl:default")
+        )
+        assert "Ollama ne répond pas" in msg
+        assert "http://localhost:11434" in msg
+        assert "Télécharger & démarrer" in msg
+        # The raw aiohttp text must not leak through.
+        assert "ssl:default" not in msg
+
+    def test_non_connection_error_passthrough(self):
+        """A genuine API error (not a connection failure) keeps its detail."""
+        client = LocalAgentClient(model="m")
+        msg = client._describe_request_error(ValueError("model not found"))
+        assert "model not found" in msg
+        assert "Ollama ne répond pas" not in msg

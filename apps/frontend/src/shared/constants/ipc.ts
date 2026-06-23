@@ -517,10 +517,14 @@ export const IPC_CHANNELS = {
 	OLLAMA_CHECK_STATUS: "ollama:checkStatus",
 	OLLAMA_CHECK_INSTALLED: "ollama:checkInstalled",
 	OLLAMA_INSTALL: "ollama:install",
+	OLLAMA_START_SERVER: "ollama:startServer",
+	OLLAMA_ENSURE: "ollama:ensure",
+	OLLAMA_INSTALL_PROGRESS: "ollama:installProgress",
 	OLLAMA_LIST_MODELS: "ollama:listModels",
 	OLLAMA_LIST_EMBEDDING_MODELS: "ollama:listEmbeddingModels",
 	OLLAMA_PULL_MODEL: "ollama:pullModel",
 	OLLAMA_PULL_PROGRESS: "ollama:pullProgress",
+	OLLAMA_DELETE_MODEL: "ollama:deleteModel",
 
 	// WorkPilot AI source environment configuration
 	AUTOBUILD_SOURCE_ENV_GET: "autobuild:source:env:get",

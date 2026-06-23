@@ -567,6 +567,9 @@ def main():
         "pull-model", help="Pull (download) an Ollama model"
     )
     pull_parser.add_argument("model", help="Model name to pull (e.g., embeddinggemma)")
+    pull_parser.add_argument(
+        "--base-url", help=f"Ollama server URL (default: {DEFAULT_OLLAMA_URL})"
+    )
 
     args = parser.parse_args()
 

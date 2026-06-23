@@ -1,6 +1,5 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GitMerge } from "lucide-react";
 import { memo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import type { Task, TaskStatus } from "../../shared/types";
@@ -10,7 +9,6 @@ import {
 	getTaskAgingLevel,
 } from "../lib/kanban-aging";
 import { cn } from "../lib/utils";
-import { useKanbanConflictStore } from "../stores/kanban-conflict-store";
 import { TaskCard } from "./TaskCard";
 
 interface SortableTaskCardProps {
@@ -61,9 +59,6 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 	onToggleSelect,
 }: SortableTaskCardProps) {
 	const { t } = useTranslation(["tasks"]);
-	// Subscribe to this card's own conflict entry only — re-renders just this
-	// card when its plan-overlap status changes, not the whole board.
-	const conflict = useKanbanConflictStore((s) => s.conflicts[task.id]);
 	const {
 		attributes,
 		listeners,
@@ -90,14 +85,6 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 			: t("kanban.aging.idleFor", {
 					duration: formatAgingDuration(getTaskAgingHours(task)),
 				});
-
-	const conflictLabel =
-		conflict && !isDragging
-			? t("kanban.conflict.badge", {
-					count: conflict.files,
-					tasks: conflict.titles.join(", "),
-				})
-			: undefined;
 
 	// Memoize onClick to prevent unnecessary TaskCard re-renders
 	const handleClick = useCallback(() => {
@@ -130,17 +117,6 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 							: "bg-amber-500/70",
 					)}
 				/>
-			)}
-			{conflictLabel && (
-				<span
-					role="img"
-					title={conflictLabel}
-					aria-label={conflictLabel}
-					className="pointer-events-none absolute -right-1.5 -top-1.5 z-10 flex h-5 items-center gap-0.5 rounded-full bg-destructive px-1.5 text-[10px] font-bold text-destructive-foreground shadow-md"
-				>
-					<GitMerge className="h-3 w-3" />
-					{conflict?.titles.length}
-				</span>
 			)}
 			<TaskCard
 				task={task}
