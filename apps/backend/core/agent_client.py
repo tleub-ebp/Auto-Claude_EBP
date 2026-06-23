@@ -2691,6 +2691,35 @@ class LocalAgentClient(OpenAIAgentClient):
                             )
                         ],
                     )
+                # Tools were offered but the model never called one on the very
+                # first turn → it almost certainly lacks tool-calling support
+                # (common for raw GGUF imports like hf.co/* without a tools
+                # template). The agent can't act without tools, so surface an
+                # actionable hint instead of letting QA loop silently.
+                elif tools and turn == 0:
+                    logger.warning(
+                        "[LocalAgentClient] Model %s returned no tool calls though "
+                        "%d tools were offered — likely no tool-calling support.",
+                        self.model,
+                        len(tools),
+                    )
+                    yield AgentMessage(
+                        role=MessageRole.SYSTEM,
+                        content=[
+                            ContentBlock(
+                                type=ContentBlockType.TEXT,
+                                text=(
+                                    f"⚠️ Le modèle local « {self.model} » n'a appelé "
+                                    "aucun outil alors que la tâche en exige. Ce modèle "
+                                    "ne supporte probablement pas le « tool calling » "
+                                    "d'Ollama (fréquent pour les GGUF importés via "
+                                    "hf.co). Choisissez un modèle compatible outils, "
+                                    "p. ex. « qwen2.5-coder » ou « llama3.1 », via "
+                                    "« Télécharger & démarrer »."
+                                ),
+                            )
+                        ],
+                    )
                 self.last_usage = {
                     "input_tokens": _total_in,
                     "output_tokens": _total_out,
