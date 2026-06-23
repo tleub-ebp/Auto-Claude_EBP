@@ -1923,6 +1923,10 @@ class OpenAIAgentClient(AgentClient):
         self._http_client: Any = None
         self._tool_executor: Any = None
         self._tool_definitions: list[dict[str, Any]] = []
+        # Optional MCP bridge: configured MCP servers (CUSTOM_MCP_SERVERS) are
+        # surfaced as extra OpenAI tools so OpenAI/Google/local agents can use
+        # them just like the Claude SDK path. Initialised in __aenter__.
+        self._mcp_manager: Any = None
         # Usage accumulated across the session's turns
         self.last_usage: dict | None = None
 
@@ -1963,9 +1967,33 @@ class OpenAIAgentClient(AgentClient):
                 logger.warning(
                     f"[OpenAIAgentClient] Tool executor init failed (text-only mode): {e}"
                 )
+        # Bridge configured MCP servers (best-effort) so their tools are exposed
+        # alongside the built-in toolset. Never fail client setup on MCP errors.
+        try:
+            from core.mcp_tools import MCPToolManager, load_mcp_server_configs
+
+            servers = load_mcp_server_configs(self._project_dir)
+            if servers:
+                manager = MCPToolManager(self._project_dir, servers)
+                await manager.connect()
+                mcp_defs = manager.tool_definitions()
+                if mcp_defs:
+                    self._mcp_manager = manager
+                    self._tool_definitions = list(self._tool_definitions) + mcp_defs
+                    logger.info(
+                        f"[OpenAIAgentClient] MCP enabled: {len(mcp_defs)} tool(s) "
+                        f"from {len(servers)} server(s)"
+                    )
+                else:
+                    await manager.aclose()
+        except Exception as e:  # noqa: BLE001 — MCP must never block client setup
+            logger.warning(f"[OpenAIAgentClient] MCP bridge unavailable: {e}")
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._mcp_manager is not None:
+            await self._mcp_manager.aclose()
+            self._mcp_manager = None
         if self._http_client is not None:
             await self._http_client.close()
             self._http_client = None
@@ -2184,7 +2212,19 @@ class OpenAIAgentClient(AgentClient):
 
                 result_text = ""
                 is_error = False
-                if self._tool_executor:
+                if self._mcp_manager is not None and self._mcp_manager.has_tool(
+                    tool_name
+                ):
+                    try:
+                        result = await self._mcp_manager.call(tool_name, args)
+                        result_text = str(result) if result is not None else ""
+                    except Exception as e:
+                        result_text = f"MCP tool error: {e}"
+                        is_error = True
+                        logger.warning(
+                            f"[OpenAIAgentClient] MCP tool {tool_name} failed: {e}"
+                        )
+                elif self._tool_executor:
                     try:
                         result = await self._tool_executor.execute(tool_name, args)
                         result_text = str(result) if result is not None else ""
