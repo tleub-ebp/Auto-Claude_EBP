@@ -175,7 +175,10 @@ export function HuggingFaceModelDiscovery({
 }: HuggingFaceModelDiscoveryProps) {
 	const [query, setQuery] = useState("");
 	const [task, setTask] = useState("text-generation");
-	const [library, setLibrary] = useState("");
+	// Default to GGUF: Ollama can only pull GGUF repos from the Hub, so showing
+	// GGUF first stops users from picking a transformers/safetensors repo that
+	// fails with "no GGUF file". They can still switch to "Toutes les libs".
+	const [library, setLibrary] = useState("gguf");
 	const [language, setLanguage] = useState("");
 	const [license, setLicense] = useState("");
 	const [sort, setSort] = useState<SortOption>("trending");
