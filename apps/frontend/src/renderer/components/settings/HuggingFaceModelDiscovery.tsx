@@ -5,17 +5,25 @@
  * A live "Discover models" panel backed by the official Hugging Face MCP
  * server (via window.electronAPI.searchHuggingFaceModels → main → HF MCP).
  *
- * This is a DISCOVERY aid only: it lists repos on the Hub so the user can find
- * a model to run locally. The models actually selectable for inference still
- * come from the local server's /v1/models (Ollama / LM Studio). Each row offers
- * a one-click "ollama pull hf.co/<id>" copy to fetch a GGUF repo.
+ * Two actions per row:
+ *   - "Choisir" sets the provider's default model to `hf.co/<id>` (the id Ollama
+ *     uses after `ollama pull hf.co/<id>`), wired to the parent config form.
+ *   - "ollama pull" copies the pull command to fetch the GGUF repo locally.
  *
  * The filter bar mirrors the facets on https://huggingface.co/models (task,
  * library, language, license, sort). Parameter-size filtering is intentionally
  * absent: the HF MCP `hub_repo_search` tool exposes no size facet.
  */
 
-import { Check, Copy, Download, Heart, Loader2, Search } from "lucide-react";
+import {
+	Check,
+	CircleCheck,
+	Copy,
+	Download,
+	Heart,
+	Loader2,
+	Search,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HuggingFaceModelInfo } from "../../../shared/types/mcp-marketplace";
 import { cn } from "../../lib/utils";
@@ -25,6 +33,14 @@ interface HuggingFaceModelDiscoveryProps {
 	className?: string;
 	/** Optional HF read token (raises rate limits, unlocks gated repos). */
 	hfToken?: string;
+	/** Currently-selected default model (to highlight the active row). */
+	selectedModel?: string;
+	/**
+	 * Called when the user picks a model. Receives the local-runnable name
+	 * (`hf.co/<id>` — the id Ollama uses after `ollama pull hf.co/<id>`), which
+	 * the parent stores as the provider's default model.
+	 */
+	onSelectModel?: (model: string) => void;
 }
 
 type SortOption = "trending" | "downloads" | "likes" | "created" | "modified";
@@ -96,6 +112,8 @@ const selectClass =
 export function HuggingFaceModelDiscovery({
 	className,
 	hfToken,
+	selectedModel,
+	onSelectModel,
 }: HuggingFaceModelDiscoveryProps) {
 	const [query, setQuery] = useState("");
 	const [task, setTask] = useState("text-generation");
@@ -168,9 +186,8 @@ export function HuggingFaceModelDiscovery({
 					Découvrir des modèles (Hugging Face)
 				</h3>
 				<p className="text-xs text-muted-foreground mt-0.5">
-					Liste en direct du Hub via le MCP Hugging Face. Récupérez un modèle
-					(GGUF) avec « ollama pull », puis sélectionnez-le dans le serveur
-					local.
+					Liste en direct du Hub via le MCP Hugging Face. « Choisir » définit le
+					modèle par défaut (pensez à le récupérer avec « ollama pull »).
 				</p>
 			</div>
 
@@ -192,11 +209,7 @@ export function HuggingFaceModelDiscovery({
 					/>
 				</div>
 				<Button type="submit" size="sm" disabled={isLoading}>
-					{isLoading ? (
-						<Loader2 className="h-4 w-4 animate-spin" />
-					) : (
-						"Rechercher"
-					)}
+					{isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Rechercher"}
 				</Button>
 			</form>
 
@@ -271,52 +284,73 @@ export function HuggingFaceModelDiscovery({
 			)}
 
 			<div className="flex flex-col gap-1.5 max-h-80 overflow-y-auto">
-				{models.map((m) => (
-					<div
-						key={m.id}
-						className="flex items-center justify-between gap-3 p-2 rounded-md border border-border hover:bg-muted/40"
-					>
-						<div className="min-w-0">
-							<p className="text-sm font-medium text-foreground truncate">
-								{m.id}
-							</p>
-							<div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-								<span className="inline-flex items-center gap-1">
-									<Download className="h-3 w-3" />
-									{formatCount(m.downloads)}
-								</span>
-								<span className="inline-flex items-center gap-1">
-									<Heart className="h-3 w-3" />
-									{formatCount(m.likes)}
-								</span>
-								{m.pipelineTag && (
-									<span className="px-1.5 py-0.5 rounded bg-muted text-[10px]">
-										{m.pipelineTag}
+				{models.map((m) => {
+					const localName = `hf.co/${m.id}`;
+					const isSelected = selectedModel === localName;
+					return (
+						<div
+							key={m.id}
+							className={cn(
+								"flex items-center justify-between gap-3 p-2 rounded-md border hover:bg-muted/40",
+								isSelected ? "border-primary bg-primary/5" : "border-border",
+							)}
+						>
+							<div className="min-w-0">
+								<p className="text-sm font-medium text-foreground truncate">
+									{m.id}
+								</p>
+								<div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+									<span className="inline-flex items-center gap-1">
+										<Download className="h-3 w-3" />
+										{formatCount(m.downloads)}
 									</span>
-								)}
-								{m.library && (
-									<span className="px-1.5 py-0.5 rounded bg-muted text-[10px]">
-										{m.library}
+									<span className="inline-flex items-center gap-1">
+										<Heart className="h-3 w-3" />
+										{formatCount(m.likes)}
 									</span>
+									{m.pipelineTag && (
+										<span className="px-1.5 py-0.5 rounded bg-muted text-[10px]">
+											{m.pipelineTag}
+										</span>
+									)}
+									{m.library && (
+										<span className="px-1.5 py-0.5 rounded bg-muted text-[10px]">
+											{m.library}
+										</span>
+									)}
+								</div>
+							</div>
+							<div className="flex shrink-0 items-center gap-2">
+								{onSelectModel && (
+									<Button
+										type="button"
+										variant={isSelected ? "default" : "secondary"}
+										size="sm"
+										onClick={() => onSelectModel(localName)}
+										title={`Définir ${localName} comme modèle par défaut`}
+									>
+										{isSelected && <CircleCheck className="h-4 w-4 mr-1.5" />}
+										{isSelected ? "Choisi" : "Choisir"}
+									</Button>
 								)}
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									onClick={() => copyPullCommand(m.id)}
+									title={`ollama pull hf.co/${m.id}`}
+								>
+									{copiedId === m.id ? (
+										<Check className="h-4 w-4 text-success" />
+									) : (
+										<Copy className="h-4 w-4" />
+									)}
+									<span className="ml-1.5 hidden sm:inline">ollama pull</span>
+								</Button>
 							</div>
 						</div>
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							onClick={() => copyPullCommand(m.id)}
-							title={`ollama pull hf.co/${m.id}`}
-						>
-							{copiedId === m.id ? (
-								<Check className="h-4 w-4 text-success" />
-							) : (
-								<Copy className="h-4 w-4" />
-							)}
-							<span className="ml-1.5 hidden sm:inline">ollama pull</span>
-						</Button>
-					</div>
-				))}
+					);
+				})}
 			</div>
 		</div>
 	);

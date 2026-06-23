@@ -74,6 +74,10 @@ export function ApiKeyConfigContent({
 				<HuggingFaceModelDiscovery
 					className="pt-2 border-t border-border"
 					hfToken={formData.apiKey}
+					selectedModel={formData.model}
+					onSelectModel={(model) =>
+						onFormDataChange({ ...formData, model })
+					}
 				/>
 			)}
 
