@@ -2546,6 +2546,355 @@ class LocalAgentClient(OpenAIAgentClient):
 
         await super().resume(truncated)
 
+    def _native_chat_url(self) -> str:
+        """Ollama's native chat endpoint (root of the OpenAI-compatible base)."""
+        root = self._api_base.split("/v1/")[0] or self._api_base
+        return f"{root.rstrip('/')}/api/chat"
+
+    def _num_ctx(self) -> int:
+        """Context window to request, raised well above Ollama's 4096 default."""
+        import os as _os
+
+        try:
+            return max(2048, int(_os.environ.get("OLLAMA_CONTEXT_LENGTH", "8192")))
+        except (TypeError, ValueError):
+            return 8192
+
+    async def _pull_ollama_model(self) -> tuple[bool, str]:
+        """Pull ``self.model`` into the server (Ollama API: POST /api/pull).
+
+        Returns ``(ok, error)``. Uses a long per-request timeout since a model
+        can be several GB. Never raises.
+        """
+        import json as _json
+
+        import aiohttp
+
+        root = self._api_base.split("/v1/")[0] or self._api_base
+        url = f"{root.rstrip('/')}/api/pull"
+        try:
+            async with self._get_http_client().post(
+                url,
+                json={"name": self.model, "stream": False},
+                timeout=aiohttp.ClientTimeout(total=1800, sock_connect=20),
+            ) as resp:
+                text = await resp.text()
+                if resp.status == 200 and '"error"' not in text:
+                    return True, ""
+                try:
+                    return False, _json.loads(text).get("error", text)
+                except (_json.JSONDecodeError, AttributeError, TypeError):
+                    return False, text
+        except Exception as e:  # noqa: BLE001 — surface as a soft failure
+            return False, str(e)
+
+    async def receive_response(self) -> AsyncIterator[AgentMessage]:
+        """Run the tool-use loop against Ollama's NATIVE ``/api/chat`` endpoint.
+
+        Why not the inherited OpenAI loop: Ollama's OpenAI-compatible endpoint
+        ignores ``num_ctx``, so models load with a 4096-token window and large
+        agent prompts fail with "exceeds the available context size". The native
+        API accepts ``options.num_ctx`` per request — the only way to set context
+        that works for ANY server (system or app-managed) and any model name
+        (including ``hf.co/org/model``), with no model re-creation or restart.
+
+        Message/tool shapes stay native throughout (tool-call arguments are
+        objects, tool results use ``role: "tool"``), so multi-turn tool calling
+        round-trips correctly.
+        """
+        import json as _json
+
+        if not self._pending_query:
+            return
+
+        prompt = self._pending_query
+        self._pending_query = None
+
+        messages: list[dict[str, Any]] = []
+        if self.system_prompt:
+            messages.append({"role": "system", "content": self.system_prompt})
+        self._consume_resumed_history_as_system_message(messages)
+        messages.append({"role": "user", "content": prompt})
+
+        # Tool definitions use the same {type:function, function:{…}} shape the
+        # native API accepts.
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": td["name"],
+                    "description": td.get("description", ""),
+                    "parameters": td.get(
+                        "parameters", {"type": "object", "properties": {}}
+                    ),
+                },
+            }
+            for td in self._tool_definitions
+        ]
+
+        url = self._native_chat_url()
+        num_ctx = self._num_ctx()
+        session = self._get_http_client()
+        _total_in = 0
+        _total_out = 0
+        # Pull-on-demand guard: if the requested model isn't installed, we pull
+        # it once (it may be a library name like "qwen2.5-coder" the user never
+        # ran `ollama pull` on) and retry, instead of failing with a 404.
+        model_pull_attempted = False
+
+        logger.info(
+            f"[LocalAgentClient] Starting session (model={self.model}, "
+            f"tools={len(tools)}, num_ctx={num_ctx})"
+        )
+        print(
+            f"[LocalAgentClient] 🤖 Starting Ollama session "
+            f"(model={self.model}, {len(tools)} tools, num_ctx={num_ctx})",
+            flush=True,
+        )
+
+        for turn in range(self.max_turns):
+            payload: dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "stream": False,
+                "options": {"num_ctx": num_ctx},
+            }
+            if tools:
+                payload["tools"] = tools
+
+            try:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        # Model not installed → pull it once, then retry the turn.
+                        if (
+                            "not found" in error_text.lower()
+                            and not model_pull_attempted
+                        ):
+                            model_pull_attempted = True
+                            logger.warning(
+                                "[LocalAgentClient] Model %s not installed — "
+                                "pulling on demand.",
+                                self.model,
+                            )
+                            yield AgentMessage(
+                                role=MessageRole.SYSTEM,
+                                content=[
+                                    ContentBlock(
+                                        type=ContentBlockType.TEXT,
+                                        text=(
+                                            f"📥 Modèle « {self.model} » non installé "
+                                            "— téléchargement automatique en cours "
+                                            "(cela peut prendre plusieurs minutes)…"
+                                        ),
+                                    )
+                                ],
+                            )
+                            pulled, pull_err = await self._pull_ollama_model()
+                            if pulled:
+                                continue  # retry the same turn now that it exists
+                            yield AgentMessage(
+                                role=MessageRole.SYSTEM,
+                                content=[
+                                    ContentBlock(
+                                        type=ContentBlockType.TEXT,
+                                        text=(
+                                            f"Échec du téléchargement du modèle "
+                                            f"« {self.model} » : {pull_err}"
+                                        ),
+                                    )
+                                ],
+                            )
+                            return
+                        logger.error(
+                            f"[LocalAgentClient] API error ({resp.status}): "
+                            f"{error_text[:500]}"
+                        )
+                        yield AgentMessage(
+                            role=MessageRole.SYSTEM,
+                            content=[
+                                ContentBlock(
+                                    type=ContentBlockType.TEXT,
+                                    text=f"Ollama API error ({resp.status}): {error_text}",
+                                )
+                            ],
+                        )
+                        return
+                    data = await resp.json()
+            except Exception as e:
+                logger.error(f"[LocalAgentClient] Request failed: {e}")
+                yield AgentMessage(
+                    role=MessageRole.SYSTEM,
+                    content=[
+                        ContentBlock(
+                            type=ContentBlockType.TEXT,
+                            text=self._describe_request_error(e),
+                        )
+                    ],
+                )
+                return
+
+            _total_in += int(data.get("prompt_eval_count", 0) or 0)
+            _total_out += int(data.get("eval_count", 0) or 0)
+
+            message = data.get("message") or {}
+            content = message.get("content") or ""
+            tool_calls = message.get("tool_calls") or []
+
+            logger.info(
+                f"[LocalAgentClient] Turn {turn + 1}: content_len={len(content)}, "
+                f"tool_calls={len(tool_calls)}"
+            )
+
+            if content:
+                yield AgentMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=[ContentBlock(type=ContentBlockType.TEXT, text=content)],
+                )
+
+            if not tool_calls:
+                if not content:
+                    yield AgentMessage(
+                        role=MessageRole.ASSISTANT,
+                        content=[
+                            ContentBlock(
+                                type=ContentBlockType.TEXT,
+                                text="(No response from Ollama)",
+                            )
+                        ],
+                    )
+                # Tools were offered but the model never called one on the very
+                # first turn → it almost certainly lacks tool-calling support
+                # (common for raw GGUF imports like hf.co/* without a tools
+                # template). The agent can't act without tools, so surface an
+                # actionable hint instead of letting QA loop silently.
+                elif tools and turn == 0:
+                    logger.warning(
+                        "[LocalAgentClient] Model %s returned no tool calls though "
+                        "%d tools were offered — likely no tool-calling support.",
+                        self.model,
+                        len(tools),
+                    )
+                    yield AgentMessage(
+                        role=MessageRole.SYSTEM,
+                        content=[
+                            ContentBlock(
+                                type=ContentBlockType.TEXT,
+                                text=(
+                                    f"⚠️ Le modèle local « {self.model} » n'a appelé "
+                                    "aucun outil alors que la tâche en exige. Ce modèle "
+                                    "ne supporte probablement pas le « tool calling » "
+                                    "d'Ollama (fréquent pour les GGUF importés via "
+                                    "hf.co). Choisissez un modèle compatible outils, "
+                                    "p. ex. « qwen2.5-coder » ou « llama3.1 », via "
+                                    "« Télécharger & démarrer »."
+                                ),
+                            )
+                        ],
+                    )
+                self.last_usage = {
+                    "input_tokens": _total_in,
+                    "output_tokens": _total_out,
+                    "cost_usd": 0.0,
+                }
+                return
+
+            # Keep the assistant turn (native shape) in history for context.
+            messages.append(
+                {"role": "assistant", "content": content, "tool_calls": tool_calls}
+            )
+
+            for i, tc in enumerate(tool_calls):
+                func = tc.get("function", {}) or {}
+                tool_name = func.get("name", "")
+                # Native arguments are already an object; tolerate a string too.
+                raw_args = func.get("arguments", {})
+                if isinstance(raw_args, str):
+                    try:
+                        args = _json.loads(raw_args or "{}")
+                    except (_json.JSONDecodeError, TypeError):
+                        args = {}
+                else:
+                    args = raw_args or {}
+                tool_id = tc.get("id") or f"call_{turn}_{i}_{tool_name}"
+
+                logger.info(
+                    f"[LocalAgentClient] Turn {turn + 1}: "
+                    f"tool_call {tool_name}({list(args.keys())})"
+                )
+                print(f"[LocalAgentClient] 🔧 Tool: {tool_name}", flush=True)
+
+                yield AgentMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=[
+                        ContentBlock(
+                            type=ContentBlockType.TOOL_USE,
+                            tool_name=tool_name,
+                            tool_id=tool_id,
+                            tool_input=args,
+                        )
+                    ],
+                )
+
+                result_text = ""
+                is_error = False
+                if self._mcp_manager is not None and self._mcp_manager.has_tool(
+                    tool_name
+                ):
+                    try:
+                        result = await self._mcp_manager.call(tool_name, args)
+                        result_text = str(result) if result is not None else ""
+                    except Exception as e:
+                        result_text = f"MCP tool error: {e}"
+                        is_error = True
+                elif self._tool_executor:
+                    try:
+                        result = await self._tool_executor.execute(tool_name, args)
+                        result_text = str(result) if result is not None else ""
+                    except Exception as e:
+                        result_text = f"Tool error: {e}"
+                        is_error = True
+                else:
+                    result_text = "Tool executor not available"
+                    is_error = True
+
+                yield AgentMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=[
+                        ContentBlock(
+                            type=ContentBlockType.TOOL_RESULT,
+                            tool_use_id=tool_id,
+                            is_error=is_error,
+                            result_content=result_text,
+                        )
+                    ],
+                )
+
+                # Native tool result message.
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_name": tool_name,
+                        "content": truncate_tool_result(result_text),
+                    }
+                )
+
+            compacted = compact_messages(messages)
+            if compacted:
+                logger.info(
+                    f"[LocalAgentClient] History compaction: elided {compacted} "
+                    "stale tool result(s)"
+                )
+
+        logger.warning(
+            f"[LocalAgentClient] Reached max_turns ({self.max_turns}) — stopping"
+        )
+        self.last_usage = {
+            "input_tokens": _total_in,
+            "output_tokens": _total_out,
+            "cost_usd": 0.0,
+        }
+
     def _describe_request_error(self, exc: Exception) -> str:
         """Turn a raw connection failure into an actionable, localized hint.
 

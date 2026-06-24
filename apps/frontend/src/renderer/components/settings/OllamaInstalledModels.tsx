@@ -9,6 +9,7 @@
 
 import { HardDrive, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
@@ -23,20 +24,26 @@ interface OllamaInstalledModelsProps {
 	baseUrl?: string;
 }
 
-function formatSize(gb: number): string {
-	if (!gb || gb <= 0) return "—";
-	if (gb < 1) return `${Math.round(gb * 1024)} Mo`;
-	return `${gb.toFixed(1)} Go`;
-}
-
 export function OllamaInstalledModels({
 	className,
 	baseUrl,
 }: OllamaInstalledModelsProps) {
+	const { t } = useTranslation("settings");
 	const [models, setModels] = useState<InstalledModel[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [deleting, setDeleting] = useState<string | null>(null);
+
+	const formatSize = useCallback(
+		(gb: number): string => {
+			if (!gb || gb <= 0) return "—";
+			if (gb < 1) {
+				return `${Math.round(gb * 1024)} ${t("sections.accounts.localModels.unitMb")}`;
+			}
+			return `${gb.toFixed(1)} ${t("sections.accounts.localModels.unitGb")}`;
+		},
+		[t],
+	);
 
 	const refresh = useCallback(async () => {
 		setIsLoading(true);
@@ -45,22 +52,23 @@ export function OllamaInstalledModels({
 			const res = await globalThis.electronAPI?.listOllamaModels?.(baseUrl);
 			if (res?.success && res.data?.models) {
 				setModels(
-					res.data.models.map((m) => ({
-						name: m.name,
-						size_gb: m.size_gb,
-					})),
+					res.data.models.map((m) => ({ name: m.name, size_gb: m.size_gb })),
 				);
 			} else {
 				// Server not running / unreachable → just show nothing, no scary error.
 				setModels([]);
 			}
 		} catch (err) {
-			setError(err instanceof Error ? err.message : "Erreur inattendue.");
+			setError(
+				err instanceof Error
+					? err.message
+					: t("sections.accounts.localModels.unexpectedError"),
+			);
 			setModels([]);
 		} finally {
 			setIsLoading(false);
 		}
-	}, [baseUrl]);
+	}, [baseUrl, t]);
 
 	useEffect(() => {
 		void refresh();
@@ -69,9 +77,7 @@ export function OllamaInstalledModels({
 	const handleDelete = useCallback(
 		async (name: string) => {
 			if (
-				!confirm(
-					`Supprimer le modèle « ${name} » du disque ? Cette action est irréversible (il faudra le retélécharger pour le réutiliser).`,
-				)
+				!confirm(t("sections.accounts.localModels.deleteConfirm", { name }))
 			) {
 				return;
 			}
@@ -85,15 +91,22 @@ export function OllamaInstalledModels({
 				if (res?.success) {
 					setModels((prev) => prev.filter((m) => m.name !== name));
 				} else {
-					setError(res?.error || `Échec de la suppression de ${name}.`);
+					setError(
+						res?.error ||
+							t("sections.accounts.localModels.deleteError", { name }),
+					);
 				}
 			} catch (err) {
-				setError(err instanceof Error ? err.message : "Erreur inattendue.");
+				setError(
+					err instanceof Error
+						? err.message
+						: t("sections.accounts.localModels.unexpectedError"),
+				);
 			} finally {
 				setDeleting(null);
 			}
 		},
-		[baseUrl],
+		[baseUrl, t],
 	);
 
 	const totalGb = models.reduce((sum, m) => sum + (m.size_gb || 0), 0);
@@ -107,12 +120,15 @@ export function OllamaInstalledModels({
 				<div>
 					<h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
 						<HardDrive className="h-4 w-4" />
-						Modèles installés localement
+						{t("sections.accounts.localModels.title")}
 					</h3>
 					<p className="text-xs text-muted-foreground mt-0.5">
 						{models.length > 0
-							? `${models.length} modèle(s) · ${formatSize(totalGb)} sur le disque`
-							: "Aucun modèle pour l'instant."}
+							? t("sections.accounts.localModels.summary", {
+									count: models.length,
+									size: formatSize(totalGb),
+								})
+							: t("sections.accounts.localModels.empty")}
 					</p>
 				</div>
 				<Button
@@ -121,7 +137,7 @@ export function OllamaInstalledModels({
 					size="sm"
 					onClick={() => void refresh()}
 					disabled={isLoading}
-					title="Rafraîchir la liste"
+					title={t("sections.accounts.localModels.refresh")}
 				>
 					{isLoading ? (
 						<Loader2 className="h-4 w-4 animate-spin" />
@@ -155,7 +171,9 @@ export function OllamaInstalledModels({
 							size="sm"
 							onClick={() => handleDelete(m.name)}
 							disabled={deleting === m.name}
-							title={`Supprimer ${m.name} du disque`}
+							title={t("sections.accounts.localModels.deleteTooltip", {
+								name: m.name,
+							})}
 							className="text-destructive hover:text-destructive"
 						>
 							{deleting === m.name ? (

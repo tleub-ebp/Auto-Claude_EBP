@@ -40,7 +40,6 @@ import {
 	pythonEnvManager,
 } from "../python-env-manager";
 import {
-	applyModelContext,
 	deleteModel as deleteOllamaModelFromServer,
 	type EnsureProgress,
 	ensureOllamaReady,
@@ -1047,8 +1046,12 @@ export function registerMemoryHandlers(): void {
 						});
 					});
 
-					proc.on("close", async (code) => {
-						if (code === 0 && stdout) {
+					proc.on("close", (code) => {
+						// The detector writes a structured {success,error} JSON to
+						// stdout even on FAILURE (then exits 1), so always try to parse
+						// stdout first — otherwise a real, actionable error (e.g. "no
+						// GGUF file in this repo") was being hidden behind "Exit code 1".
+						if (stdout.trim()) {
 							try {
 								const result = JSON.parse(stdout);
 								if (result.success) {
@@ -1072,14 +1075,24 @@ export function registerMemoryHandlers(): void {
 								} else {
 									resolve({
 										success: false,
-										error: result.error || "Failed to pull model",
+										error:
+											result.error ||
+											stderr.trim() ||
+											`Échec du téléchargement (code ${code})`,
 									});
 								}
+								return;
 							} catch {
-								resolve({ success: false, error: `Invalid JSON: ${stdout}` });
+								// stdout wasn't JSON — fall through to the generic handling.
 							}
+						}
+						if (code === 0) {
+							resolve({ success: false, error: `Invalid JSON: ${stdout}` });
 						} else {
-							resolve({ success: false, error: stderr || `Exit code ${code}` });
+							resolve({
+								success: false,
+								error: stderr.trim() || `Échec du téléchargement (code ${code})`,
+							});
 						}
 					});
 
