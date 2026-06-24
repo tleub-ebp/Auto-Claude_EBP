@@ -50,6 +50,7 @@ import { getStaticProviders } from "../../../shared/utils/providers";
 import { entryMatchesQuery } from "../../../shared/utils/task-logs-search";
 import { debugError } from "../../../shared/utils/debug-logger";
 import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
+import { useDownloadStore } from "../../stores/download-store";
 import { Badge } from "../ui/badge";
 import {
 	Collapsible,
@@ -765,6 +766,10 @@ function PhaseLogSection({
 	subtaskTitles,
 }: PhaseLogSectionProps) {
 	const { t } = useTranslation(["tasks"]);
+	const { toast } = useToast();
+	const startDownload = useDownloadStore((s) => s.startDownload);
+	const completeDownload = useDownloadStore((s) => s.completeDownload);
+	const failDownload = useDownloadStore((s) => s.failDownload);
 	const Icon = PHASE_ICONS[phase];
 	const logOrder = useSettingsStore((s) => s.settings.logOrder);
 	const status = phaseLog?.status || "pending";
@@ -818,6 +823,43 @@ function PhaseLogSection({
 	}, [phaseLog?.entries, logOrder, isSearching, searchQuery]);
 
 	const hasEntries = displayedEntries.length > 0;
+
+	// Local providers expose a static catalog of pullable models; flag it so the
+	// model dropdown can mark which entries are actually installed vs downloadable.
+	const isLocalProvider = ((phaseConfig?.provider ?? "") as string)
+		.toLowerCase()
+		.match(/^(ollama|local|lmstudio)$/) != null;
+
+	// Persist the chosen model; if it's a local model that isn't installed yet,
+	// start pulling it now (progress surfaces in the global download indicator)
+	// so it's ready by the time the phase runs — instead of silently 404-ing.
+	const handleModelChange = (value: string) => {
+		onModelChange?.(phase, value);
+		if (!isLocalProvider) return;
+		const opt = modelOptions.find((o) => o.value === value);
+		if (!opt || opt.installed) return;
+		const api = globalThis.electronAPI;
+		if (!api?.pullOllamaModel) return;
+		startDownload(value);
+		toast({
+			title: t("tasks:logs.model.downloadStartedTitle", "Downloading model"),
+			description: t(
+				"tasks:logs.model.downloadStartedDesc",
+				"{{model}} is downloading in the background.",
+				{ model: value },
+			),
+		});
+		void (async () => {
+			try {
+				await api.ensureOllama?.();
+				const res = await api.pullOllamaModel(value);
+				if (res?.success) completeDownload(value);
+				else failDownload(value, res?.error || "");
+			} catch (e) {
+				failDownload(value, e instanceof Error ? e.message : String(e));
+			}
+		})();
+	};
 
 	// Table « entrée → libellé de sous-étape » pour cette phase : bornes
 	// structurées (nouveaux logs) ou repli sur les anciens logs (sous-tâche pour
@@ -985,7 +1027,7 @@ function PhaseLogSection({
 							{onModelChange ? (
 								<Select
 									value={modelSelectValue}
-									onValueChange={(value) => onModelChange(phase, value)}
+									onValueChange={handleModelChange}
 									disabled={isSavingPhase}
 								>
 									<SelectTrigger
@@ -1005,7 +1047,18 @@ function PhaseLogSection({
 									<SelectContent>
 										{modelOptions.map((m) => (
 											<SelectItem key={m.value} value={m.value}>
-												{m.label}
+												<span className="flex items-center gap-1.5">
+													<span>{m.label}</span>
+													{m.installed ? (
+														<span className="text-[10px] text-success">
+															{t("tasks:logs.model.installed", "✓ installed")}
+														</span>
+													) : isLocalProvider ? (
+														<span className="text-[10px] text-muted-foreground">
+															{t("tasks:logs.model.downloadable", "to download")}
+														</span>
+													) : null}
+												</span>
 											</SelectItem>
 										))}
 									</SelectContent>

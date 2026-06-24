@@ -5,6 +5,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { HuggingFaceModelDiscovery } from "./HuggingFaceModelDiscovery";
+import { OllamaInstalledModels } from "./OllamaInstalledModels";
 import type { ProviderConfig } from "./providerConfig";
 
 interface ApiKeyConfigContentProps {
@@ -71,10 +72,21 @@ export function ApiKeyConfigContent({
 			    model to pull. The model actually used still comes from the local
 			    server; this panel only helps locate one. */}
 			{providerId === "ollama" && (
-				<HuggingFaceModelDiscovery
-					className="pt-2 border-t border-border"
-					hfToken={formData.apiKey}
-				/>
+				<>
+					<OllamaInstalledModels
+						className="pt-2 border-t border-border"
+						baseUrl={formData.apiUrl}
+					/>
+					<HuggingFaceModelDiscovery
+						className="pt-2 border-t border-border"
+						hfToken={formData.apiKey}
+						selectedModel={formData.model}
+						baseUrl={formData.apiUrl}
+						onSelectModel={(model) =>
+							onFormDataChange({ ...formData, model })
+						}
+					/>
+				</>
 			)}
 
 			{testResult && <TestResultAlert testResult={testResult} />}

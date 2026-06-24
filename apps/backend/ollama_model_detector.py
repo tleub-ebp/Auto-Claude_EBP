@@ -480,11 +480,26 @@ def cmd_pull_model(args) -> None:
                         # Clean up the error message (remove extra whitespace/newlines)
                         error_msg = " ".join(error_msg.split())
                         # Check if it's a version-related error
-                        if "newer version" in error_msg.lower():
+                        lowered = error_msg.lower()
+                        if "newer version" in lowered:
                             error_msg = (
                                 f"Model '{model_name}' requires a newer version of Ollama. "
                                 f"Your version: {ollama_version or 'unknown'}. "
                                 f"Please upgrade: https://ollama.com/download"
+                            )
+                        # Most common failure when picking a Hugging Face repo:
+                        # it has no GGUF build, so Ollama can't pull it.
+                        elif (
+                            "gguf" in lowered
+                            or "no such" in lowered
+                            or "manifest" in lowered
+                            or "not found" in lowered
+                        ):
+                            error_msg = (
+                                f"Impossible de récupérer « {model_name} » : ce dépôt "
+                                "Hugging Face ne fournit pas de version GGUF (requise "
+                                "par Ollama). Choisissez un dépôt « -GGUF » (filtre "
+                                f"« GGUF (Ollama) »). Détail : {error_msg}"
                             )
                         output_error(error_msg)
                         return
@@ -567,6 +582,9 @@ def main():
         "pull-model", help="Pull (download) an Ollama model"
     )
     pull_parser.add_argument("model", help="Model name to pull (e.g., embeddinggemma)")
+    pull_parser.add_argument(
+        "--base-url", help=f"Ollama server URL (default: {DEFAULT_OLLAMA_URL})"
+    )
 
     args = parser.parse_args()
 

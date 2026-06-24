@@ -75,6 +75,7 @@ import {
 	TooltipTrigger,
 } from "../ui/tooltip";
 import { useTaskDetail } from "./hooks/useTaskDetail";
+import { PlanConflictBadge } from "./PlanConflictBadge";
 import { TaskStatusMoveBadge } from "./TaskStatusMoveBadge";
 import { TaskFiles } from "./TaskFiles";
 import { TaskLogs } from "./TaskLogs";
@@ -941,6 +942,9 @@ function TaskDetailModalContent({
 												getStatusBadgeVariant,
 												handleMoveStatus,
 											)}
+											{/* Plan conflict — reliable on-demand check, visible
+											    regardless of the active tab or board state. */}
+											<PlanConflictBadge task={task} />
 											{/* Compact progress indicator */}
 											{totalSubtasks > 0 && (
 												<span className="text-xs text-muted-foreground ml-1">

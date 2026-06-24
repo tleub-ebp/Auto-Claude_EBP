@@ -9,8 +9,30 @@ from cost_intelligence.formula_matrix import (
     _aggregate_history_by_task,
     _heuristic_complexity_from_text,
     compute_formula_matrix,
+    discover_local_models,
 )
 from cost_intelligence.success_model import EFFORT_LEVELS
+
+
+def test_local_models_added_to_matrix():
+    """User-supplied local models appear as $0 ollama formulas at every effort."""
+    name = "hf.co/yuxinlu1/gemma-4-12B:latest"
+    matrix = compute_formula_matrix(
+        ticket_id="t1",
+        description="add a small feature",
+        local_models=[name],
+    )
+    local = [f for f in matrix.formulas if f.provider == "ollama" and f.model == name]
+    assert len(local) == len(EFFORT_LEVELS)
+    assert all(f.expected_cost_usd == 0.0 for f in local)
+
+
+def test_discover_local_models_unreachable_returns_empty(monkeypatch):
+    """Discovery never raises; an unreachable server yields no models."""
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:1")
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+    monkeypatch.delenv("LOCAL_LLM_MODEL", raising=False)
+    assert discover_local_models(timeout=0.2) == []
 
 
 def _write_cost_data(

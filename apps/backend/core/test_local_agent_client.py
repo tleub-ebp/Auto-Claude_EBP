@@ -124,3 +124,36 @@ class TestLocalAgentClient:
     def test_default_model(self):
         client = LocalAgentClient()
         assert client.model == "llama3.3"
+
+    def test_native_chat_url_derived_from_base(self):
+        client = LocalAgentClient(model="m", base_url="http://localhost:11434")
+        assert client._native_chat_url() == "http://localhost:11434/api/chat"
+
+    def test_native_chat_url_with_custom_port(self):
+        client = LocalAgentClient(model="m", base_url="http://localhost:1234/v1")
+        assert client._native_chat_url() == "http://localhost:1234/api/chat"
+
+    def test_num_ctx_default_and_env(self, monkeypatch):
+        monkeypatch.delenv("OLLAMA_CONTEXT_LENGTH", raising=False)
+        assert LocalAgentClient(model="m")._num_ctx() == 8192
+        monkeypatch.setenv("OLLAMA_CONTEXT_LENGTH", "16384")
+        assert LocalAgentClient(model="m")._num_ctx() == 16384
+
+    def test_connection_error_message_is_friendly(self):
+        """A connection failure is rephrased into an actionable Ollama hint."""
+        client = LocalAgentClient(model="m", base_url="http://localhost:11434")
+        msg = client._describe_request_error(
+            OSError("Cannot connect to host localhost:11434 ssl:default")
+        )
+        assert "Ollama ne répond pas" in msg
+        assert "http://localhost:11434" in msg
+        assert "Télécharger & démarrer" in msg
+        # The raw aiohttp text must not leak through.
+        assert "ssl:default" not in msg
+
+    def test_non_connection_error_passthrough(self):
+        """A genuine API error (not a connection failure) keeps its detail."""
+        client = LocalAgentClient(model="m")
+        msg = client._describe_request_error(ValueError("model not found"))
+        assert "model not found" in msg
+        assert "Ollama ne répond pas" not in msg
