@@ -830,6 +830,15 @@ function PhaseLogSection({
 		.toLowerCase()
 		.match(/^(ollama|local|lmstudio)$/) != null;
 
+	// For local providers, surface installed models first so the user's actual
+	// (downloaded) models sit at the top, above look-alike catalog suggestions.
+	// Array.sort is stable, so the original order is preserved within each group.
+	const sortedModelOptions = isLocalProvider
+		? [...modelOptions].sort(
+				(a, b) => Number(b.installed ?? false) - Number(a.installed ?? false),
+			)
+		: modelOptions;
+
 	// Persist the chosen model; if it's a local model that isn't installed yet,
 	// start pulling it now (progress surfaces in the global download indicator)
 	// so it's ready by the time the phase runs — instead of silently 404-ing.
@@ -1045,7 +1054,7 @@ function PhaseLogSection({
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										{modelOptions.map((m) => (
+										{sortedModelOptions.map((m) => (
 											<SelectItem key={m.value} value={m.value}>
 												<span className="flex items-center gap-1.5">
 													<span>{m.label}</span>
