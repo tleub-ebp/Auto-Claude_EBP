@@ -664,7 +664,7 @@ export function ProviderConfigDialog({
 	// Sinon, retourner le Dialog complet
 	return (
 		<Dialog open={isOpen} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-[650px]">
+			<DialogContent className="max-w-[860px]">
 				{/* Hidden titles for accessibility */}
 				<VisuallyHidden>
 					<DialogTitle>{provider?.name}</DialogTitle>

@@ -162,7 +162,7 @@ function formatCount(n?: number): string {
 }
 
 const selectClass =
-	"text-xs rounded-md border border-input bg-background text-foreground px-2 py-1.5";
+	"flex-1 min-w-0 text-xs rounded-md border border-input bg-background text-foreground px-2 py-1.5";
 
 export function HuggingFaceModelDiscovery({
 	className,
@@ -202,18 +202,12 @@ export function HuggingFaceModelDiscovery({
 	// download ends or the component unmounts.
 	const progressUnsubRef = useRef<(() => void) | null>(null);
 
-	// Keep the latest free-text query in a ref so dropdown-driven auto-searches
-	// read it without making `query` a dependency (which would re-fire on every
-	// keystroke). The query itself is applied manually (Enter / button).
-	const queryRef = useRef(query);
-	queryRef.current = query;
-
 	const runSearch = useCallback(async () => {
 		setIsLoading(true);
 		setError(null);
 		try {
 			const result = await window.electronAPI.searchHuggingFaceModels({
-				query: queryRef.current.trim(),
+				query: query.trim(),
 				task,
 				library,
 				language,
@@ -237,12 +231,15 @@ export function HuggingFaceModelDiscovery({
 		} finally {
 			setIsLoading(false);
 		}
-	}, [hfToken, task, library, language, license, sort, td]);
+	}, [query, hfToken, task, library, language, license, sort, td]);
 
-	// Initial load + re-run whenever any dropdown filter changes (runSearch's
-	// identity changes with those deps).
+	// Search-as-you-type: re-run on any change to the query OR a filter, debounced
+	// so a burst of keystrokes fires a single request. No "Search" button needed.
 	useEffect(() => {
-		void runSearch();
+		const id = setTimeout(() => {
+			void runSearch();
+		}, 350);
+		return () => clearTimeout(id);
 	}, [runSearch]);
 
 	const copyPullCommand = useCallback(async (id: string) => {
@@ -517,34 +514,23 @@ export function HuggingFaceModelDiscovery({
 				</div>
 			)}
 
-			<form
-				className="flex items-center gap-2"
-				onSubmit={(e) => {
-					e.preventDefault();
-					void runSearch();
-				}}
-			>
-				<div className="relative flex-1">
-					<Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-					<input
-						type="text"
-						value={query}
-						onChange={(e) => setQuery(e.target.value)}
-						placeholder={td("searchPlaceholder")}
-						className="w-full pl-8 pr-2 py-1.5 text-sm rounded-md border border-input bg-background text-foreground"
-					/>
-				</div>
-				<Button type="submit" size="sm" disabled={isLoading}>
-					{isLoading ? (
-						<Loader2 className="h-4 w-4 animate-spin" />
-					) : (
-						td("search")
-					)}
-				</Button>
-			</form>
+			{/* Search-as-you-type (debounced) — no button needed. */}
+			<div className="relative">
+				<Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+				<input
+					type="text"
+					value={query}
+					onChange={(e) => setQuery(e.target.value)}
+					placeholder={td("searchPlaceholder")}
+					className="w-full pl-8 pr-8 py-1.5 text-sm rounded-md border border-input bg-background text-foreground"
+				/>
+				{isLoading && (
+					<Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+				)}
+			</div>
 
-			{/* Filter bar — mirrors the facets on huggingface.co/models. */}
-			<div className="flex flex-wrap items-center gap-2">
+			{/* Filter bar — all facets on a single aligned row. */}
+			<div className="flex items-center gap-2">
 				<select
 					value={task}
 					onChange={(e) => setTask(e.target.value)}
@@ -596,7 +582,7 @@ export function HuggingFaceModelDiscovery({
 				<select
 					value={sort}
 					onChange={(e) => setSort(e.target.value as SortOption)}
-					className={cn(selectClass, "ml-auto")}
+					className={selectClass}
 					aria-label={t(`${fb}.sortAria`)}
 				>
 					{SORT_OPTIONS.map((o) => (
