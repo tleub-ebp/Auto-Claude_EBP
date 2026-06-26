@@ -2419,6 +2419,109 @@ def _resolve_local_base_url(explicit: str | None) -> str:
     return _normalize_local_base_url(resolved)
 
 
+def _balanced_json_objects(text: str) -> list[str]:
+    """Yield each top-level balanced ``{...}`` substring in ``text``.
+
+    Used to pull a JSON tool-call object out of a reply that wraps it in prose
+    or markdown. String contents (with escapes) are skipped so braces inside
+    strings don't break the matching.
+    """
+    out: list[str] = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                out.append(text[start : i + 1])
+    return out
+
+
+def _normalize_text_tool_call(obj: Any, known_tools: set[str]) -> dict[str, Any] | None:
+    """Turn a parsed JSON object into a native tool_call, or ``None``.
+
+    Accepts both ``{"name", "arguments"}`` and ``{"function": {...}}`` shapes.
+    Only objects whose tool name the agent actually offers are accepted, so
+    ordinary JSON data in a reply isn't mistaken for a tool call.
+    """
+    import json as _json
+
+    if not isinstance(obj, dict):
+        return None
+    fn = obj.get("function") if isinstance(obj.get("function"), dict) else obj
+    name = fn.get("name") or fn.get("tool") or fn.get("tool_name")
+    if not isinstance(name, str) or name not in known_tools:
+        return None
+    args = fn.get("arguments")
+    if args is None:
+        args = fn.get("parameters", fn.get("args", {}))
+    if isinstance(args, str):
+        try:
+            args = _json.loads(args)
+        except (ValueError, TypeError):
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+    return {"function": {"name": name, "arguments": args}}
+
+
+def _extract_text_tool_calls(
+    content: str, known_tools: set[str]
+) -> list[dict[str, Any]]:
+    """Recover tool calls a model emitted as JSON *text* instead of structured
+    ``tool_calls`` (common for GGUF/qwen models on Ollama).
+
+    Returns native-shaped tool_calls (deduplicated). Never raises.
+    """
+    import json as _json
+    import re as _re
+
+    known = {t for t in known_tools if t}
+    if not content or "{" not in content or not known:
+        return []
+    blobs: list[str] = []
+    # Fenced code blocks first (```json {...} ``` / ```tool_call [...] ```).
+    blobs += _re.findall(
+        r"```(?:json|tool_call|tool|python)?\s*(\{.*?\}|\[.*?\])\s*```",
+        content,
+        _re.DOTALL,
+    )
+    blobs.append(content.strip())  # whole reply (bare-JSON case)
+    blobs += _balanced_json_objects(content)  # JSON embedded in prose
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for blob in blobs:
+        try:
+            parsed = _json.loads(blob)
+        except (ValueError, TypeError):
+            continue
+        items = parsed if isinstance(parsed, list) else [parsed]
+        for item in items:
+            tc = _normalize_text_tool_call(item, known)
+            if tc:
+                key = _json.dumps(tc, sort_keys=True)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(tc)
+    return out
+
+
 class LocalAgentClient(OpenAIAgentClient):
     """Agent client for any OpenAI-compatible **local** LLM server.
 
@@ -2740,6 +2843,23 @@ class LocalAgentClient(OpenAIAgentClient):
             message = data.get("message") or {}
             content = message.get("content") or ""
             tool_calls = message.get("tool_calls") or []
+
+            # Fallback for local models that emit tool calls as JSON inside the
+            # message *content* instead of the structured tool_calls field (very
+            # common for GGUF/qwen on Ollama). Recover them so the agent can act
+            # instead of looping with "the model called no tool".
+            if not tool_calls and content:
+                recovered = _extract_text_tool_calls(
+                    content, {td.get("name", "") for td in self._tool_definitions}
+                )
+                if recovered:
+                    logger.info(
+                        "[LocalAgentClient] Recovered %d tool call(s) from inline "
+                        "text content.",
+                        len(recovered),
+                    )
+                    tool_calls = recovered
+                    content = ""  # the content WAS the tool call; don't echo it
 
             logger.info(
                 f"[LocalAgentClient] Turn {turn + 1}: content_len={len(content)}, "

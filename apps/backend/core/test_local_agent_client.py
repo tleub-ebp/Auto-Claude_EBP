@@ -11,9 +11,52 @@ These are pure/offline checks — no local server is contacted.
 import pytest
 from core.agent_client import (
     LocalAgentClient,
+    _extract_text_tool_calls,
     _normalize_local_base_url,
     _resolve_local_base_url,
 )
+
+
+class TestExtractTextToolCalls:
+    """Recovering tool calls that a local model emitted as JSON text."""
+
+    KNOWN = {"read_file", "write_file", "run_command"}
+
+    def test_bare_json_object(self):
+        content = '{"name": "read_file", "arguments": {"path": "./spec.md"}}'
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out == [
+            {"function": {"name": "read_file", "arguments": {"path": "./spec.md"}}}
+        ]
+
+    def test_fenced_json_block_in_prose(self):
+        content = (
+            "Sure, let me read the spec first:\n"
+            '```json\n{"name": "read_file", "arguments": {"path": "spec.md"}}\n```\n'
+        )
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert len(out) == 1
+        assert out[0]["function"]["name"] == "read_file"
+
+    def test_function_wrapper_shape(self):
+        content = '{"function": {"name": "run_command", "arguments": {"cmd": "ls"}}}'
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out[0]["function"]["arguments"] == {"cmd": "ls"}
+
+    def test_unknown_tool_name_ignored(self):
+        # A plain data object with a "name" key must NOT be taken as a tool call.
+        out = _extract_text_tool_calls('{"name": "John", "age": 30}', self.KNOWN)
+        assert out == []
+
+    def test_string_arguments_are_parsed(self):
+        content = '{"name": "read_file", "arguments": "{\\"path\\": \\"a.txt\\"}"}'
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out[0]["function"]["arguments"] == {"path": "a.txt"}
+
+    def test_no_known_tools_returns_empty(self):
+        out = _extract_text_tool_calls('{"name": "read_file"}', set())
+        assert out == []
+
 
 _LOCAL_ENV_VARS = (
     "OLLAMA_BASE_URL",
