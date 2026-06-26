@@ -147,7 +147,7 @@ class TestLocalAgentClient:
         )
         assert "Ollama ne répond pas" in msg
         assert "http://localhost:11434" in msg
-        assert "Télécharger & démarrer" in msg
+        assert "Télécharger" in msg
         # The raw aiohttp text must not leak through.
         assert "ssl:default" not in msg
 

@@ -48,6 +48,7 @@ type PhaseDefaultsSettings = Pick<
 	| "providerPhaseThinking"
 	| "customPhaseModels"
 	| "customPhaseThinking"
+	| "globalOllamaModel"
 >;
 
 /**
@@ -73,11 +74,29 @@ export function resolvePhaseDefaults(
 			(p) => p.id === (settings?.selectedAgentProfile || "auto"),
 		) || DEFAULT_AGENT_PROFILES[0];
 
-	const phaseModels =
+	let phaseModels =
 		settings?.providerPhaseModels?.[effectiveProvider] ||
 		settings?.customPhaseModels ||
 		profile?.phaseModels ||
 		DEFAULT_PHASE_MODELS;
+
+	// For local providers (Ollama / LM Studio …) the user configures a single
+	// default model in the provider page (`globalOllamaModel`). Use it for every
+	// phase so tasks default to the model actually installed/configured, instead
+	// of a generic catalog name (e.g. "qwen2.5-coder") the user never picked —
+	// unless they've set an explicit per-provider phase config.
+	const isLocalProvider =
+		effectiveProvider === "ollama" ||
+		effectiveProvider === "local" ||
+		effectiveProvider === "lmstudio";
+	if (
+		isLocalProvider &&
+		!settings?.providerPhaseModels?.[effectiveProvider] &&
+		settings?.globalOllamaModel?.trim()
+	) {
+		const m = settings.globalOllamaModel.trim();
+		phaseModels = { spec: m, planning: m, coding: m, qa: m };
+	}
 
 	const phaseThinking =
 		settings?.providerPhaseThinking?.[effectiveProvider] ||

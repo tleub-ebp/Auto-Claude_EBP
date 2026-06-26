@@ -191,7 +191,7 @@
 			},
 			"modelDiscovery": {
 				"title": "Discover models (Hugging Face)",
-				"description": "Live list from the Hub via the Hugging Face MCP. Click a row to set it as default; \"Download & start\" launches Ollama and fetches the model locally.",
+				"description": "Live list from the Hub via the Hugging Face MCP. Click a row to set it as default; \"Download\" launches Ollama and fetches the model locally.",
 				"searchPlaceholder": "Search (e.g. qwen2.5-coder, llama 3.1, mistral)…",
 				"search": "Search",
 				"downloadStart": "Download & start",
@@ -209,9 +209,9 @@
 				"pullFailed": "Failed to download {{model}}.",
 				"ensureFailed": "Could not prepare Ollama automatically. You can also install it manually from ollama.com.",
 				"installOllama": "Install Ollama",
-				"installLaunched": "Installation launched in a terminal. Once done, run \"Download & start\" again.",
+				"installLaunched": "Installation launched in a terminal. Once done, run \"Download\" again.",
 				"installFailed": "Could not launch the Ollama installation.",
-				"foreignServer": "The configured URL ({{url}}) targets {{server}}, not Ollama. Automatic download and start are only available for Ollama. Start your server and load \"{{model}}\" manually (the model has been set as default).",
+				"foreignServer": "The configured URL ({{url}}) targets {{server}}, not Ollama. Automatic download is only available for Ollama. Start your server and load \"{{model}}\" manually (the model has been set as default).",
 				"foreignServerGeneric": "a non-Ollama local server",
 				"filters": {
 					"taskAria": "Task",

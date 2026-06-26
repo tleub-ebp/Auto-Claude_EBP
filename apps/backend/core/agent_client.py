@@ -2787,7 +2787,7 @@ class LocalAgentClient(OpenAIAgentClient):
                                     "d'Ollama (fréquent pour les GGUF importés via "
                                     "hf.co). Choisissez un modèle compatible outils, "
                                     "p. ex. « qwen2.5-coder » ou « llama3.1 », via "
-                                    "« Télécharger & démarrer »."
+                                    "« Télécharger »."
                                 ),
                             )
                         ],
@@ -2908,7 +2908,7 @@ class LocalAgentClient(OpenAIAgentClient):
             return (
                 f"⚠️ Ollama ne répond pas sur {root} — le serveur local n'est pas "
                 "démarré. Ouvrez les réglages du fournisseur « Ollama (Local) » et "
-                "cliquez « Télécharger & démarrer » (installation et lancement "
+                "cliquez « Télécharger » (installation et lancement "
                 "automatiques), ou lancez « ollama serve » manuellement."
             )
         return f"Erreur API LLM local: {exc}"
