@@ -819,6 +819,7 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 				"conversation.jsonl",
 				"conversation_log.jsonl",
 				"PROMPT_TOO_LONG_HALT",
+				"LOCAL_MODEL_NO_TOOLS_HALT",
 				"RESUME_WITH_PROVIDER",
 				"qa_fix_request.md",
 				"memory",

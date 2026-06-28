@@ -2141,8 +2141,12 @@ print(json.dumps(result))
 			try {
 				const conversationLog = path.join(specDir, "conversation.jsonl");
 				const haltMarker = path.join(specDir, "PROMPT_TOO_LONG_HALT");
+				const localNoToolsMarker = path.join(
+					specDir,
+					"LOCAL_MODEL_NO_TOOLS_HALT",
+				);
 				let removed = 0;
-				for (const target of [conversationLog, haltMarker]) {
+				for (const target of [conversationLog, haltMarker, localNoToolsMarker]) {
 					if (existsSync(target)) {
 						unlinkSync(target);
 						removed++;

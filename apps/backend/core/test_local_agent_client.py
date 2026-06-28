@@ -12,6 +12,8 @@ import pytest
 from core.agent_client import (
     LocalAgentClient,
     _extract_text_tool_calls,
+    _looks_like_waiting_for_human,
+    _next_no_tool_action,
     _normalize_local_base_url,
     _resolve_local_base_url,
 )
@@ -79,26 +81,49 @@ class TestNormalizeLocalBaseUrl:
     @pytest.mark.parametrize(
         "raw,expected",
         [
-            # bare root → append /v1/chat/completions
-            ("http://localhost:11434", "http://localhost:11434/v1/chat/completions"),
-            ("http://localhost:1234", "http://localhost:1234/v1/chat/completions"),
+            # bare root → append /v1/chat/completions; localhost pinned to IPv4
+            ("http://localhost:11434", "http://127.0.0.1:11434/v1/chat/completions"),
+            ("http://localhost:1234", "http://127.0.0.1:1234/v1/chat/completions"),
             # trailing slash tolerated
-            ("http://localhost:1234/", "http://localhost:1234/v1/chat/completions"),
+            ("http://localhost:1234/", "http://127.0.0.1:1234/v1/chat/completions"),
             # /v1 already present
-            ("http://localhost:1234/v1", "http://localhost:1234/v1/chat/completions"),
-            ("http://localhost:1234/v1/", "http://localhost:1234/v1/chat/completions"),
-            # full path is idempotent
+            ("http://localhost:1234/v1", "http://127.0.0.1:1234/v1/chat/completions"),
+            ("http://localhost:1234/v1/", "http://127.0.0.1:1234/v1/chat/completions"),
+            # full path is idempotent (and still IPv4-pinned)
             (
                 "http://localhost:1234/v1/chat/completions",
-                "http://localhost:1234/v1/chat/completions",
+                "http://127.0.0.1:1234/v1/chat/completions",
             ),
-            # empty/None → Ollama default
-            ("", "http://localhost:11434/v1/chat/completions"),
-            (None, "http://localhost:11434/v1/chat/completions"),
+            # an explicit 127.0.0.1 passes through unchanged
+            (
+                "http://127.0.0.1:11434",
+                "http://127.0.0.1:11434/v1/chat/completions",
+            ),
+            # a non-loopback host is NOT rewritten
+            (
+                "http://192.168.1.50:11434",
+                "http://192.168.1.50:11434/v1/chat/completions",
+            ),
+            # empty/None → IPv4 Ollama default
+            ("", "http://127.0.0.1:11434/v1/chat/completions"),
+            (None, "http://127.0.0.1:11434/v1/chat/completions"),
         ],
     )
     def test_normalization(self, raw, expected):
         assert _normalize_local_base_url(raw) == expected
+
+    def test_localhost_without_port_is_pinned(self):
+        # No explicit port: the loopback host is still rewritten to IPv4.
+        assert (
+            _normalize_local_base_url("http://localhost")
+            == "http://127.0.0.1/v1/chat/completions"
+        )
+
+    def test_lookalike_host_not_rewritten(self):
+        # "localhostfoo" is a different host — the boundary check must not touch it.
+        assert _normalize_local_base_url("http://localhostfoo:11434").startswith(
+            "http://localhostfoo:11434"
+        )
 
 
 class TestResolveLocalBaseUrl:
@@ -106,13 +131,13 @@ class TestResolveLocalBaseUrl:
         monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:9999")
         assert (
             _resolve_local_base_url("http://localhost:1234")
-            == "http://localhost:1234/v1/chat/completions"
+            == "http://127.0.0.1:1234/v1/chat/completions"
         )
 
     def test_env_used_when_no_arg(self, monkeypatch):
         monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:1234")
         assert (
-            _resolve_local_base_url(None) == "http://localhost:1234/v1/chat/completions"
+            _resolve_local_base_url(None) == "http://127.0.0.1:1234/v1/chat/completions"
         )
 
     def test_lmstudio_env_supported(self, monkeypatch):
@@ -138,14 +163,21 @@ class TestLocalAgentClient:
         client = LocalAgentClient(model="qwen2.5-coder")
         assert client.provider_name() == "ollama"
 
+    def test_tool_calling_unsupported_defaults_false(self):
+        # The "this model can't tool-call" verdict starts unset; receive_response
+        # flips it only after a turn-0 no-tool-call. handle_local_model_no_tools
+        # reads it to halt agentic phases fast.
+        client = LocalAgentClient(model="qwen2.5-coder")
+        assert client.tool_calling_unsupported is False
+
     def test_base_url_from_env(self, monkeypatch):
         monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:1234")
         client = LocalAgentClient(model="qwen2.5-coder")
-        assert client._api_base == "http://localhost:1234/v1/chat/completions"
+        assert client._api_base == "http://127.0.0.1:1234/v1/chat/completions"
 
     def test_explicit_base_url_arg(self):
         client = LocalAgentClient(model="m", base_url="http://localhost:8080/v1")
-        assert client._api_base == "http://localhost:8080/v1/chat/completions"
+        assert client._api_base == "http://127.0.0.1:8080/v1/chat/completions"
 
     def test_api_key_placeholder_when_unset(self):
         client = LocalAgentClient(model="m")
@@ -170,11 +202,11 @@ class TestLocalAgentClient:
 
     def test_native_chat_url_derived_from_base(self):
         client = LocalAgentClient(model="m", base_url="http://localhost:11434")
-        assert client._native_chat_url() == "http://localhost:11434/api/chat"
+        assert client._native_chat_url() == "http://127.0.0.1:11434/api/chat"
 
     def test_native_chat_url_with_custom_port(self):
         client = LocalAgentClient(model="m", base_url="http://localhost:1234/v1")
-        assert client._native_chat_url() == "http://localhost:1234/api/chat"
+        assert client._native_chat_url() == "http://127.0.0.1:1234/api/chat"
 
     def test_num_ctx_default_and_env(self, monkeypatch):
         monkeypatch.delenv("OLLAMA_CONTEXT_LENGTH", raising=False)
@@ -189,7 +221,8 @@ class TestLocalAgentClient:
             OSError("Cannot connect to host localhost:11434 ssl:default")
         )
         assert "Ollama ne répond pas" in msg
-        assert "http://localhost:11434" in msg
+        # The hint shows the IPv4-pinned root the client actually dials.
+        assert "http://127.0.0.1:11434" in msg
         assert "Télécharger" in msg
         # The raw aiohttp text must not leak through.
         assert "ssl:default" not in msg
@@ -200,3 +233,158 @@ class TestLocalAgentClient:
         msg = client._describe_request_error(ValueError("model not found"))
         assert "model not found" in msg
         assert "Ollama ne répond pas" not in msg
+
+
+class TestNextNoToolAction:
+    """The decision for a turn that returned no tool call: end / nudge / give_up."""
+
+    def test_empty_reply_ends(self):
+        # No content at all → nothing to nudge against, just stop.
+        assert (
+            _next_no_tool_action(
+                any_tool_called=False,
+                tools_offered=True,
+                has_content=False,
+                waiting_for_human=False,
+                nudge_sent=False,
+                turn=0,
+                max_turns=50,
+            )
+            == "end"
+        )
+
+    def test_finished_after_using_tools_ends(self):
+        # The model acted earlier and now stops with prose (not waiting on a
+        # human) → legitimately done.
+        assert (
+            _next_no_tool_action(
+                any_tool_called=True,
+                tools_offered=True,
+                has_content=True,
+                waiting_for_human=False,
+                nudge_sent=False,
+                turn=5,
+                max_turns=50,
+            )
+            == "end"
+        )
+
+    def test_no_tools_offered_ends(self):
+        # A text-only session (no tools) ending with prose is not a failure.
+        assert (
+            _next_no_tool_action(
+                any_tool_called=False,
+                tools_offered=False,
+                has_content=True,
+                waiting_for_human=False,
+                nudge_sent=False,
+                turn=0,
+                max_turns=50,
+            )
+            == "end"
+        )
+
+    def test_first_narration_triggers_nudge(self):
+        # Tools offered, model narrated, never acted, not yet nudged → nudge once.
+        assert (
+            _next_no_tool_action(
+                any_tool_called=False,
+                tools_offered=True,
+                has_content=True,
+                waiting_for_human=False,
+                nudge_sent=False,
+                turn=0,
+                max_turns=50,
+            )
+            == "nudge"
+        )
+
+    def test_waiting_for_human_after_acting_triggers_nudge(self):
+        # Even after calling a tool, asking a human to run commands is a stall —
+        # there is no human to answer, so nudge it to act on its own.
+        assert (
+            _next_no_tool_action(
+                any_tool_called=True,
+                tools_offered=True,
+                has_content=True,
+                waiting_for_human=True,
+                nudge_sent=False,
+                turn=2,
+                max_turns=50,
+            )
+            == "nudge"
+        )
+
+    def test_waiting_for_human_after_nudge_gives_up(self):
+        # Already nudged and still deferring to a human → unable to self-drive.
+        assert (
+            _next_no_tool_action(
+                any_tool_called=True,
+                tools_offered=True,
+                has_content=True,
+                waiting_for_human=True,
+                nudge_sent=True,
+                turn=3,
+                max_turns=50,
+            )
+            == "give_up"
+        )
+
+    def test_narration_after_nudge_gives_up(self):
+        # Already nudged and still only narrating → unable to drive tools.
+        assert (
+            _next_no_tool_action(
+                any_tool_called=False,
+                tools_offered=True,
+                has_content=True,
+                waiting_for_human=False,
+                nudge_sent=True,
+                turn=1,
+                max_turns=50,
+            )
+            == "give_up"
+        )
+
+    def test_no_nudge_on_last_turn(self):
+        # No room left to retry → give up rather than nudge into nothing.
+        assert (
+            _next_no_tool_action(
+                any_tool_called=False,
+                tools_offered=True,
+                has_content=True,
+                waiting_for_human=False,
+                nudge_sent=False,
+                turn=49,
+                max_turns=50,
+            )
+            == "give_up"
+        )
+
+
+class TestLooksLikeWaitingForHuman:
+    """Detecting a model that defers to a human instead of acting."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Please execute this command and provide the output.",
+            "```bash\nls ./Sources/\n```\nPlease execute this command and provide the output.",
+            "Could you run the tests and let me know the result?",
+            "Please provide the directory structure of the project.",
+            "Paste the output here so I can continue.",
+        ],
+    )
+    def test_detects_deferral(self, text):
+        assert _looks_like_waiting_for_human(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "",
+            "I created the plan and wrote implementation_plan.json.",
+            "Please review the implementation plan before merging.",
+            "The investigation is complete; all files are in place.",
+        ],
+    )
+    def test_ignores_normal_prose(self, text):
+        assert _looks_like_waiting_for_human(text) is False

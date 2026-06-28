@@ -233,3 +233,83 @@ def handle_prompt_too_long(
         logger.warning("Could not write prompt-too-long halt marker: %s", e)
 
     return True
+
+
+# Filename of the marker the backend writes when a *local* model proves unable
+# to drive tool-based work (it never emits a real tool call, only prose or
+# hallucinated tool *results*). The frontend watches for this and surfaces an
+# explanation + remediation (switch to a tool-capable model or a cloud provider)
+# instead of letting the phase retry a model that can never act.
+LOCAL_MODEL_NO_TOOLS_HALT_FILE = "LOCAL_MODEL_NO_TOOLS_HALT"
+
+
+def handle_local_model_no_tools(
+    client: object,
+    spec_dir: Path,
+    phase: str,
+    model: str | None = None,
+) -> bool:
+    """
+    Detect a local model that cannot perform tool-based work and halt.
+
+    Some local models (raw GGUF imports, weak quantizations, models without an
+    Ollama tools template) never emit a real tool call — they reply with prose
+    or hallucinate tool *results* as text (e.g. a fabricated
+    ``{"error": "spec file not found"}``). For an agentic phase (QA, coding,
+    planning) that is a PERMANENT failure: the very next attempt with the same
+    model behaves identically, so retrying only burns iterations. The right
+    answer is to switch to a tool-capable model or a cloud provider.
+
+    The signal is the ``tool_calling_unsupported`` flag that ``LocalAgentClient``
+    sets when it offers tools but the model calls none on the first turn (not
+    even as recoverable inline JSON). Non-local clients never set it, so this is
+    a no-op for them.
+
+    Args:
+        client: The agent client used for the just-finished session. Read for a
+            truthy ``tool_calling_unsupported`` attribute (``getattr`` default
+            ``False`` — safe for any provider).
+        spec_dir: Spec directory where the halt marker should be written.
+        phase: Short tag describing the calling phase ("qa", "coder", ...).
+        model: Model name for the message; falls back to ``client.model``.
+
+    Returns:
+        True  — the local model can't tool-call. The caller MUST stop retrying
+                and escalate (the model will never produce a verdict).
+        False — not this condition. Caller falls back to its normal path.
+    """
+    if not getattr(client, "tool_calling_unsupported", False):
+        return False
+
+    model = model or getattr(client, "model", "?")
+    logger.error(
+        "[%s] Local model %s emitted no tool calls — halting (retrying the same "
+        "model will only hallucinate). Switch to a tool-capable model "
+        "(e.g. llama3.1) or a cloud provider.",
+        phase,
+        model,
+    )
+    print(
+        f"\n⛔ Local model « {model} » did not call any tool during {phase}. "
+        "Switch to a tool-capable model or a cloud provider."
+    )
+
+    halt_data = {
+        "halted_at": datetime.now().isoformat(),
+        "phase": phase,
+        "model": model,
+        "reason": "local_model_no_tools",
+        "remediation": (
+            "The selected local model does not support Ollama tool-calling. "
+            "Switch this phase to a tool-capable local model (e.g. llama3.1) "
+            "or a cloud provider (Anthropic/Claude) and re-run."
+        ),
+    }
+    halt_file = spec_dir / LOCAL_MODEL_NO_TOOLS_HALT_FILE
+    try:
+        halt_file.write_text(json.dumps(halt_data), encoding="utf-8")
+    except OSError as e:
+        # Marker is best-effort — the caller still halts even if it can't write.
+        logger.warning("Could not write local-model-no-tools halt marker: %s", e)
+
+    return True

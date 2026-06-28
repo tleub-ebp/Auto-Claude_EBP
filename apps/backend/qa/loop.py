@@ -268,6 +268,18 @@ async def run_qa_validation_loop(
     os.environ[PROJECT_DIR_ENV_VAR] = str(project_dir.resolve())
     task_event_emitter = TaskEventEmitter.from_spec_dir(spec_dir)
 
+    # Clear a stale "local model can't call tools" halt marker from a previous
+    # run — re-running QA (e.g. after switching to a tool-capable model or a
+    # cloud provider) must not keep surfacing the old halt.
+    from services.rate_limit_shield import LOCAL_MODEL_NO_TOOLS_HALT_FILE
+
+    stale_halt = spec_dir / LOCAL_MODEL_NO_TOOLS_HALT_FILE
+    if stale_halt.exists():
+        try:
+            stale_halt.unlink()
+        except OSError:
+            pass
+
     debug_section("qa_loop", "QA Validation Loop")
     debug(
         "qa_loop",
@@ -573,6 +585,38 @@ async def run_qa_validation_loop(
             duration_seconds=f"{iteration_duration:.1f}",
             response_length=len(response),
         )
+
+        # A local model that never emits a real tool call cannot drive agentic
+        # QA — it can only hallucinate (e.g. a fabricated "spec file not found"
+        # tool result). Retrying with the same model is futile, so halt now with
+        # one clear, actionable message instead of burning MAX_CONSECUTIVE_ERRORS
+        # passes. (feat/local-llm-agnostic hardening)
+        from services.rate_limit_shield import handle_local_model_no_tools
+
+        if handle_local_model_no_tools(client, spec_dir, "qa", qa_model):
+            halt_msg = (
+                f"QA halted: the local model « {qa_model} » did not call any "
+                "tool, so it cannot validate the implementation. Switch the "
+                "Validation phase to a tool-capable model (e.g. llama3.1) or a "
+                "cloud provider (Anthropic/Claude) and re-run."
+            )
+            print(f"\n⛔ {halt_msg}")
+            task_event_emitter.emit(
+                "QA_AGENT_ERROR",
+                {
+                    "iteration": qa_iteration,
+                    "consecutiveErrors": 1,
+                    "reason": "local_model_no_tools",
+                },
+            )
+            if task_logger:
+                task_logger.end_phase(
+                    LogPhase.VALIDATION,
+                    success=False,
+                    message=halt_msg,
+                )
+            emit_phase(ExecutionPhase.FAILED, "QA halted: local model can't call tools")
+            return False
 
         if status == "approved":
             # Reset error tracking on success
@@ -1113,12 +1157,32 @@ async def run_qa_validation_loop(
                     },
                 )
 
+                # A local model often emits *some* recoverable tool calls (so the
+                # fast-halt above doesn't fire) yet never writes a valid
+                # qa_signoff — it stalls here after 3 errors. Make the escalation
+                # message name the likely cause so the user knows to switch model
+                # instead of assuming a code bug.
+                fail_message = (
+                    f"QA agent failed {MAX_CONSECUTIVE_ERRORS} consecutive times "
+                    "- unable to update implementation_plan.json"
+                )
+                try:
+                    provider = client.provider_name()
+                except Exception:
+                    provider = ""
+                if provider in ("ollama", "local", "lmstudio"):
+                    fail_message += (
+                        f". The local model « {qa_model} » likely can't complete "
+                        "tool-based QA — switch the Validation phase to a "
+                        "tool-capable model (e.g. llama3.1) or a cloud provider."
+                    )
+
                 # End validation phase as failed
                 if task_logger:
                     task_logger.end_phase(
                         LogPhase.VALIDATION,
                         success=False,
-                        message=f"QA agent failed {MAX_CONSECUTIVE_ERRORS} consecutive times - unable to update implementation_plan.json",
+                        message=fail_message,
                     )
                 return False
 

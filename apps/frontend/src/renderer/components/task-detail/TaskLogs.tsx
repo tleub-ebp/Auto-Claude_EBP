@@ -611,6 +611,7 @@ export function TaskLogs({
 							{PHASE_ORDER.map((phase) => (
 								<div
 									key={phase}
+									data-phase-section={phase}
 									ref={(el) => {
 										phaseRefs.current[phase] = el;
 									}}

@@ -1377,6 +1377,37 @@ async def run_autonomous_agent(
                     response = response_text
                 # This will execute the blocking and continue automatically
 
+        # A local model that only narrates (describes the work / prints file
+        # content as text) instead of calling tools cannot produce a plan or
+        # code. The LocalAgentClient already nudged it once and flagged itself;
+        # halt cleanly here with an actionable message + marker rather than
+        # looping the build (or failing with a generic "no plan created").
+        from services.rate_limit_shield import handle_local_model_no_tools
+
+        _phase_tag = "planning" if is_planning_phase else "coding"
+        if handle_local_model_no_tools(client, spec_dir, _phase_tag, phase_model):
+            halt_msg = (
+                f"Phase {_phase_tag} arrêtée : le modèle local « {phase_model} » "
+                "décrit le travail au lieu d'appeler les outils, il ne peut donc "
+                "rien produire. Choisissez un modèle compatible agentique "
+                "(p. ex. llama3.1) ou un fournisseur cloud, puis relancez."
+            )
+            print_status(halt_msg, "error")
+            if task_logger:
+                task_logger.end_phase(
+                    current_log_phase, success=False, message=halt_msg
+                )
+            status_manager.update(state=BuildState.ERROR)
+            audit_event(
+                project_dir,
+                kind="agent_failed",
+                actor="coder",
+                correlation_id=spec_dir.name,
+                summary=f"{_phase_tag} halted: local model did not call tools",
+                payload={"model": phase_model, "reason": "local_model_no_tools"},
+            )
+            return
+
         plan_validated = False
         if is_planning_phase and status != "error":
             valid, errors = _validate_and_fix_implementation_plan()
