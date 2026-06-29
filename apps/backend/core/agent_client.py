@@ -2519,32 +2519,72 @@ def _extract_text_tool_calls(
     import re as _re
 
     known = {t for t in known_tools if t}
-    if not content or "{" not in content or not known:
+    if not content or not known:
         return []
-    blobs: list[str] = []
-    # Fenced code blocks first (```json {...} ``` / ```tool_call [...] ```).
-    blobs += _re.findall(
-        r"```(?:json|tool_call|tool|python)?\s*(\{.*?\}|\[.*?\])\s*```",
-        content,
-        _re.DOTALL,
-    )
-    blobs.append(content.strip())  # whole reply (bare-JSON case)
-    blobs += _balanced_json_objects(content)  # JSON embedded in prose
+    has_json = "{" in content
+    has_xml = "<tool" in content.lower()
+    if not has_json and not has_xml:
+        return []
+
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for blob in blobs:
-        try:
-            parsed = _json.loads(blob)
-        except (ValueError, TypeError):
-            continue
-        items = parsed if isinstance(parsed, list) else [parsed]
-        for item in items:
-            tc = _normalize_text_tool_call(item, known)
-            if tc:
-                key = _json.dumps(tc, sort_keys=True)
-                if key not in seen:
-                    seen.add(key)
-                    out.append(tc)
+
+    def _add(tc: dict[str, Any] | None) -> None:
+        if not tc:
+            return
+        key = _json.dumps(tc, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            out.append(tc)
+
+    # 1) JSON shapes: fenced blocks, bare reply, and JSON embedded in prose.
+    if has_json:
+        blobs: list[str] = []
+        blobs += _re.findall(
+            r"```(?:json|tool_call|tool|python)?\s*(\{.*?\}|\[.*?\])\s*```",
+            content,
+            _re.DOTALL,
+        )
+        blobs.append(content.strip())  # whole reply (bare-JSON case)
+        blobs += _balanced_json_objects(content)  # JSON embedded in prose
+        for blob in blobs:
+            try:
+                parsed = _json.loads(blob)
+            except (ValueError, TypeError):
+                continue
+            items = parsed if isinstance(parsed, list) else [parsed]
+            for item in items:
+                _add(_normalize_text_tool_call(item, known))
+
+    # 2) XML shapes some models emit instead of JSON tool_calls, e.g.
+    #    <tool_use name="Write">{"file_path": "x", "content": "..."}</tool_use>
+    #    or <tool_call name="run_command">{...}</tool_call>. The body is the JSON
+    #    arguments object (possibly wrapped in prose). Provider-agnostic: covers
+    #    Windsurf/Codeium-style <tool_call> and Qwen/Llama <tool_use> tags.
+    if has_xml:
+        for m in _re.finditer(
+            r"<tool[_-]?(?:use|call)\b[^>]*\bname\s*=\s*[\"']([^\"']+)[\"']"
+            r"[^>]*>(.*?)</tool[_-]?(?:use|call)>",
+            content,
+            _re.DOTALL | _re.IGNORECASE,
+        ):
+            name = m.group(1).strip()
+            if name not in known:
+                continue
+            body = m.group(2).strip()
+            args: dict[str, Any] = {}
+            for candidate in (body, *_balanced_json_objects(body)):
+                if not candidate:
+                    continue
+                try:
+                    parsed_args = _json.loads(candidate)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(parsed_args, dict):
+                    args = parsed_args
+                    break
+            _add({"function": {"name": name, "arguments": args}})
+
     return out
 
 

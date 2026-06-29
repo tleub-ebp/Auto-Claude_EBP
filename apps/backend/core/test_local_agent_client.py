@@ -59,6 +59,58 @@ class TestExtractTextToolCalls:
         out = _extract_text_tool_calls('{"name": "read_file"}', set())
         assert out == []
 
+    # ── XML-style tool calls (Windsurf <tool_call>, qwen/llama <tool_use>) ──
+
+    def test_xml_tool_use_with_json_body(self):
+        # The exact shape llama3.1 emitted: <tool_use name="..."> + JSON args.
+        content = (
+            '<tool_use name="write_file">\n'
+            '{"path": "./build-progress.txt", "content": "ok"}\n'
+            "</tool_use>"
+        )
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out == [
+            {
+                "function": {
+                    "name": "write_file",
+                    "arguments": {"path": "./build-progress.txt", "content": "ok"},
+                }
+            }
+        ]
+
+    def test_xml_tool_call_tag_and_prose_wrapper(self):
+        content = (
+            "Let me run the tests now.\n"
+            '<tool_call name="run_command">{"command": "pytest -q"}</tool_call>\n'
+            "Done."
+        )
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out[0]["function"]["name"] == "run_command"
+        assert out[0]["function"]["arguments"] == {"command": "pytest -q"}
+
+    def test_xml_unknown_tool_ignored(self):
+        out = _extract_text_tool_calls(
+            '<tool_use name="DropDatabase">{"x": 1}</tool_use>', self.KNOWN
+        )
+        assert out == []
+
+    def test_xml_no_args_yields_empty_arguments(self):
+        out = _extract_text_tool_calls(
+            '<tool_use name="run_command"></tool_use>', self.KNOWN
+        )
+        assert out == [{"function": {"name": "run_command", "arguments": {}}}]
+
+    def test_xml_and_json_deduplicated(self):
+        # Same call expressed twice (XML + JSON) collapses to one.
+        content = (
+            '<tool_use name="read_file">{"path": "a.txt"}</tool_use>\n'
+            '{"name": "read_file", "arguments": {"path": "a.txt"}}'
+        )
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out == [
+            {"function": {"name": "read_file", "arguments": {"path": "a.txt"}}}
+        ]
+
 
 _LOCAL_ENV_VARS = (
     "OLLAMA_BASE_URL",
