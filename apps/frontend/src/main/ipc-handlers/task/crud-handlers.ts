@@ -842,6 +842,27 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 						warnings.push(`${target}: ${errorMsg}`);
 					}
 				}
+				// Per-model conversation logs are named conversation.<model>.jsonl
+				// (the model is in the filename), plus the .migrated marker — glob
+				// them so a reset clears EVERY model's history, not just the legacy
+				// conversation.jsonl handled above.
+				if (existsSync(specDir)) {
+					for (const name of readdirSync(specDir)) {
+						if (
+							!/^conversation\..+\.jsonl$/.test(name) &&
+							name !== "conversation.jsonl.migrated"
+						) {
+							continue;
+						}
+						try {
+							await rm(path.join(specDir, name), { force: true });
+						} catch (error) {
+							const errorMsg =
+								error instanceof Error ? error.message : "Unknown error";
+							warnings.push(`${path.join(specDir, name)}: ${errorMsg}`);
+						}
+					}
+				}
 			}
 
 			// 3. Drop the XState actor so the next start is a clean planning run

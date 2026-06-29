@@ -176,17 +176,16 @@ def handle_prompt_too_long(
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     try:
-        log_file = spec_dir / "conversation.jsonl"
-        if log_file.exists():
-            archive = spec_dir / f"conversation.{timestamp}.too-long.jsonl"
-            log_file.rename(archive)
-            logger.info(
-                "[%s] Archived oversized conversation log to %s",
-                phase,
-                archive.name,
-            )
-    except OSError as e:
-        logger.warning("Could not archive conversation log: %s", e)
+        # Archive every conversation log (legacy + per-model) so a fresh start
+        # isn't replayed against the oversized transcript, whichever model's log
+        # blew the window.
+        from core.conversation_log import archive_all_logs
+
+        moved = archive_all_logs(spec_dir, "too-long")
+        if moved:
+            logger.info("[%s] Archived %d oversized conversation log(s)", phase, moved)
+    except Exception as e:  # noqa: BLE001 — archiving is best-effort
+        logger.warning("Could not archive conversation log(s): %s", e)
 
     # Layer 2: archive .session.json so the frontend's "Reprendre" can't replay
     # the doomed SDK session_id. We rename rather than delete to keep an audit

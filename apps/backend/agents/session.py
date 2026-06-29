@@ -321,15 +321,16 @@ async def _maybe_replay_conversation(
     """
     try:
         from core.conversation_log import (
-            CONVERSATION_LOG_FILENAME,
+            conversation_log_path,
             deserialize_message,
             read_log,
         )
 
-        log_file = spec_dir / CONVERSATION_LOG_FILENAME
-        if not log_file.exists():
-            return
-        entries = read_log(spec_dir)
+        # Per-model log: each (provider, model) keeps its own history so
+        # switching a phase's LLM resumes that model's own context. read_log
+        # migrates any legacy single-file log first.
+        entries = read_log(spec_dir, provider, model)
+        log_file = conversation_log_path(spec_dir, provider, model)
         if not entries:
             return
 
@@ -430,18 +431,24 @@ async def _maybe_replay_conversation(
         )
 
 
-def _maybe_inject_pending_tool_use_note(message: str, spec_dir: Path) -> str:
+def _maybe_inject_pending_tool_use_note(
+    message: str,
+    spec_dir: Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> str:
     """If the conversation log ends on an assistant turn with a tool_use that
     never received its tool_result, prepend a directive to the user message
     telling the LLM to re-issue the tool call before continuing.
 
     Without this, the new provider would resume mid-thought without realising
-    it had asked for an action that was never executed.
+    it had asked for an action that was never executed. Reads the current
+    model's own log (per-model history).
     """
     try:
         from core.conversation_log import has_pending_tool_use, read_log
 
-        entries = read_log(spec_dir)
+        entries = read_log(spec_dir, provider, model)
         if not entries or not has_pending_tool_use(entries):
             return message
         directive = (
@@ -1531,11 +1538,9 @@ async def run_agent_session(
                 from datetime import datetime as _dt
 
                 _timestamp = _dt.now().strftime("%Y%m%d-%H%M%S")
-                _log_file = spec_dir / "conversation.jsonl"
-                if _log_file.exists():
-                    _log_file.rename(
-                        spec_dir / f"conversation.{_timestamp}.too-long.jsonl"
-                    )
+                from core.conversation_log import archive_all_logs
+
+                archive_all_logs(spec_dir, "too-long")
                 _session_state = spec_dir / ".session.json"
                 if _session_state.exists():
                     _session_state.rename(
@@ -1639,13 +1644,13 @@ async def run_agent_session(
                 from datetime import datetime as _dt
 
                 _timestamp = _dt.now().strftime("%Y%m%d-%H%M%S")
-                _log_file = spec_dir / "conversation.jsonl"
-                if _log_file.exists():
-                    _archive = spec_dir / f"conversation.{_timestamp}.too-long.jsonl"
-                    _log_file.rename(_archive)
+                from core.conversation_log import archive_all_logs
+
+                _moved = archive_all_logs(spec_dir, "too-long")
+                if _moved:
                     logger.info(
-                        "[session] Archived oversized conversation log to %s",
-                        _archive.name,
+                        "[session] Archived %d oversized conversation log(s)",
+                        _moved,
                     )
                 _session_state = spec_dir / ".session.json"
                 if _session_state.exists():
@@ -1732,7 +1737,9 @@ async def _run_agent_client_session(
     # If the last assistant message ended on an un-dispatched tool_use, append
     # a directive nudging the LLM to redo it.
     await _maybe_replay_conversation(client, spec_dir, provider, log_model)
-    message = _maybe_inject_pending_tool_use_note(message, spec_dir)
+    message = _maybe_inject_pending_tool_use_note(
+        message, spec_dir, provider, log_model
+    )
 
     try:
         # Persist the initial user message before the network call so a process
@@ -2008,11 +2015,9 @@ async def _run_agent_client_session(
                 from datetime import datetime as _dt
 
                 _timestamp = _dt.now().strftime("%Y%m%d-%H%M%S")
-                _log_file = spec_dir / "conversation.jsonl"
-                if _log_file.exists():
-                    _log_file.rename(
-                        spec_dir / f"conversation.{_timestamp}.too-long.jsonl"
-                    )
+                from core.conversation_log import archive_all_logs
+
+                archive_all_logs(spec_dir, "too-long")
                 _session_state = spec_dir / ".session.json"
                 if _session_state.exists():
                     _session_state.rename(
