@@ -502,6 +502,40 @@ def parse_rate_limit_reset_time(error_info: dict | None) -> int | None:
     return None
 
 
+def _cleanup_stray_root_plan(project_dir: Path, spec_dir: Path) -> str | None:
+    """Remove a bogus implementation_plan.json a model wrote to the project ROOT
+    instead of the spec dir.
+
+    Weak local models sometimes call ``write_file ./implementation_plan.json``
+    (a relative path → worktree root) and leave a truncated file there — e.g. a
+    lone ``{`` — which is NOT the plan WorkPilot reads (that lives in the spec
+    dir) and just pollutes the tree. Delete it ONLY in worktree mode (root !=
+    spec dir) and ONLY when it's genuinely invalid (unparseable or no
+    ``phases``), so a real plan is never touched. Returns a message if it
+    removed one, else None. Best-effort — never raises.
+    """
+    try:
+        if project_dir.resolve() == spec_dir.resolve():
+            return None  # --direct mode: the root IS the spec dir
+        stray = project_dir / "implementation_plan.json"
+        if not stray.exists():
+            return None
+        try:
+            data = json.loads(stray.read_text(encoding="utf-8"))
+            bogus = not isinstance(data, dict) or not data.get("phases")
+        except (OSError, ValueError):
+            bogus = True
+        if bogus:
+            stray.unlink()
+            return (
+                "Removed a stray/invalid implementation_plan.json the model wrote "
+                f"to the project root ({stray.name}) instead of the spec directory."
+            )
+    except OSError:
+        pass
+    return None
+
+
 async def run_autonomous_agent(
     project_dir: Path,
     spec_dir: Path,
@@ -1416,21 +1450,51 @@ async def run_autonomous_agent(
                 planning_retry_context = None
             else:
                 planning_validation_failures += 1
+                # The plan WorkPilot reads lives in the spec dir; a model that
+                # wrote ./implementation_plan.json to the worktree root leaves a
+                # stray (often a truncated "{") — clean it so it doesn't linger.
+                stray_msg = _cleanup_stray_root_plan(project_dir, spec_dir)
+
+                # Make explicit this is the MODEL's invalid output (not a
+                # WorkPilot fault) and point local-model users at the fix.
+                provider_hint = ""
+                try:
+                    if client.provider_name() in ("ollama", "local", "lmstudio"):
+                        provider_hint = (
+                            " The local model produced an invalid plan — switch "
+                            "the Planning phase to a tool-capable / cloud model "
+                            "and re-run."
+                        )
+                except Exception:
+                    provider_hint = ""
+
                 if planning_validation_failures >= max_planning_validation_retries:
-                    print_status(
-                        "implementation_plan.json validation failed too many times",
-                        "error",
+                    fail_msg = (
+                        "Planning failed: the model did not produce a valid "
+                        "implementation_plan.json (unparseable or missing "
+                        "`phases`)." + provider_hint
                     )
+                    print_status(fail_msg, "error")
                     for err in errors:
                         print(f"  - {err}")
+                    if stray_msg:
+                        print_status(stray_msg, "warning")
+                    if task_logger:
+                        task_logger.end_phase(
+                            LogPhase.PLANNING, success=False, message=fail_msg
+                        )
                     status_manager.update(state=BuildState.ERROR)
                     return
 
                 print_status(
-                    "implementation_plan.json invalid - retrying planner", "warning"
+                    "implementation_plan.json invalid - retrying planner"
+                    + provider_hint,
+                    "warning",
                 )
                 for err in errors:
                     print(f"  - {err}")
+                if stray_msg:
+                    print_status(stray_msg, "warning")
 
                 planning_retry_context = (
                     "## IMPLEMENTATION PLAN VALIDATION ERRORS\n\n"
