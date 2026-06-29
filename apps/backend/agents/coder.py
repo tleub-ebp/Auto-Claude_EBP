@@ -1452,8 +1452,14 @@ async def run_autonomous_agent(
             try:
                 from qa.criteria import snapshot_plan_for_model
 
+                # Write to the MAIN project spec dir (source_spec_dir) so the
+                # per-LLM plans persist beyond the worktree and survive a reset.
                 snapshot_plan_for_model(
-                    spec_dir, client.provider_name(), phase_model, valid=valid
+                    spec_dir,
+                    client.provider_name(),
+                    phase_model,
+                    valid=valid,
+                    dest_dir=source_spec_dir,
                 )
             except Exception:
                 pass

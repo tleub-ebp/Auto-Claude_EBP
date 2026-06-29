@@ -47,16 +47,25 @@ def plan_snapshot_slug(provider: str, model: str) -> str:
 
 
 def snapshot_plan_for_model(
-    spec_dir: Path, provider: str, model: str, *, valid: bool
+    spec_dir: Path,
+    provider: str,
+    model: str,
+    *,
+    valid: bool,
+    dest_dir: Path | None = None,
 ) -> Path | None:
     """Archive the current ``implementation_plan.json`` under ``plans/<slug>.json``
     so plans produced by different LLMs can be compared side by side.
 
+    Reads the plan from ``spec_dir`` (the live run dir) but writes the snapshot
+    under ``<dest_dir or spec_dir>/plans/``. In worktree mode pass
+    ``dest_dir=source_spec_dir`` so snapshots land in the MAIN project spec dir
+    and PERSIST across worktree removal and task reset (``plans/`` is not a reset
+    artifact) — otherwise they'd vanish with the worktree.
+
     One file per (provider, model) — the latest planning run for that LLM wins.
     Each snapshot wraps the plan with its provenance (provider, model, capture
-    time, and whether it passed validation), so a UI can list/diff them. The
-    ``plans/`` directory is intentionally NOT a run artifact, so it survives a
-    task reset and accumulates a cross-model comparison history.
+    time, whether it passed validation), so a UI can list/diff them.
 
     Best-effort: returns the path written, or None when there is no parseable
     plan to snapshot. Never raises.
@@ -65,8 +74,8 @@ def snapshot_plan_for_model(
     if plan is None:
         return None
     try:
-        plans_dir = spec_dir / "plans"
-        plans_dir.mkdir(exist_ok=True)
+        plans_dir = (dest_dir or spec_dir) / "plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
         out = plans_dir / f"{plan_snapshot_slug(provider, model)}.json"
         snapshot = {
             "provider": provider,

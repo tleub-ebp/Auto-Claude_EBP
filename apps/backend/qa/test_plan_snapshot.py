@@ -52,6 +52,23 @@ def test_distinct_models_get_distinct_files(tmp_path: Path) -> None:
     assert len(files) == 2
 
 
+def test_dest_dir_reads_worktree_writes_main(tmp_path: Path) -> None:
+    # Worktree mode: the plan is read from the worktree spec dir but the snapshot
+    # must land in the MAIN project (dest_dir) so it survives worktree removal.
+    worktree = tmp_path / "worktree"
+    main = tmp_path / "main"
+    worktree.mkdir()
+    main.mkdir()
+    _write_plan(worktree, {"phases": [{"id": "p1"}]})
+
+    out = snapshot_plan_for_model(
+        worktree, "ollama", "llama3.1", valid=True, dest_dir=main
+    )
+    assert out is not None
+    assert (main / "plans" / "ollama-llama3-1.json").exists()
+    assert not (worktree / "plans").exists()
+
+
 def test_no_plan_returns_none(tmp_path: Path) -> None:
     assert snapshot_plan_for_model(tmp_path, "ollama", "llama3.1", valid=True) is None
 
