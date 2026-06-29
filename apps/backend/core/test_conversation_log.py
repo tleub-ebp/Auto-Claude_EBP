@@ -133,18 +133,33 @@ def test_migrate_legacy_log_splits_by_model(tmp_path: Path) -> None:
     legacy = tmp_path / CONVERSATION_LOG_FILENAME
     legacy.write_text(
         json.dumps(
-            {"v": 1, "provider": "ollama", "model": "qwen2.5-coder:latest",
-             "role": "assistant", "content": [{"type": "text", "text": "q1"}]}
+            {
+                "v": 1,
+                "provider": "ollama",
+                "model": "qwen2.5-coder:latest",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "q1"}],
+            }
         )
         + "\n"
         + json.dumps(
-            {"v": 1, "provider": "ollama", "model": "llama3.1",
-             "role": "assistant", "content": [{"type": "text", "text": "l1"}]}
+            {
+                "v": 1,
+                "provider": "ollama",
+                "model": "llama3.1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "l1"}],
+            }
         )
         + "\n"
         + json.dumps(
-            {"v": 1, "provider": "ollama", "model": "qwen2.5-coder:latest",
-             "role": "assistant", "content": [{"type": "text", "text": "q2"}]}
+            {
+                "v": 1,
+                "provider": "ollama",
+                "model": "qwen2.5-coder:latest",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "q2"}],
+            }
         )
         + "\n",
         encoding="utf-8",
@@ -170,8 +185,13 @@ def test_read_log_migrates_then_reads(tmp_path: Path) -> None:
 
     (tmp_path / CONVERSATION_LOG_FILENAME).write_text(
         json.dumps(
-            {"v": 1, "provider": "ollama", "model": "llama3.1",
-             "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+            {
+                "v": 1,
+                "provider": "ollama",
+                "model": "llama3.1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+            }
         )
         + "\n",
         encoding="utf-8",
@@ -188,8 +208,14 @@ def test_pending_tool_use_detection(tmp_path: Path) -> None:
         tmp_path,
         _msg(
             "assistant",
-            [{"type": "tool_use", "tool_id": "toolu_01", "tool_name": "Read",
-              "tool_input": {"file_path": "x.py"}}],
+            [
+                {
+                    "type": "tool_use",
+                    "tool_id": "toolu_01",
+                    "tool_name": "Read",
+                    "tool_input": {"file_path": "x.py"},
+                }
+            ],
         ),
         phase="coding",
         provider=_PROV,
@@ -199,8 +225,16 @@ def test_pending_tool_use_detection(tmp_path: Path) -> None:
 
     append_message(
         tmp_path,
-        _msg("user", [{"type": "tool_result", "tool_use_id": "toolu_01",
-                       "result_content": "file contents"}]),
+        _msg(
+            "user",
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "result_content": "file contents",
+                }
+            ],
+        ),
         phase="coding",
         provider=_PROV,
         model=_MODEL,
@@ -233,13 +267,18 @@ def test_clear_log_per_model_vs_all(tmp_path: Path) -> None:
         ("ollama", "llama3.1", "l"),
     ]:
         append_message(
-            tmp_path, _msg("assistant", [{"type": "text", "text": txt}]),
-            phase="coding", provider=prov, model=mdl,
+            tmp_path,
+            _msg("assistant", [{"type": "text", "text": txt}]),
+            phase="coding",
+            provider=prov,
+            model=mdl,
         )
 
     # Targeted clear: only qwen.
     clear_log(tmp_path, "ollama", "qwen2.5-coder:latest")
-    assert not conversation_log_path(tmp_path, "ollama", "qwen2.5-coder:latest").exists()
+    assert not conversation_log_path(
+        tmp_path, "ollama", "qwen2.5-coder:latest"
+    ).exists()
     assert conversation_log_path(tmp_path, "ollama", "llama3.1").exists()
 
     # Whole-task clear: everything gone.
@@ -255,8 +294,11 @@ def test_archive_all_logs_moves_active_logs(tmp_path: Path) -> None:
     from core.conversation_log import append_message, archive_all_logs
 
     append_message(
-        tmp_path, _msg("assistant", [{"type": "text", "text": "x"}]),
-        phase="coding", provider="ollama", model="llama3.1",
+        tmp_path,
+        _msg("assistant", [{"type": "text", "text": "x"}]),
+        phase="coding",
+        provider="ollama",
+        model="llama3.1",
     )
     moved = archive_all_logs(tmp_path, "too-long")
     assert moved == 1
@@ -271,6 +313,9 @@ def test_append_swallows_io_errors(tmp_path: Path) -> None:
 
     bad_dir = tmp_path / "does" / "not" / "exist"
     append_message(
-        bad_dir, _msg("assistant", [{"type": "text", "text": "hi"}]),
-        phase="coding", provider=_PROV, model=_MODEL,
+        bad_dir,
+        _msg("assistant", [{"type": "text", "text": "hi"}]),
+        phase="coding",
+        provider=_PROV,
+        model=_MODEL,
     )  # no exception == pass

@@ -123,7 +123,10 @@ def migrate_legacy_log(spec_dir: Path) -> None:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                key = (entry.get("provider") or "local", entry.get("model") or "default")
+                key = (
+                    entry.get("provider") or "local",
+                    entry.get("model") or "default",
+                )
                 groups.setdefault(key, []).append(line)
         for (prov, mdl), lines in groups.items():
             target = conversation_log_path(spec_dir, prov, mdl)
