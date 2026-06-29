@@ -816,6 +816,10 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 				AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
 				AUTO_BUILD_PATHS.QA_REPORT,
 				AUTO_BUILD_PATHS.BUILD_PROGRESS,
+				// The phase-log feed shown in the Logs tab. Without clearing it, a
+				// reset kept every past run's entries — so after switching LLM the
+				// user still saw the *previous* model's (and old cloud runs') logs.
+				"task_logs.json",
 				"conversation.jsonl",
 				"conversation_log.jsonl",
 				"PROMPT_TOO_LONG_HALT",
@@ -880,6 +884,9 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 				subtasks: [],
 				qaReport: undefined,
 				executionProgress: undefined,
+				// Clear the in-memory feed too (the on-disk task_logs.json is deleted
+				// above) so the Logs tab starts empty for the next run.
+				logs: [],
 				updatedAt: new Date(),
 			};
 			console.warn(`[TASK_RESET] Task ${taskId} reset to backlog`);

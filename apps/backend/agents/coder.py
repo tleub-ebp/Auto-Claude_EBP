@@ -1446,6 +1446,17 @@ async def run_autonomous_agent(
         plan_validated = False
         if is_planning_phase and status != "error":
             valid, errors = _validate_and_fix_implementation_plan()
+            # Archive this LLM's plan (valid or not) so plans from different
+            # models can be compared side by side later. One snapshot per
+            # provider/model; survives a reset (lives under plans/).
+            try:
+                from qa.criteria import snapshot_plan_for_model
+
+                snapshot_plan_for_model(
+                    spec_dir, client.provider_name(), phase_model, valid=valid
+                )
+            except Exception:
+                pass
             if valid:
                 plan_validated = True
                 planning_retry_context = None

@@ -6,6 +6,8 @@ Manages acceptance criteria validation and status tracking.
 """
 
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 from progress import is_build_complete
@@ -36,6 +38,48 @@ def save_implementation_plan(spec_dir: Path, plan: dict) -> bool:
         return True
     except OSError:
         return False
+
+
+def plan_snapshot_slug(provider: str, model: str) -> str:
+    """Filename-safe ``<provider>-<model>`` slug for a per-LLM plan snapshot."""
+    slug = re.sub(r"[^a-z0-9]+", "-", f"{provider}_{model}".lower()).strip("-")
+    return slug or "unknown"
+
+
+def snapshot_plan_for_model(
+    spec_dir: Path, provider: str, model: str, *, valid: bool
+) -> Path | None:
+    """Archive the current ``implementation_plan.json`` under ``plans/<slug>.json``
+    so plans produced by different LLMs can be compared side by side.
+
+    One file per (provider, model) — the latest planning run for that LLM wins.
+    Each snapshot wraps the plan with its provenance (provider, model, capture
+    time, and whether it passed validation), so a UI can list/diff them. The
+    ``plans/`` directory is intentionally NOT a run artifact, so it survives a
+    task reset and accumulates a cross-model comparison history.
+
+    Best-effort: returns the path written, or None when there is no parseable
+    plan to snapshot. Never raises.
+    """
+    plan = load_implementation_plan(spec_dir)
+    if plan is None:
+        return None
+    try:
+        plans_dir = spec_dir / "plans"
+        plans_dir.mkdir(exist_ok=True)
+        out = plans_dir / f"{plan_snapshot_slug(provider, model)}.json"
+        snapshot = {
+            "provider": provider,
+            "model": model,
+            "captured_at": datetime.now().isoformat(),
+            "valid": valid,
+            "plan": plan,
+        }
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, indent=2)
+        return out
+    except OSError:
+        return None
 
 
 # =============================================================================
