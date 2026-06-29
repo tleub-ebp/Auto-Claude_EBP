@@ -219,7 +219,28 @@ export function buildProviderMetadataUpdate(
 ): Partial<TaskMetadata> {
 	const base = basePhaseProviders(metadata, defaults);
 	const configPhase = LOG_PHASE_TO_CONFIG_PHASE[logPhase];
-	return { phaseProviders: { ...base, [configPhase]: provider } };
+	const update: Partial<TaskMetadata> = {
+		phaseProviders: { ...base, [configPhase]: provider },
+	};
+
+	// Changing a phase's provider invalidates its persisted model: a model from
+	// the previous provider (e.g. "opus" left over from Anthropic) can't run on
+	// the new one — Ollama silently falls back to its own default, surfaced
+	// confusingly as `ollama:opus`. Reset this phase's model to the NEW provider's
+	// default so model and provider always agree (the other phases keep theirs).
+	// `defaults` MUST be resolved for `provider`; callers that omit it (e.g. unit
+	// tests asserting only the provider) get the legacy provider-only update.
+	const newDefaultModel = defaults?.phaseModels?.[configPhase];
+	if (newDefaultModel) {
+		const baseModels = basePhaseConfig(metadata, defaults);
+		update.isAutoProfile = true;
+		update.phaseModels = {
+			...baseModels.phaseModels,
+			[configPhase]: newDefaultModel,
+		};
+	}
+
+	return update;
 }
 
 interface ModelSelectOption {

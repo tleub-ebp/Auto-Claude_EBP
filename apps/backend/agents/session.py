@@ -1094,6 +1094,11 @@ async def run_agent_session(
 
     # Get task logger for this spec
     task_logger = get_task_logger(spec_dir)
+    # Attribute this session's feed entries to the active model so the UI can
+    # group the phase log per model. Raw SDK path is always Claude.
+    if task_logger:
+        _sdk_model = getattr(getattr(client, "options", None), "model", "") or "unknown"
+        task_logger.set_llm("claude", _sdk_model)
     current_tool = None
     message_count = 0
     tool_count = 0
@@ -1730,6 +1735,12 @@ async def _run_agent_client_session(
     # every message so a different provider can replay the transcript later.
     log_model = str(getattr(client, "model", "unknown"))
     log_subtask_id = _read_current_subtask_id(spec_dir)
+
+    # Attribute this session's feed entries to (provider, model) so the UI can
+    # group the phase log per model and compare plans across LLMs. Uses the same
+    # identity as the per-model conversation log for consistency.
+    if task_logger:
+        task_logger.set_llm(provider, log_model)
 
     # If a prior session for this spec left a conversation log, replay it into
     # the client so the LLM has the same context — even when this run uses a

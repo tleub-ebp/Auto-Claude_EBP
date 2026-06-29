@@ -1,11 +1,13 @@
 import {
 	AlertTriangle,
 	ArrowDown,
+	ArrowLeftRight,
 	ArrowUp,
 	Brain,
 	CheckCircle2,
 	ChevronDown,
 	ChevronRight,
+	Columns2,
 	Cpu,
 	FileCode,
 	FileText,
@@ -48,6 +50,11 @@ import {
 } from "../../../shared/utils/task-thinking";
 import { getStaticProviders } from "../../../shared/utils/providers";
 import { entryMatchesQuery } from "../../../shared/utils/task-logs-search";
+import {
+	groupEntriesByModel,
+	mergeGroupsByModel,
+	type ModelLogGroup,
+} from "../../../shared/utils/task-logs-by-model";
 import { debugError } from "../../../shared/utils/debug-logger";
 import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
 import { useDownloadStore } from "../../stores/download-store";
@@ -220,6 +227,14 @@ export function TaskLogs({
 	const { t } = useTranslation(["tasks"]);
 	const { toast } = useToast();
 	const [savingPhase, setSavingPhase] = useState<TaskLogPhase | null>(null);
+	// Side-by-side comparison: when set, the panel swaps to a two-column view of
+	// the given phase, pre-selecting two of its models. Cleared to return to the
+	// normal stacked view.
+	const [compare, setCompare] = useState<{
+		phase: TaskLogPhase;
+		leftKey: string;
+		rightKey: string;
+	} | null>(null);
 	const settings = useSettingsStore((s) => s.settings);
 	const profiles = useSettingsStore((s) => s.profiles);
 
@@ -252,6 +267,18 @@ export function TaskLogs({
 		}
 		return map;
 	}, [task.subtasks]);
+
+	// Open the side-by-side comparison for a phase, pre-selecting its first two
+	// models. Guarded so it never opens with fewer than two (the trigger is
+	// hidden in that case anyway).
+	const handleCompare = useCallback(
+		(phase: TaskLogPhase) => {
+			const models = mergeGroupsByModel(phaseLogs?.phases[phase]?.entries ?? []);
+			if (models.length < 2) return;
+			setCompare({ phase, leftKey: models[0].key, rightKey: models[1].key });
+		},
+		[phaseLogs],
+	);
 
 	// Configured providers shown in each phase's provider dropdown. Loaded once
 	// (and refreshed when settings/profiles change) so adding an API key in
@@ -352,11 +379,13 @@ export function TaskLogs({
 		(logPhase: TaskLogPhase, provider: string) =>
 			persistPhaseMetadata(
 				logPhase,
+				// Resolve defaults for the NEW provider so the phase's model is reset
+				// to a model that provider can actually run (prevents `ollama:opus`).
 				buildProviderMetadataUpdate(
 					task.metadata,
 					logPhase,
 					provider,
-					phaseDefaults,
+					resolvePhaseDefaults(settings, provider),
 				),
 				t("tasks:logs.provider.updatedTitle", "Fournisseur mis à jour"),
 				t(
@@ -364,7 +393,7 @@ export function TaskLogs({
 					"Le fournisseur sera appliqué au démarrage de cette phase.",
 				),
 			),
-		[persistPhaseMetadata, task.metadata, phaseDefaults, t],
+		[persistPhaseMetadata, task.metadata, settings, t],
 	);
 
 	// Refs to each rendered phase section so we can detect which phase is
@@ -538,6 +567,24 @@ export function TaskLogs({
 		isLoadingLogs,
 	]);
 
+	// Comparison mode takes over the whole panel: a focused two-column view of one
+	// phase's models, so two plans read side by side with their own scroll.
+	if (compare && !isLoadingLogs && phaseLogs) {
+		return (
+			<div className="relative flex h-full flex-col">
+				<PhaseCompareView
+					phase={compare.phase}
+					phaseLog={phaseLogs.phases[compare.phase] ?? null}
+					initialLeftKey={compare.leftKey}
+					initialRightKey={compare.rightKey}
+					subtaskTitles={subtaskTitles}
+					providers={providers}
+					onClose={() => setCompare(null)}
+				/>
+			</div>
+		);
+	}
+
 	return (
 		<div
 			className="relative flex h-full flex-col"
@@ -630,6 +677,7 @@ export function TaskLogs({
 										isSavingPhase={savingPhase === phase}
 										searchQuery={normalizedQuery}
 										subtaskTitles={subtaskTitles}
+										onCompare={handleCompare}
 									/>
 								</div>
 							))}
@@ -749,6 +797,8 @@ interface PhaseLogSectionProps {
 	searchQuery?: string;
 	/** Map id → titre de sous-tâche, pour le repli de sous-étape du codage. */
 	subtaskTitles?: Record<string, string>;
+	/** Open the side-by-side comparison for this phase (shown only when ≥2 models). */
+	onCompare?: (phase: TaskLogPhase) => void;
 }
 
 function PhaseLogSection({
@@ -765,6 +815,7 @@ function PhaseLogSection({
 	isSavingPhase,
 	searchQuery = "",
 	subtaskTitles,
+	onCompare,
 }: PhaseLogSectionProps) {
 	const { t } = useTranslation(["tasks"]);
 	const { toast } = useToast();
@@ -810,20 +861,36 @@ function PhaseLogSection({
 		[catalogModels, phaseConfig?.modelValue],
 	);
 
-	// Memoize sorted+filtered entries to avoid re-calculating on every render.
-	// Entries are naturally in chronological order (oldest first from append());
-	// when a search is active we keep only the matching ones.
-	const displayedEntries = useMemo(() => {
-		let entries = phaseLog?.entries || [];
-		if (isSearching) {
-			entries = entries.filter((e) => entryMatchesQuery(e, searchQuery));
-		}
-		return logOrder === "reverse-chronological"
-			? [...entries].reverse()
+	// Filtered entries in chronological order (oldest first from append()); when
+	// a search is active we keep only the matching ones. Grouping is computed on
+	// this order, then display order is applied below.
+	const filteredEntries = useMemo(() => {
+		const entries = phaseLog?.entries || [];
+		return isSearching
+			? entries.filter((e) => entryMatchesQuery(e, searchQuery))
 			: entries;
-	}, [phaseLog?.entries, logOrder, isSearching, searchQuery]);
+	}, [phaseLog?.entries, isSearching, searchQuery]);
 
-	const hasEntries = displayedEntries.length > 0;
+	// One sub-section per (provider, model) so plans from different LLMs (e.g.
+	// after a mid-phase model switch) can be compared side by side. In reverse-
+	// chronological mode we flip both the group order and the entries within each
+	// group, keeping every model's run contiguous.
+	const modelGroups = useMemo(() => {
+		const groups = groupEntriesByModel(filteredEntries);
+		if (logOrder !== "reverse-chronological") return groups;
+		return [...groups]
+			.reverse()
+			.map((g) => ({ ...g, entries: [...g.entries].reverse() }));
+	}, [filteredEntries, logOrder]);
+
+	const hasEntries = filteredEntries.length > 0;
+
+	// The compare trigger only makes sense with ≥2 distinct attributed models.
+	// Computed on the full (unfiltered) entries so it doesn't blink during search.
+	const canCompare = useMemo(
+		() => mergeGroupsByModel(phaseLog?.entries || []).length >= 2,
+		[phaseLog?.entries],
+	);
 
 	// Local providers expose a static catalog of pullable models; flag it so the
 	// model dropdown can mark which entries are actually installed vs downloadable.
@@ -940,7 +1007,7 @@ function PhaseLogSection({
 
 	// While searching, a phase with no matching entry is hidden entirely so the
 	// results read as a flat, focused list. (All hooks above already ran.)
-	if (isSearching && displayedEntries.length === 0) return null;
+	if (isSearching && filteredEntries.length === 0) return null;
 
 	return (
 		<Collapsible open={isSearching || isExpanded} onOpenChange={onToggle}>
@@ -979,9 +1046,9 @@ function PhaseLogSection({
 						</span>
 						{hasEntries && (
 							<span className="text-xs text-muted-foreground">
-								({displayedEntries.length}{" "}
+								({filteredEntries.length}{" "}
 								{t(
-									displayedEntries.length === 1
+									filteredEntries.length === 1
 										? "tasks:execution.labels.entry"
 										: "tasks:execution.labels.entries",
 								)}
@@ -1129,6 +1196,24 @@ function PhaseLogSection({
 							)}
 						</div>
 					)}
+					{/* Compare models side by side — only when the phase ran ≥2 models. */}
+					{canCompare && onCompare && (
+						<button
+							type="button"
+							onClick={() => onCompare(phase)}
+							aria-label={t("tasks:logs.compare.openAria", "Comparer les modèles")}
+							title={t(
+								"tasks:logs.compare.openTooltip",
+								"Comparer les plans des modèles côte à côte",
+							)}
+							className="flex shrink-0 items-center gap-1 rounded-md border border-border/60 bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+						>
+							<Columns2 className="h-3 w-3" />
+							<span className="hidden sm:inline">
+								{t("tasks:logs.compare.button", "Comparer")}
+							</span>
+						</button>
+					)}
 					{getStatusBadge()}
 				</div>
 			</div>
@@ -1139,25 +1224,384 @@ function PhaseLogSection({
 							{t("tasks:logs.phaseEmpty")}
 						</p>
 					) : (
-						displayedEntries.map((entry) => {
-							const key = `${entry.timestamp}-${entry.type}-${entry.content.slice(0, 80)}`;
-							// Les bornes de sous-étape (« Starting phase N: NOM ») sont
-							// marquées pour que TaskLogs puisse suivre la sous-étape courante
-							// au défilement.
-							const subStepLabel = subStepLabels.get(entry) ?? null;
-							if (subStepLabel) {
-								return (
-									<div key={key} data-substep={subStepLabel} data-substep-phase={phase}>
-										<LogEntry entry={entry} query={searchQuery} />
-									</div>
-								);
-							}
-							return <LogEntry key={key} entry={entry} query={searchQuery} />;
-						})
+						modelGroups.map((group, groupIdx) =>
+							group.provider || group.model ? (
+								<ModelLogGroupView
+									key={`${group.key}-${groupIdx}`}
+									group={group}
+									phase={phase}
+									searchQuery={searchQuery}
+									subStepLabels={subStepLabels}
+									providers={providers}
+								/>
+							) : (
+								<PhaseEntryList
+									key={`flat-${groupIdx}`}
+									entries={group.entries}
+									phase={phase}
+									searchQuery={searchQuery}
+									subStepLabels={subStepLabels}
+								/>
+							),
+						)
 					)}
 				</div>
 			</CollapsibleContent>
 		</Collapsible>
+	);
+}
+
+// Renders a phase's log entries as a flat list, wiring the sub-step boundary
+// markers (data-substep) so the phase bar can follow the current sub-step on
+// scroll. Shared by the legacy/unattributed path and each per-model group.
+function PhaseEntryList({
+	entries,
+	phase,
+	searchQuery,
+	subStepLabels,
+}: {
+	entries: TaskLogEntry[];
+	phase: TaskLogPhase;
+	searchQuery: string;
+	subStepLabels: Map<TaskLogEntry, string>;
+}) {
+	return (
+		<>
+			{entries.map((entry) => {
+				const key = `${entry.timestamp}-${entry.type}-${entry.content.slice(0, 80)}`;
+				const subStepLabel = subStepLabels.get(entry) ?? null;
+				if (subStepLabel) {
+					return (
+						<div
+							key={key}
+							data-substep={subStepLabel}
+							data-substep-phase={phase}
+						>
+							<LogEntry entry={entry} query={searchQuery} />
+						</div>
+					);
+				}
+				return <LogEntry key={key} entry={entry} query={searchQuery} />;
+			})}
+		</>
+	);
+}
+
+// Human-friendly provider names for the per-model group header. Falls back to
+// the configured provider label, then to a capitalized raw id.
+const PROVIDER_LABELS: Record<string, string> = {
+	claude: "Claude",
+	anthropic: "Anthropic",
+	ollama: "Ollama",
+	copilot: "Copilot",
+	openai: "OpenAI",
+	windsurf: "Windsurf",
+	google: "Google",
+	gemini: "Gemini",
+	lmstudio: "LM Studio",
+	local: "Local",
+};
+
+function formatProviderLabel(
+	provider: string | undefined,
+	providers?: readonly { name: string; label: string }[],
+): string {
+	if (!provider) return "";
+	const key = provider.toLowerCase();
+	const known = PROVIDER_LABELS[key];
+	if (known) return known;
+	const configured = providers?.find((p) => p.name.toLowerCase() === key);
+	if (configured) return configured.label;
+	return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
+// A collapsible sub-section grouping the entries produced by a single
+// (provider, model) within a phase, so plans from different LLMs can be
+// compared. Default-open; collapse to focus on one model's plan.
+function ModelLogGroupView({
+	group,
+	phase,
+	searchQuery,
+	subStepLabels,
+	providers,
+}: {
+	group: ModelLogGroup;
+	phase: TaskLogPhase;
+	searchQuery: string;
+	subStepLabels: Map<TaskLogEntry, string>;
+	providers?: readonly { name: string; label: string }[];
+}) {
+	const { t } = useTranslation(["tasks"]);
+	const [open, setOpen] = useState(true);
+	const modelLabel =
+		group.model || t("tasks:logs.modelGroup.unknownModel", "Unknown model");
+	const providerLabel = formatProviderLabel(group.provider, providers);
+	const count = group.entries.length;
+
+	return (
+		<div className="rounded-md border border-border/50 bg-secondary/20">
+			<button
+				type="button"
+				onClick={() => setOpen((v) => !v)}
+				aria-expanded={open}
+				aria-label={t("tasks:logs.modelGroup.toggleAria", {
+					model: modelLabel,
+				})}
+				className="flex w-full items-center gap-1.5 px-2 py-1 text-left transition-colors hover:bg-secondary/40"
+			>
+				{open ? (
+					<ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+				) : (
+					<ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+				)}
+				<Cpu className="h-3 w-3 shrink-0 text-muted-foreground" />
+				{providerLabel && (
+					<>
+						<span className="text-[11px] font-medium text-foreground/80">
+							{providerLabel}
+						</span>
+						<span className="text-muted-foreground/40">·</span>
+					</>
+				)}
+				<span className="truncate text-[11px] font-medium text-foreground">
+					{modelLabel}
+				</span>
+				<span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
+					{count}{" "}
+					{t(
+						count === 1
+							? "tasks:execution.labels.entry"
+							: "tasks:execution.labels.entries",
+					)}
+				</span>
+			</button>
+			{open && (
+				<div className="space-y-1 px-2 pb-2 pt-0.5">
+					<PhaseEntryList
+						entries={group.entries}
+						phase={phase}
+						searchQuery={searchQuery}
+						subStepLabels={subStepLabels}
+					/>
+				</div>
+			)}
+		</div>
+	);
+}
+
+// Provider · model label for a comparison group's selector and header.
+function groupLabel(
+	group: ModelLogGroup,
+	providers: readonly { name: string; label: string }[] | undefined,
+	unknownModel: string,
+): string {
+	const provider = formatProviderLabel(group.provider, providers);
+	const model = group.model || unknownModel;
+	return provider ? `${provider} · ${model}` : model;
+}
+
+// One column of the side-by-side comparison: a sticky header with a model picker
+// (re-target the column on the fly) and an independently-scrollable body reusing
+// the standard entry renderer.
+function CompareColumn({
+	side,
+	group,
+	models,
+	selectedKey,
+	onSelect,
+	phase,
+	subStepLabels,
+	providers,
+}: {
+	side: "left" | "right";
+	group: ModelLogGroup | undefined;
+	models: ModelLogGroup[];
+	selectedKey: string;
+	onSelect: (key: string) => void;
+	phase: TaskLogPhase;
+	subStepLabels: Map<TaskLogEntry, string>;
+	providers?: readonly { name: string; label: string }[];
+}) {
+	const { t } = useTranslation(["tasks"]);
+	const unknownModel = t("tasks:logs.modelGroup.unknownModel", "Unknown model");
+	const entries = group?.entries ?? [];
+	// Distinct top accent per side for quick left/right orientation.
+	const accent = side === "left" ? "border-info" : "border-purple-500";
+
+	return (
+		<div className={cn("flex min-w-0 flex-1 flex-col border-t-2", accent)}>
+			<div className="sticky top-0 z-10 flex shrink-0 items-center gap-1.5 border-b border-border/50 bg-background/95 px-2 py-1.5 backdrop-blur">
+				<Cpu className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+				<Select value={selectedKey} onValueChange={onSelect}>
+					<SelectTrigger
+						className="h-7 w-auto min-w-0 flex-1 gap-1 border-0 bg-transparent px-1 py-0 text-xs font-medium text-foreground focus:ring-0 focus:ring-offset-0 [&>span]:truncate"
+						aria-label={t(
+							"tasks:logs.compare.selectAria",
+							"Choisir le modèle à comparer",
+						)}
+					>
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						{models.map((m) => (
+							<SelectItem key={m.key} value={m.key}>
+								{groupLabel(m, providers, unknownModel)}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+				<span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">
+					{entries.length}{" "}
+					{t(
+						entries.length === 1
+							? "tasks:execution.labels.entry"
+							: "tasks:execution.labels.entries",
+					)}
+				</span>
+			</div>
+			<div className="min-h-0 flex-1 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent px-2 py-2">
+				{entries.length === 0 ? (
+					<p className="text-xs italic text-muted-foreground">
+						{t("tasks:logs.phaseEmpty")}
+					</p>
+				) : (
+					<PhaseEntryList
+						entries={entries}
+						phase={phase}
+						searchQuery=""
+						subStepLabels={subStepLabels}
+					/>
+				)}
+			</div>
+		</div>
+	);
+}
+
+// Side-by-side comparison of two of a phase's models. Takes over the logs panel
+// (full height); each column scrolls on its own so two plans read in parallel.
+// Esc or the close button returns to the stacked view.
+function PhaseCompareView({
+	phase,
+	phaseLog,
+	initialLeftKey,
+	initialRightKey,
+	subtaskTitles,
+	providers,
+	onClose,
+}: {
+	phase: TaskLogPhase;
+	phaseLog: TaskPhaseLog | null;
+	initialLeftKey: string;
+	initialRightKey: string;
+	subtaskTitles?: Record<string, string>;
+	providers?: readonly { name: string; label: string }[];
+	onClose: () => void;
+}) {
+	const { t } = useTranslation(["tasks"]);
+	const [leftKey, setLeftKey] = useState(initialLeftKey);
+	const [rightKey, setRightKey] = useState(initialRightKey);
+
+	const models = useMemo(
+		() => mergeGroupsByModel(phaseLog?.entries || []),
+		[phaseLog?.entries],
+	);
+	const byKey = useMemo(() => new Map(models.map((m) => [m.key, m])), [models]);
+
+	// Keep selections valid as logs stream in (a model could appear/disappear).
+	useEffect(() => {
+		if (models.length && !byKey.has(leftKey)) setLeftKey(models[0].key);
+	}, [byKey, leftKey, models]);
+	useEffect(() => {
+		if (models.length && !byKey.has(rightKey)) {
+			setRightKey((models[1] ?? models[0]).key);
+		}
+	}, [byKey, rightKey, models]);
+
+	// Sub-step boundaries for the phase, keyed by entry reference (works in both
+	// columns since each renders the same entry objects).
+	const subStepLabels = useMemo(
+		() =>
+			buildPhaseSubSteps(phaseLog?.entries || [], phase, {
+				subtaskTitles,
+				formatQaPass: (n) =>
+					t("tasks:execution.labels.qaPass", "QA — vérification {{n}}", { n }),
+			}),
+		[phaseLog?.entries, phase, subtaskTitles, t],
+	);
+
+	// Esc closes the comparison.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") onClose();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [onClose]);
+
+	const swap = () => {
+		setLeftKey(rightKey);
+		setRightKey(leftKey);
+	};
+
+	const Icon = PHASE_ICONS[phase];
+
+	return (
+		<div className="flex h-full flex-col">
+			<div className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-secondary/30 px-3 py-2">
+				<Columns2 className="h-4 w-4 shrink-0 text-primary" />
+				<span className="text-sm font-semibold text-foreground">
+					{t("tasks:logs.compare.title", "Comparaison des plans")}
+				</span>
+				<span className="flex items-center gap-1 text-xs text-muted-foreground">
+					·
+					<Icon
+						className={cn("h-3.5 w-3.5", PHASE_COLORS[phase].split(" ")[0])}
+					/>
+					{t(`tasks:execution.phases.${phase}`)}
+				</span>
+				<button
+					type="button"
+					onClick={swap}
+					aria-label={t("tasks:logs.compare.swapAria", "Inverser les colonnes")}
+					title={t("tasks:logs.compare.swapAria", "Inverser les colonnes")}
+					className="ml-auto flex h-7 w-7 items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+				>
+					<ArrowLeftRight className="h-3.5 w-3.5" />
+				</button>
+				<button
+					type="button"
+					onClick={onClose}
+					aria-label={t("tasks:logs.compare.close", "Fermer")}
+					className="flex h-7 items-center gap-1 rounded-md border border-border/60 px-2 text-xs text-muted-foreground transition-colors hover:border-destructive/40 hover:text-foreground"
+				>
+					<X className="h-3.5 w-3.5" />
+					{t("tasks:logs.compare.close", "Fermer")}
+				</button>
+			</div>
+			<div className="flex min-h-0 flex-1">
+				<CompareColumn
+					side="left"
+					group={byKey.get(leftKey)}
+					models={models}
+					selectedKey={leftKey}
+					onSelect={setLeftKey}
+					phase={phase}
+					subStepLabels={subStepLabels}
+					providers={providers}
+				/>
+				<div className="w-px shrink-0 bg-border" />
+				<CompareColumn
+					side="right"
+					group={byKey.get(rightKey)}
+					models={models}
+					selectedKey={rightKey}
+					onSelect={setRightKey}
+					phase={phase}
+					subStepLabels={subStepLabels}
+					providers={providers}
+				/>
+			</div>
+		</div>
 	);
 }
 

@@ -46,6 +46,10 @@ class TaskLogger:
         self.current_phase: LogPhase | None = None
         self.current_session: int | None = None
         self.current_subtask: str | None = None
+        # Active LLM context — stamped onto every entry so the UI can group a
+        # phase's log by model (set via set_llm() when a phase resolves its client).
+        self.current_provider: str | None = None
+        self.current_model: str | None = None
         self.storage = LogStorage(spec_dir)
 
     @property
@@ -62,7 +66,16 @@ class TaskLogger:
         emit_marker(marker_type, data, self.emit_markers)
 
     def _add_entry(self, entry: LogEntry) -> None:
-        """Add an entry to the current phase."""
+        """Add an entry to the current phase.
+
+        Stamps the active LLM provider/model onto the entry (unless the caller
+        already set them) so the UI can attribute each line to the model that
+        produced it. This single chokepoint covers every entry type.
+        """
+        if entry.provider is None:
+            entry.provider = self.current_provider
+        if entry.model is None:
+            entry.model = self.current_model
         self.storage.add_entry(entry)
 
     def _debug_log(
@@ -119,6 +132,16 @@ class TaskLogger:
     def set_subtask(self, subtask_id: str | None) -> None:
         """Set the current subtask being processed."""
         self.current_subtask = subtask_id
+
+    def set_llm(self, provider: str | None, model: str | None) -> None:
+        """Record the LLM context for subsequent entries.
+
+        Called when a phase resolves its agent client (provider + model), so
+        every entry produced afterwards is attributed to that model — until the
+        next switch. Lets the UI group a phase's log per model to compare plans.
+        """
+        self.current_provider = provider or None
+        self.current_model = model or None
 
     def start_phase(self, phase: LogPhase, message: str | None = None) -> None:
         """
