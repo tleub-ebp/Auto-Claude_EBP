@@ -111,6 +111,30 @@ class TestExtractTextToolCalls:
             {"function": {"name": "read_file", "arguments": {"path": "a.txt"}}}
         ]
 
+    # ── Lenient JSON + alt arg key (the exact llama3.1 planning failure) ──
+
+    def test_recovers_over_escaped_apostrophe(self):
+        # `\'` is INVALID JSON; a French "d'avertissement" over-escaped this way
+        # made the whole Write call un-parseable and dropped. The lenient
+        # fallback fixes it.
+        content = r"""{"name": "write_file", "arguments": {"path": "x", "content": "d\'oh"}}"""
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out == [
+            {
+                "function": {
+                    "name": "write_file",
+                    "arguments": {"path": "x", "content": "d'oh"},
+                }
+            }
+        ]
+
+    def test_recovers_parameters_key(self):
+        # llama3.1 used "parameters" (not "arguments") — already supported, but
+        # pin it since it was part of the dropped Write call.
+        content = '{"name": "run_command", "parameters": {"command": "pytest -q"}}'
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out[0]["function"]["arguments"] == {"command": "pytest -q"}
+
 
 _LOCAL_ENV_VARS = (
     "OLLAMA_BASE_URL",

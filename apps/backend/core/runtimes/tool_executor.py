@@ -33,6 +33,21 @@ def _pick_arg(arguments: dict[str, Any], *names: str, default: Any = None) -> An
     return default
 
 
+def _as_bool(value: Any) -> bool:
+    """Interpret a tool-arg flag as a bool.
+
+    Local models frequently pass the STRING ``"false"``/``"true"`` (or
+    ``"0"``/``"1"``) for boolean flags. Python's ``bool("false")`` is ``True``,
+    which would wrongly make ``write_file`` create an EMPTY file. Treat the
+    common falsey strings as ``False``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "0", "no", "none", "null")
+    return bool(value)
+
+
 class ToolExecutor:
     """Executes tools for agent sessions."""
 
@@ -79,7 +94,7 @@ class ToolExecutor:
             return await self._write_file(
                 _pick_arg(arguments, *path_aliases),
                 _pick_arg(arguments, *content_aliases),
-                bool(
+                _as_bool(
                     _pick_arg(
                         arguments, "EmptyFile", "empty_file", "empty", default=False
                     )

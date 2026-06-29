@@ -2537,6 +2537,21 @@ def _extract_text_tool_calls(
             seen.add(key)
             out.append(tc)
 
+    def _loads(text: str) -> Any:
+        """json.loads tolerant of the most common local-model mistake: an
+        over-escaped apostrophe (the invalid JSON escape ``backslash + '``),
+        which made e.g. a French "d'avertissement" inside a Write payload
+        un-parseable so the whole tool call was dropped. Applied only as a
+        fallback, so valid JSON is never altered. Returns None on failure.
+        """
+        try:
+            return _json.loads(text)
+        except (ValueError, TypeError):
+            try:
+                return _json.loads(text.replace("\\'", "'"))
+            except (ValueError, TypeError):
+                return None
+
     # 1) JSON shapes: fenced blocks, bare reply, and JSON embedded in prose.
     if has_json:
         blobs: list[str] = []
@@ -2548,9 +2563,8 @@ def _extract_text_tool_calls(
         blobs.append(content.strip())  # whole reply (bare-JSON case)
         blobs += _balanced_json_objects(content)  # JSON embedded in prose
         for blob in blobs:
-            try:
-                parsed = _json.loads(blob)
-            except (ValueError, TypeError):
+            parsed = _loads(blob)
+            if parsed is None:
                 continue
             items = parsed if isinstance(parsed, list) else [parsed]
             for item in items:
@@ -2576,10 +2590,7 @@ def _extract_text_tool_calls(
             for candidate in (body, *_balanced_json_objects(body)):
                 if not candidate:
                     continue
-                try:
-                    parsed_args = _json.loads(candidate)
-                except (ValueError, TypeError):
-                    continue
+                parsed_args = _loads(candidate)
                 if isinstance(parsed_args, dict):
                     args = parsed_args
                     break

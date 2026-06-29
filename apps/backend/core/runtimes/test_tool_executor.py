@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from core.runtimes.tool_executor import ToolExecutor, _pick_arg
+from core.runtimes.tool_executor import ToolExecutor, _as_bool, _pick_arg
 
 
 class TestPickArg:
@@ -92,3 +92,41 @@ async def test_run_command_executes_real_echo(tmp_path: Path) -> None:
     ex = ToolExecutor(str(tmp_path))
     out = await ex.execute("run_command", {"command": "echo wp_ok"})
     assert "wp_ok" in out
+
+
+class TestAsBool:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (True, True),
+            (False, False),
+            ("true", True),
+            ("True", True),
+            ("1", True),
+            ("yes", True),
+            # The bug: a STRING "false" must be False (bool("false") is True).
+            ("false", False),
+            ("False", False),
+            ("0", False),
+            ("no", False),
+            ("none", False),
+            ("", False),
+            (None, False),
+            (1, True),
+            (0, False),
+        ],
+    )
+    def test_as_bool(self, value, expected) -> None:
+        assert _as_bool(value) is expected
+
+
+@pytest.mark.asyncio
+async def test_write_string_false_emptyfile_keeps_content(tmp_path: Path) -> None:
+    """EmptyFile passed as the STRING "false" must NOT blank the file — the exact
+    llama3.1 Write shape that would otherwise write an empty implementation_plan."""
+    ex = ToolExecutor(str(tmp_path))
+    await ex.execute(
+        "write_file",
+        {"file_path": "plan.json", "content": "real content", "EmptyFile": "false"},
+    )
+    assert (tmp_path / "plan.json").read_text(encoding="utf-8") == "real content"
