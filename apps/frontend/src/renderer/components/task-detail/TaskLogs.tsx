@@ -38,7 +38,10 @@ import { cn } from "../../lib/utils";
 import { useToast } from "../../hooks/use-toast";
 import { persistUpdateTask } from "../../stores/task-store";
 import { useSettingsStore } from "../../stores/settings-store";
-import { THINKING_LEVELS } from "../../../shared/constants/models";
+import {
+	getCanonicalModelKey,
+	THINKING_LEVELS,
+} from "../../../shared/constants/models";
 import {
 	buildModelMetadataUpdate,
 	buildModelSelectOptions,
@@ -77,6 +80,9 @@ import { buildPhaseSubSteps } from "./task-log-substep";
 interface TaskLogsProps {
 	task: Task;
 	phaseLogs: TaskLogs | null;
+	/** Physical per-LLM log files (one per provider/model). A phase shows ONLY
+	 * the selected model's file when present, instead of the shared feed. */
+	perLlmLogs?: { provider: string; model: string; logs: TaskLogs }[];
 	isLoadingLogs: boolean;
 	expandedPhases: Set<TaskLogPhase>;
 	isStuck: boolean;
@@ -194,8 +200,19 @@ function getPhaseConfig(
 
 	const defaults: PhaseDefaults = resolvePhaseDefaults(settings, provider);
 
-	const modelValue =
+	let modelValue =
 		metadata.phaseModels?.[configPhase] || defaults.phaseModels[configPhase];
+	// A local server runs ONE configured model for every phase (the backend
+	// forces OLLAMA_MODEL), so a stale per-phase value (e.g. an old
+	// "qwen2.5-coder") would mislabel the dropdown while runs are tagged with the
+	// REAL model — breaking the per-LLM Logs filter/compare. Show the real model
+	// so the labels match the entry tags.
+	if (
+		/^(ollama|local|lmstudio)$/i.test(provider) &&
+		settings?.globalOllamaModel?.trim()
+	) {
+		modelValue = settings.globalOllamaModel.trim();
+	}
 	const thinkingValue =
 		metadata.phaseThinking?.[configPhase] ||
 		defaults.phaseThinking[configPhase];
@@ -213,6 +230,7 @@ function getPhaseConfig(
 export function TaskLogs({
 	task,
 	phaseLogs,
+	perLlmLogs,
 	isLoadingLogs,
 	expandedPhases,
 	isStuck,
@@ -666,6 +684,7 @@ export function TaskLogs({
 									<PhaseLogSection
 										phase={phase}
 										phaseLog={phaseLogs.phases[phase]}
+										perLlmLogs={perLlmLogs}
 										isExpanded={expandedPhases.has(phase)}
 										onToggle={() => onTogglePhase(phase)}
 										isTaskStuck={isStuck}
@@ -778,6 +797,9 @@ export function TaskLogs({
 interface PhaseLogSectionProps {
 	phase: TaskLogPhase;
 	phaseLog: TaskPhaseLog | null;
+	/** Physical per-LLM files; when the selected model has one, this phase shows
+	 * ONLY that file's entries (no other models, no untagged/legacy noise). */
+	perLlmLogs?: { provider: string; model: string; logs: TaskLogs }[];
 	isExpanded: boolean;
 	onToggle: () => void;
 	isTaskStuck?: boolean;
@@ -804,6 +826,7 @@ interface PhaseLogSectionProps {
 function PhaseLogSection({
 	phase,
 	phaseLog,
+	perLlmLogs,
 	isExpanded,
 	onToggle,
 	isTaskStuck,
@@ -824,7 +847,31 @@ function PhaseLogSection({
 	const failDownload = useDownloadStore((s) => s.failDownload);
 	const Icon = PHASE_ICONS[phase];
 	const logOrder = useSettingsStore((s) => s.settings.logOrder);
-	const status = phaseLog?.status || "pending";
+
+	// When the selected model has a physical per-LLM file, this phase shows ONLY
+	// that file's entries — no other models, no untagged/legacy noise. Match by
+	// provider + canonical model id; fall back to the shared phaseLog otherwise.
+	const effectivePhaseLog = useMemo(() => {
+		const selProvider = phaseConfig?.provider;
+		const selKey = phaseConfig?.modelValue
+			? getCanonicalModelKey(phaseConfig.modelValue)
+			: undefined;
+		if (!selProvider || !selKey) return phaseLog;
+		const file = (perLlmLogs ?? []).find(
+			(f) =>
+				f.provider === selProvider &&
+				getCanonicalModelKey(f.model) === selKey,
+		);
+		return file ? (file.logs.phases[phase] ?? null) : phaseLog;
+	}, [
+		perLlmLogs,
+		phaseConfig?.provider,
+		phaseConfig?.modelValue,
+		phaseLog,
+		phase,
+	]);
+
+	const status = effectivePhaseLog?.status || "pending";
 	const isSearching = searchQuery.length > 0;
 
 	// Live model catalog for the phase's currently-selected provider. The hook
@@ -864,12 +911,41 @@ function PhaseLogSection({
 	// Filtered entries in chronological order (oldest first from append()); when
 	// a search is active we keep only the matching ones. Grouping is computed on
 	// this order, then display order is applied below.
+	//
+	// Per-LLM view: show ONLY the entries produced by this phase's currently
+	// selected (provider, model), so switching LLM shows that LLM's logs —
+	// restoring them if they exist, empty if it hasn't run yet — while every
+	// other model's logs stay on disk. Canonical id match so a short alias
+	// ("opus") and a full id ("claude-opus-4-8") align. Legacy/un-attributed
+	// logs (no tags at all) are left unfiltered so old tasks still render.
 	const filteredEntries = useMemo(() => {
-		const entries = phaseLog?.entries || [];
+		// effectivePhaseLog is already the selected model's own file when one
+		// exists (so it's a single model). The canonical filter below is then a
+		// no-op, and only does real work on the shared-feed fallback.
+		let entries = effectivePhaseLog?.entries || [];
+		const selProvider = phaseConfig?.provider;
+		const selModelKey = phaseConfig?.modelValue
+			? getCanonicalModelKey(phaseConfig.modelValue)
+			: undefined;
+		const hasAttribution = entries.some((e) => e.provider || e.model);
+		if (hasAttribution && selProvider && selModelKey) {
+			entries = entries.filter(
+				(e) =>
+					e.provider === selProvider &&
+					e.model != null &&
+					getCanonicalModelKey(e.model) === selModelKey,
+			);
+		}
 		return isSearching
 			? entries.filter((e) => entryMatchesQuery(e, searchQuery))
 			: entries;
-	}, [phaseLog?.entries, isSearching, searchQuery]);
+	}, [
+		effectivePhaseLog?.entries,
+		isSearching,
+		searchQuery,
+		phaseConfig?.provider,
+		phaseConfig?.modelValue,
+	]);
 
 	// One sub-section per (provider, model) so plans from different LLMs (e.g.
 	// after a mid-phase model switch) can be compared side by side. In reverse-
@@ -943,12 +1019,12 @@ function PhaseLogSection({
 	// le codage, session QA numérotée pour la validation). Cf. buildPhaseSubSteps.
 	const subStepLabels = useMemo(
 		() =>
-			buildPhaseSubSteps(phaseLog?.entries || [], phase, {
+			buildPhaseSubSteps(effectivePhaseLog?.entries || [], phase, {
 				subtaskTitles,
 				formatQaPass: (n) =>
 					t("tasks:execution.labels.qaPass", "QA — vérification {{n}}", { n }),
 			}),
-		[phaseLog?.entries, phase, subtaskTitles, t],
+		[effectivePhaseLog?.entries, phase, subtaskTitles, t],
 	);
 
 	const getStatusBadge = () => {

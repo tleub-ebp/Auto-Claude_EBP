@@ -122,6 +122,11 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		string | undefined
 	>(undefined);
 	const [phaseLogs, setPhaseLogs] = useState<TaskLogs | null>(null);
+	// Physical per-LLM log files (one per provider/model) so a phase can show
+	// ONLY the selected model's logs, sourced from task_logs.<slug>.json.
+	const [perLlmLogs, setPerLlmLogs] = useState<
+		{ provider: string; model: string; logs: TaskLogs }[]
+	>([]);
 	const [isLoadingLogs, setIsLoadingLogs] = useState(false);
 	const [expandedPhases, setExpandedPhases] = useState<Set<TaskLogPhase>>(
 		new Set(),
@@ -423,6 +428,16 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 						}
 					}
 				}
+
+				// Physical per-LLM files, so each phase can show only the selected
+				// model's logs (sourced from task_logs.<provider>-<model>.json).
+				const perResult = await window.electronAPI.getTaskLogsPerLlm(
+					selectedProject.id,
+					task.specId,
+				);
+				if (perResult.success && perResult.data) {
+					setPerLlmLogs(perResult.data);
+				}
 			} catch (err) {
 				console.error("Failed to load task logs:", err);
 			} finally {
@@ -439,6 +454,18 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		const unsubscribe = window.electronAPI.onTaskLogsChanged((specId, logs) => {
 			if (specId === task.specId) {
 				setPhaseLogs(logs);
+				// Refresh the per-LLM files too so the per-model view stays live.
+				void (async () => {
+					try {
+						const r = await window.electronAPI.getTaskLogsPerLlm(
+							selectedProject.id,
+							task.specId,
+						);
+						if (r.success && r.data) setPerLlmLogs(r.data);
+					} catch {
+						// best-effort refresh
+					}
+				})();
 				// Auto-expand newly active phase
 				const activePhase = getActiveLogPhase(logs);
 				if (activePhase) {
@@ -797,6 +824,7 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		stagedProjectPath,
 		suggestedCommitMessage,
 		phaseLogs,
+		perLlmLogs,
 		isLoadingLogs,
 		expandedPhases,
 		currentLogPhase,

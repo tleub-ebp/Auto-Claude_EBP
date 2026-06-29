@@ -182,6 +182,8 @@
 				"summary": "{{count}} model(s) · {{size}} on disk",
 				"empty": "No models yet.",
 				"refresh": "Refresh the list",
+				"setDefaultHint": "Double-click a model to set it as the default.",
+				"selectTooltip": "Double-click to set {{name}} as the default model",
 				"deleteTooltip": "Delete {{name}} from disk",
 				"deleteConfirm": "Delete model \"{{name}}\" from disk? This cannot be undone (you'll have to download it again to reuse it).",
 				"deleteError": "Failed to delete {{name}}.",

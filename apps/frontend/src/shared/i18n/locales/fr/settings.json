@@ -142,6 +142,8 @@
 				"summary": "{{count}} modèle(s) · {{size}} sur le disque",
 				"empty": "Aucun modèle pour l'instant.",
 				"refresh": "Rafraîchir la liste",
+				"setDefaultHint": "Double-cliquez un modèle pour le définir par défaut.",
+				"selectTooltip": "Double-cliquez pour définir {{name}} comme modèle par défaut",
 				"deleteTooltip": "Supprimer {{name}} du disque",
 				"deleteConfirm": "Supprimer le modèle « {{name}} » du disque ? Cette action est irréversible (il faudra le retélécharger pour le réutiliser).",
 				"deleteError": "Échec de la suppression de {{name}}.",

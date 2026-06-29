@@ -3072,7 +3072,15 @@ class LocalAgentClient(OpenAIAgentClient):
                         len(recovered),
                     )
                     tool_calls = recovered
-                    content = ""  # the content WAS the tool call; don't echo it
+                    # Keep any narration that PRECEDED the tool-call payload so the
+                    # model's reasoning is still logged (activity feed +
+                    # conversation transcript) instead of being silently dropped.
+                    # Cut from the first JSON ('{'/'[') or XML ('<tool') marker on.
+                    _markers = [content.find("{"), content.find("[")]
+                    _markers.append(content.lower().find("<tool"))
+                    _cut = min((m for m in _markers if m >= 0), default=-1)
+                    _head = (content[:_cut] if _cut >= 0 else content).strip()
+                    content = _head if len(_head) >= 12 else ""
 
             logger.info(
                 f"[LocalAgentClient] Turn {turn + 1}: content_len={len(content)}, "

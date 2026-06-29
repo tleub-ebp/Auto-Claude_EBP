@@ -17,15 +17,17 @@ class LogStorage:
 
     LOG_FILE = "task_logs.json"
 
-    def __init__(self, spec_dir: Path):
+    def __init__(self, spec_dir: Path, filename: str | None = None):
         """
         Initialize log storage.
 
         Args:
             spec_dir: Path to the spec directory
+            filename: Log file name. Defaults to the shared ``task_logs.json``;
+                pass ``task_logs.<provider>-<model>.json`` for a per-LLM file.
         """
         self.spec_dir = Path(spec_dir)
-        self.log_file = self.spec_dir / self.LOG_FILE
+        self.log_file = self.spec_dir / (filename or self.LOG_FILE)
         self._data: dict = self._load_or_create()
 
     def _load_or_create(self) -> dict:
@@ -140,6 +142,44 @@ class LogStorage:
         """
         if phase in self._data["phases"]:
             self._data["phases"][phase]["started_at"] = started_at
+
+    def add_entries(self, entries: list) -> None:
+        """Append many LogEntry objects in one save (bulk import path)."""
+        for entry in entries:
+            phase_key = entry.phase
+            if phase_key not in self._data["phases"]:
+                self._data["phases"][phase_key] = {
+                    "phase": phase_key,
+                    "status": "completed",
+                    "started_at": None,
+                    "completed_at": None,
+                    "entries": [],
+                }
+            self._data["phases"][phase_key]["entries"].append(entry.to_dict())
+        self.save()
+
+    def remove_model_entries(self, provider: str | None, model: str | None) -> None:
+        """Drop every entry attributed to ``(provider, model)`` across all phases
+        (without saving) — used to make a re-import idempotent."""
+        for phase_data in self._data["phases"].values():
+            phase_data["entries"] = [
+                e
+                for e in phase_data.get("entries", [])
+                if not (e.get("provider") == provider and e.get("model") == model)
+            ]
+
+    def clear_phase(self, phase: str) -> None:
+        """Empty a phase's entries and reset its status.
+
+        Used to flush a stale run (e.g. a previous LLM's planning) so a fresh
+        run starts with a clean feed instead of stacking the old model's logs.
+        """
+        if phase in self._data["phases"]:
+            self._data["phases"][phase]["entries"] = []
+            self._data["phases"][phase]["status"] = "pending"
+            self._data["phases"][phase]["started_at"] = None
+            self._data["phases"][phase]["completed_at"] = None
+            self.save()
 
     def get_data(self) -> dict:
         """Get all log data."""

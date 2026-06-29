@@ -51,6 +51,19 @@ class TaskLogger:
         self.current_provider: str | None = None
         self.current_model: str | None = None
         self.storage = LogStorage(spec_dir)
+        # Per-LLM mirror files (task_logs.<provider>-<model>.json), so each model's
+        # logs are also kept on their own — the UI loads/compares them per LLM.
+        self._per_llm: dict[str, LogStorage] = {}
+
+    def _per_llm_storage(self, provider: str | None, model: str | None) -> LogStorage:
+        from core.conversation_log import _log_slug
+
+        filename = f"task_logs.{_log_slug(provider, model)}.json"
+        storage = self._per_llm.get(filename)
+        if storage is None:
+            storage = LogStorage(self.spec_dir, filename)
+            self._per_llm[filename] = storage
+        return storage
 
     @property
     def _data(self) -> dict:
@@ -77,6 +90,9 @@ class TaskLogger:
         if entry.model is None:
             entry.model = self.current_model
         self.storage.add_entry(entry)
+        # Mirror into this LLM's own file so logs can be loaded/compared per model.
+        if entry.provider or entry.model:
+            self._per_llm_storage(entry.provider, entry.model).add_entry(entry)
 
     def _debug_log(
         self,
@@ -142,6 +158,15 @@ class TaskLogger:
         """
         self.current_provider = provider or None
         self.current_model = model or None
+
+    def clear_phase(self, phase: LogPhase) -> None:
+        """Flush a phase's accumulated entries (and reset its status).
+
+        Used at the start of a fresh planning run so re-planning — possibly with
+        a different LLM — starts from a clean feed instead of stacking the
+        previous model's logs. Other phases are untouched.
+        """
+        self.storage.clear_phase(phase.value)
 
     def start_phase(self, phase: LogPhase, message: str | None = None) -> None:
         """
