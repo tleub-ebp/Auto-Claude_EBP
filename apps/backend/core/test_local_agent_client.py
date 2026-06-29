@@ -135,6 +135,24 @@ class TestExtractTextToolCalls:
         out = _extract_text_tool_calls(content, self.KNOWN)
         assert out[0]["function"]["arguments"] == {"command": "pytest -q"}
 
+    def test_recovers_python_false_literal(self):
+        # The exact llama3.1 failure: `"EmptyFile": False` is a Python bool, not
+        # JSON — strict json.loads rejected it and dropped the whole Write. The
+        # ast.literal_eval fallback recovers it (and keeps False a real bool).
+        content = (
+            '{"name": "write_file", "parameters": '
+            '{"path": "p", "content": "x", "EmptyFile": False}}'
+        )
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out[0]["function"]["name"] == "write_file"
+        assert out[0]["function"]["arguments"]["EmptyFile"] is False
+
+    def test_recovers_single_quoted_python_dict(self):
+        # Single-quoted "JSON" (invalid JSON, valid Python) also recovers.
+        content = "{'name': 'run_command', 'arguments': {'command': 'ls'}}"
+        out = _extract_text_tool_calls(content, self.KNOWN)
+        assert out[0]["function"]["arguments"] == {"command": "ls"}
+
 
 _LOCAL_ENV_VARS = (
     "OLLAMA_BASE_URL",

@@ -283,8 +283,8 @@ def handle_local_model_no_tools(
     model = model or getattr(client, "model", "?")
     logger.error(
         "[%s] Local model %s emitted no tool calls — halting (retrying the same "
-        "model will only hallucinate). Switch to a tool-capable model "
-        "(e.g. llama3.1) or a cloud provider.",
+        "model will only hallucinate). Switch to a more capable model "
+        "(a larger local model, or a cloud provider).",
         phase,
         model,
     )
@@ -300,8 +300,8 @@ def handle_local_model_no_tools(
         "reason": "local_model_no_tools",
         "remediation": (
             "The selected local model does not support Ollama tool-calling. "
-            "Switch this phase to a tool-capable local model (e.g. llama3.1) "
-            "or a cloud provider (Anthropic/Claude) and re-run."
+            "Switch this phase to a more capable model (a larger local model, "
+            "or a cloud provider like Anthropic/Claude) and re-run."
         ),
     }
     halt_file = spec_dir / LOCAL_MODEL_NO_TOOLS_HALT_FILE

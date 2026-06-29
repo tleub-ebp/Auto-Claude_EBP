@@ -1423,8 +1423,9 @@ async def run_autonomous_agent(
             halt_msg = (
                 f"Phase {_phase_tag} arrêtée : le modèle local « {phase_model} » "
                 "décrit le travail au lieu d'appeler les outils, il ne peut donc "
-                "rien produire. Choisissez un modèle compatible agentique "
-                "(p. ex. llama3.1) ou un fournisseur cloud, puis relancez."
+                "rien produire. Passez cette phase à un modèle plus capable "
+                "— un modèle local plus grand, ou un fournisseur cloud (Claude) "
+                "— puis relancez."
             )
             print_status(halt_msg, "error")
             if task_logger:

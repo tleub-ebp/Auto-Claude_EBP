@@ -2538,19 +2538,33 @@ def _extract_text_tool_calls(
             out.append(tc)
 
     def _loads(text: str) -> Any:
-        """json.loads tolerant of the most common local-model mistake: an
-        over-escaped apostrophe (the invalid JSON escape ``backslash + '``),
-        which made e.g. a French "d'avertissement" inside a Write payload
-        un-parseable so the whole tool call was dropped. Applied only as a
-        fallback, so valid JSON is never altered. Returns None on failure.
+        """json.loads tolerant of the Python-dialect "JSON" local models emit.
+
+        Strict JSON rejects, and thus drops the whole tool call for, several
+        common local-model habits: Python literals (``False``/``True``/``None``),
+        single-quoted strings, and the invalid over-escaped apostrophe (``\\'``,
+        e.g. a French "d'avertissement"). We try strict JSON first (so valid JSON
+        is never altered), then ``ast.literal_eval`` (literals only — no code
+        execution — which natively handles ``False``/single quotes/``\\'``), then
+        a last-ditch ``\\'``→``'`` fix for blobs that mix JSON ``null`` with the
+        bad escape. Returns None on failure.
         """
         try:
             return _json.loads(text)
         except (ValueError, TypeError):
-            try:
-                return _json.loads(text.replace("\\'", "'"))
-            except (ValueError, TypeError):
-                return None
+            pass
+        try:
+            import ast as _ast
+
+            parsed = _ast.literal_eval(text)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            pass
+        try:
+            return _json.loads(text.replace("\\'", "'"))
+        except (ValueError, TypeError):
+            return None
 
     # 1) JSON shapes: fenced blocks, bare reply, and JSON embedded in prose.
     if has_json:
@@ -3128,9 +3142,9 @@ class LocalAgentClient(OpenAIAgentClient):
                                     f"⚠️ Le modèle local « {self.model} » n'a appelé "
                                     "aucun outil alors que la tâche en exige (même après "
                                     "une relance). Il décrit le travail au lieu de "
-                                    "l'exécuter. Choisissez un modèle plus à l'aise avec "
-                                    "l'agentique, p. ex. « llama3.1 », via "
-                                    "« Télécharger »."
+                                    "l'exécuter. Passez cette phase à un modèle plus "
+                                    "capable — un modèle local plus grand, ou un "
+                                    "fournisseur cloud (Claude) — puis relancez."
                                 ),
                             )
                         ],

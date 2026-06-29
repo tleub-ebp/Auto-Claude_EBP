@@ -597,8 +597,8 @@ async def run_qa_validation_loop(
             halt_msg = (
                 f"QA halted: the local model « {qa_model} » did not call any "
                 "tool, so it cannot validate the implementation. Switch the "
-                "Validation phase to a tool-capable model (e.g. llama3.1) or a "
-                "cloud provider (Anthropic/Claude) and re-run."
+                "Validation phase to a more capable model (a larger local "
+                "model, or a cloud provider like Anthropic/Claude) and re-run."
             )
             print(f"\n⛔ {halt_msg}")
             task_event_emitter.emit(
@@ -1173,8 +1173,8 @@ async def run_qa_validation_loop(
                 if provider in ("ollama", "local", "lmstudio"):
                     fail_message += (
                         f". The local model « {qa_model} » likely can't complete "
-                        "tool-based QA — switch the Validation phase to a "
-                        "tool-capable model (e.g. llama3.1) or a cloud provider."
+                        "tool-based QA — switch the Validation phase to a more "
+                        "capable model (a larger local model, or a cloud provider)."
                     )
 
                 # End validation phase as failed
