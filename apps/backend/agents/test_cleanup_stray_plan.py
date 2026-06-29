@@ -11,7 +11,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agents.coder import _cleanup_stray_root_plan
+from agents.coder import (
+    _bump_planning_failures,
+    _cleanup_stray_root_plan,
+    _clear_planning_failures,
+    _read_planning_failures,
+)
 
 
 def _worktree(tmp_path: Path) -> tuple[Path, Path]:
@@ -71,3 +76,27 @@ def test_direct_mode_never_touches_root(tmp_path: Path) -> None:
 
     assert _cleanup_stray_root_plan(spec_dir, spec_dir) is None
     assert (spec_dir / "implementation_plan.json").exists()
+
+
+# ── Persistent planning-failure cap (breaks the cross-session retry loop) ──
+
+
+def test_planning_failures_persist_and_clear(tmp_path: Path) -> None:
+    # Starts at 0, survives "process restarts" (re-reading from disk), and the
+    # bump count is what a fresh run would see.
+    assert _read_planning_failures(tmp_path) == 0
+    assert _bump_planning_failures(tmp_path) == 1
+    assert _bump_planning_failures(tmp_path) == 2
+    assert _read_planning_failures(tmp_path) == 2  # persisted on disk
+
+    _clear_planning_failures(tmp_path)
+    assert _read_planning_failures(tmp_path) == 0
+    # Clearing again (no file) is a safe no-op.
+    _clear_planning_failures(tmp_path)
+    assert _read_planning_failures(tmp_path) == 0
+
+
+def test_planning_failures_tolerates_garbage(tmp_path: Path) -> None:
+    (tmp_path / ".planning_validation_failures").write_text("not-an-int")
+    assert _read_planning_failures(tmp_path) == 0  # garbage → treated as 0
+    assert _bump_planning_failures(tmp_path) == 1

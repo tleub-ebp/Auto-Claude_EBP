@@ -536,6 +536,37 @@ def _cleanup_stray_root_plan(project_dir: Path, spec_dir: Path) -> str | None:
     return None
 
 
+# A weak model can loop forever in planning: each fresh session it calls tools,
+# writes the wrong files (./spec.md, ./tasks/…, never a valid
+# implementation_plan.json), reports "done", validation fails, and the next
+# session repeats. The in-memory retry counter resets when planning re-runs as a
+# new process, so the cap is also persisted on disk to break that loop.
+_PLANNING_FAILURES_MARKER = ".planning_validation_failures"
+
+
+def _read_planning_failures(spec_dir: Path) -> int:
+    try:
+        return int((spec_dir / _PLANNING_FAILURES_MARKER).read_text().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def _bump_planning_failures(spec_dir: Path) -> int:
+    count = _read_planning_failures(spec_dir) + 1
+    try:
+        (spec_dir / _PLANNING_FAILURES_MARKER).write_text(str(count))
+    except OSError:
+        pass
+    return count
+
+
+def _clear_planning_failures(spec_dir: Path) -> None:
+    try:
+        (spec_dir / _PLANNING_FAILURES_MARKER).unlink()
+    except OSError:
+        pass
+
+
 async def run_autonomous_agent(
     project_dir: Path,
     spec_dir: Path,
@@ -758,7 +789,8 @@ async def run_autonomous_agent(
     current_log_phase = LogPhase.CODING
     is_planning_phase = False
     planning_retry_context: str | None = None
-    planning_validation_failures = 0
+    # Persisted so the cap survives planning re-running as a fresh process.
+    planning_validation_failures = _read_planning_failures(spec_dir)
     max_planning_validation_retries = 3
 
     def _validate_and_fix_implementation_plan() -> tuple[bool, list[str]]:
@@ -1466,8 +1498,9 @@ async def run_autonomous_agent(
             if valid:
                 plan_validated = True
                 planning_retry_context = None
+                _clear_planning_failures(spec_dir)  # success → reset the cap
             else:
-                planning_validation_failures += 1
+                planning_validation_failures = _bump_planning_failures(spec_dir)
                 # The plan WorkPilot reads lives in the spec dir; a model that
                 # wrote ./implementation_plan.json to the worktree root leaves a
                 # stray (often a truncated "{") — clean it so it doesn't linger.
@@ -1501,6 +1534,10 @@ async def run_autonomous_agent(
                         task_logger.end_phase(
                             LogPhase.PLANNING, success=False, message=fail_msg
                         )
+                    # Clear the cap so a deliberate re-run (e.g. after switching
+                    # the Planning model to Claude) starts fresh instead of
+                    # halting immediately.
+                    _clear_planning_failures(spec_dir)
                     status_manager.update(state=BuildState.ERROR)
                     return
 
