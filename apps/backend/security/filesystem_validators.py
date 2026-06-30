@@ -192,7 +192,19 @@ def _is_safe_relative_target(token: str) -> bool:
 
 def validate_init_script(command_string: str) -> ValidationResult:
     """
-    Validate init.sh script execution - only allow ./init.sh.
+    Validate the env-setup script invocation — cross-OS.
+
+    Allows running the per-OS setup script that the planner generates, in the
+    forms used on each platform:
+      - ``./init.sh``                                  (Unix, direct)
+      - ``bash ./init.sh`` / ``sh ./init.sh``          (any OS incl. Git Bash)
+      - ``./init.ps1``                                 (Windows, direct)
+      - ``powershell|pwsh ... -File ./init.ps1``       (Windows)
+
+    Security: only the bare ``init.sh`` / ``init.ps1`` in the CURRENT directory
+    is permitted. A path component (e.g. ``evil/init.sh``) is rejected so an
+    agent can't stage and run an arbitrary script, which is what the original
+    ``./init.sh``-only rule protected against.
 
     Args:
         command_string: The full init script command string
@@ -201,19 +213,32 @@ def validate_init_script(command_string: str) -> ValidationResult:
         Tuple of (is_valid, error_message)
     """
     try:
-        tokens = shlex.split(command_string)
+        tokens = shlex.split(command_string, posix=False)
     except ValueError:
         return False, "Could not parse init script command"
 
     if not tokens:
         return False, "Empty command"
 
-    script = tokens[0]
+    # Allowed script names (current directory only — with or without "./").
+    allowed = {"./init.sh", "init.sh", "./init.ps1", "init.ps1"}
+    # Strip surrounding quotes shlex(posix=False) may keep on Windows.
+    cleaned = [t.strip("\"'") for t in tokens]
+    first = cleaned[0]
 
-    # Allow only ./init.sh in the current working directory. Allowing any
-    # path ending in `/init.sh` lets an agent stage `evil/init.sh` and
-    # invoke it, defeating the validator.
-    if script == "./init.sh":
+    # Direct invocation: ./init.sh or ./init.ps1
+    if first in allowed:
         return True, ""
 
-    return False, f"Only ./init.sh is allowed, got: {script}"
+    # Interpreter form: bash/sh/powershell/pwsh ... <script>
+    interpreters = {"bash", "sh", "powershell", "powershell.exe", "pwsh", "pwsh.exe"}
+    if first.lower() in interpreters:
+        for tok in cleaned[1:]:
+            if tok in allowed:
+                return True, ""
+            # A pathed init script (evil/init.sh) is the exact attack to block.
+            if tok.endswith(("init.sh", "init.ps1")):
+                return False, f"Only init.sh/init.ps1 in the current dir, got: {tok}"
+        return False, "Init interpreter without an allowed init script"
+
+    return False, f"Only ./init.sh or ./init.ps1 is allowed, got: {first}"

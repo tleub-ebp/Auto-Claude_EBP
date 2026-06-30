@@ -257,7 +257,9 @@ class TestCreateAgentClient:
         assert isinstance(client, AgentClient)
         assert client.provider_name() == "ollama"
         assert client.model == "qwen2.5-coder"
-        assert client._api_base == "http://localhost:1234/v1/chat/completions"
+        # The loopback host is pinned to IPv4 (localhost → 127.0.0.1) so the
+        # client reaches the IPv4-bound Ollama daemon.
+        assert client._api_base == "http://127.0.0.1:1234/v1/chat/completions"
         mock_create_client.assert_not_called()
 
     @patch("core.client.create_client")

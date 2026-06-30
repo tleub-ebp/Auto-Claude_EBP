@@ -249,6 +249,43 @@ describe("buildProviderMetadataUpdate", () => {
 		expect(update.phaseProviders?.coding).toBe("openai");
 		expect(update.phaseProviders?.spec).toBe("copilot");
 	});
+
+	it("réinitialise le modèle de la phase au défaut du nouveau provider (anti `ollama:opus`)", () => {
+		// perPhaseMeta a tous ses modèles à "opus" (Anthropic). Basculer la phase
+		// vers un provider local doit retirer ce modèle Claude périmé pour qu'il ne
+		// puisse plus être incohérent avec le provider (le fameux `ollama:opus`).
+		const localDefaults = {
+			provider: "ollama",
+			phaseModels: {
+				spec: "llama3.1",
+				planning: "llama3.1",
+				coding: "llama3.1",
+				qa: "llama3.1",
+			},
+			phaseThinking: DEFAULT_PHASE_THINKING,
+		};
+		const update = buildProviderMetadataUpdate(
+			perPhaseMeta,
+			"planning", // phase de logs « planning » → clé de config « spec »
+			"ollama",
+			localDefaults,
+		);
+		expect(update.phaseProviders?.spec).toBe("ollama");
+		// Seul le modèle de la phase ciblée est réinitialisé ; les autres restent.
+		expect(update.phaseModels).toEqual({
+			spec: "llama3.1",
+			planning: "opus",
+			coding: "opus",
+			qa: "opus",
+		});
+		expect(update.isAutoProfile).toBe(true);
+	});
+
+	it("ne réinitialise pas le modèle quand aucun défaut n'est fourni (legacy)", () => {
+		const update = buildProviderMetadataUpdate(perPhaseMeta, "coding", "copilot");
+		expect(update.phaseModels).toBeUndefined();
+		expect(update.isAutoProfile).toBeUndefined();
+	});
 });
 
 describe("buildModelSelectOptions", () => {

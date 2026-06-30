@@ -39,6 +39,13 @@ class LogEntry:
     tool_input: str | None = None
     subtask_id: str | None = None
     session: int | None = None
+    # LLM attribution: which provider/model produced this entry. Lets the UI
+    # group a phase's log by model so plans from different LLMs (e.g. after a
+    # mid-phase switch) can be compared side by side.
+    provider: str | None = None  # e.g. "claude", "ollama", "copilot"
+    model: str | None = (
+        None  # exact model id, e.g. "claude-haiku-4-5", "llama3.1:latest"
+    )
     # New fields for expandable detail view
     detail: str | None = (
         None  # Full content that can be expanded (e.g., file contents, command output)

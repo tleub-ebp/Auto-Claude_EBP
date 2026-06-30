@@ -369,3 +369,84 @@ def test_parse_rate_limit_reset_time_handles_resets_without_at() -> None:
     }
     ts2 = parse_rate_limit_reset_time(error_info_hour_only)
     assert ts2 is not None and ts2 > 0
+
+
+# ---------------------------------------------------------------------------
+# handle_local_model_no_tools — permanent halt when a LOCAL model can't drive
+# tool-based work (it only ever produces prose or hallucinated tool results).
+# Flag-based (set by LocalAgentClient), not exception-based.
+# ---------------------------------------------------------------------------
+
+
+class _FakeClient:
+    """Minimal stand-in for an agent client carrying the tool-calling verdict."""
+
+    def __init__(self, tool_calling_unsupported: bool = False, model: str = "qwen"):
+        self.tool_calling_unsupported = tool_calling_unsupported
+        self.model = model
+
+
+def test_local_no_tools_returns_false_when_flag_unset(tmp_path: Path) -> None:
+    """A capable model (flag False) must NOT trigger the halt — the caller
+    continues with its normal verdict handling."""
+    from services.rate_limit_shield import (
+        LOCAL_MODEL_NO_TOOLS_HALT_FILE,
+        handle_local_model_no_tools,
+    )
+
+    client = _FakeClient(tool_calling_unsupported=False)
+    assert handle_local_model_no_tools(client, tmp_path, "qa") is False
+    assert not (tmp_path / LOCAL_MODEL_NO_TOOLS_HALT_FILE).exists()
+
+
+def test_local_no_tools_returns_false_for_non_local_client(tmp_path: Path) -> None:
+    """Clients without the attribute at all (Claude/Copilot/OpenAI) must be a
+    no-op — getattr defaults to False, so no marker and no halt."""
+    from services.rate_limit_shield import (
+        LOCAL_MODEL_NO_TOOLS_HALT_FILE,
+        handle_local_model_no_tools,
+    )
+
+    class _ClaudeLike:
+        pass
+
+    assert handle_local_model_no_tools(_ClaudeLike(), tmp_path, "qa") is False
+    assert not (tmp_path / LOCAL_MODEL_NO_TOOLS_HALT_FILE).exists()
+
+
+def test_local_no_tools_writes_marker_and_returns_true(tmp_path: Path) -> None:
+    """When the local model emits no tool calls, the helper must halt: write the
+    marker with the model + reason and return True so the caller stops retrying."""
+    from services.rate_limit_shield import (
+        LOCAL_MODEL_NO_TOOLS_HALT_FILE,
+        handle_local_model_no_tools,
+    )
+
+    client = _FakeClient(tool_calling_unsupported=True, model="qwen2.5-coder:latest")
+    handled = handle_local_model_no_tools(client, tmp_path, "qa")
+
+    assert handled is True
+    marker = tmp_path / LOCAL_MODEL_NO_TOOLS_HALT_FILE
+    assert marker.exists()
+    content = marker.read_text(encoding="utf-8")
+    assert '"phase": "qa"' in content
+    assert "qwen2.5-coder:latest" in content
+    assert '"reason": "local_model_no_tools"' in content
+    # The remediation must point the user at a fix (capable model / provider).
+    assert "provider" in content.lower() or "model" in content.lower()
+
+
+def test_local_no_tools_explicit_model_overrides_client_attr(tmp_path: Path) -> None:
+    """The explicit ``model`` arg (the phase's resolved model) wins over the
+    client's own ``model`` attribute in the marker/message."""
+    from services.rate_limit_shield import (
+        LOCAL_MODEL_NO_TOOLS_HALT_FILE,
+        handle_local_model_no_tools,
+    )
+
+    client = _FakeClient(tool_calling_unsupported=True, model="client-default")
+    handle_local_model_no_tools(client, tmp_path, "coder", model="phase-model")
+
+    content = (tmp_path / LOCAL_MODEL_NO_TOOLS_HALT_FILE).read_text(encoding="utf-8")
+    assert "phase-model" in content
+    assert "client-default" not in content

@@ -22,11 +22,17 @@ interface OllamaInstalledModelsProps {
 	className?: string;
 	/** Configured local server URL (defaults to localhost:11434). */
 	baseUrl?: string;
+	/**
+	 * Called when the user double-clicks an installed model, to set it as the
+	 * default. When omitted, rows are display-only (no select affordance).
+	 */
+	onSelectModel?: (name: string) => void;
 }
 
 export function OllamaInstalledModels({
 	className,
 	baseUrl,
+	onSelectModel,
 }: OllamaInstalledModelsProps) {
 	const { t } = useTranslation("settings");
 	const [models, setModels] = useState<InstalledModel[]>([]);
@@ -130,6 +136,11 @@ export function OllamaInstalledModels({
 								})
 							: t("sections.accounts.localModels.empty")}
 					</p>
+					{onSelectModel && models.length > 0 && (
+						<p className="text-xs text-muted-foreground mt-0.5">
+							{t("sections.accounts.localModels.setDefaultHint")}
+						</p>
+					)}
 				</div>
 				<Button
 					type="button"
@@ -157,7 +168,30 @@ export function OllamaInstalledModels({
 				{models.map((m) => (
 					<div
 						key={m.name}
-						className="flex items-center justify-between gap-3 p-2 rounded-md border border-border"
+						className={cn(
+							"flex items-center justify-between gap-3 p-2 rounded-md border border-border",
+							onSelectModel &&
+								"cursor-pointer hover:bg-accent hover:border-accent-foreground/20 transition-colors",
+						)}
+						onDoubleClick={
+							onSelectModel ? () => onSelectModel(m.name) : undefined
+						}
+						onKeyDown={
+							onSelectModel
+								? (e) => {
+										if (e.key === "Enter") onSelectModel(m.name);
+									}
+								: undefined
+						}
+						role={onSelectModel ? "button" : undefined}
+						tabIndex={onSelectModel ? 0 : undefined}
+						title={
+							onSelectModel
+								? t("sections.accounts.localModels.selectTooltip", {
+										name: m.name,
+									})
+								: undefined
+						}
 					>
 						<div className="min-w-0">
 							<p className="text-sm text-foreground truncate">{m.name}</p>
@@ -169,7 +203,10 @@ export function OllamaInstalledModels({
 							type="button"
 							variant="ghost"
 							size="sm"
-							onClick={() => handleDelete(m.name)}
+							onClick={(e) => {
+								e.stopPropagation();
+								handleDelete(m.name);
+							}}
 							disabled={deleting === m.name}
 							title={t("sections.accounts.localModels.deleteTooltip", {
 								name: m.name,
