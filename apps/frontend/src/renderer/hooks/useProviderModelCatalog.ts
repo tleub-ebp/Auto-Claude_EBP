@@ -41,6 +41,15 @@ export interface CatalogModel {
 	 * merely a catalog suggestion the user could download.
 	 */
 	installed?: boolean;
+	/**
+	 * For local providers only: whether the model supports native tool-calling.
+	 * `false` means the backend confirmed it CANNOT drive agentic phases, so the
+	 * picker hides it. `undefined` = unknown (kept).
+	 */
+	supports_tools?: boolean;
+	/** For local providers only: parameter count in billions (e.g. 8, 70). Used
+	 * to warn that a small model is weak for planning. null/undefined = unknown. */
+	param_b?: number | null;
 }
 
 export interface ProviderModelCatalog {
@@ -180,7 +189,14 @@ export function useProviderModelCatalog(
 			provider === "lmstudio";
 		if (!isLocal || liveModels.length === 0) return merged;
 		const installedValues = new Set(liveModels.map((m) => m.value));
-		return merged.map((m) => ({ ...m, installed: installedValues.has(m.value) }));
+		return (
+			merged
+				// Hide local models the backend confirmed have NO native tool-calling
+				// — they can't drive WorkPilot's agentic phases. Unknown (undefined)
+				// stays, so this never over-filters.
+				.filter((m) => m.supports_tools !== false)
+				.map((m) => ({ ...m, installed: installedValues.has(m.value) }))
+		);
 	}, [liveModels, staticEntries, provider]);
 
 	return { models, source, fetchedAt, error, loading, refresh };

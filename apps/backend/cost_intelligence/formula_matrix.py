@@ -108,6 +108,9 @@ class Formula:
     cost_basis: str = "heuristic"
     # 0-1 confidence in the cost figure (rises with measured history).
     cost_confidence: float = 0.25
+    # True when this is a local model actually pulled into the running Ollama
+    # server (vs a generic catalog entry the user hasn't downloaded yet).
+    installed: bool = False
     rationale: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -128,6 +131,7 @@ class Formula:
             "energy_kwh": round(self.energy_kwh, 4),
             "cost_basis": self.cost_basis,
             "cost_confidence": round(self.cost_confidence, 2),
+            "installed": self.installed,
             "rationale": list(self.rationale),
         }
 
@@ -448,6 +452,9 @@ def compute_formula_matrix(
     warnings: list[str] = []
 
     # Make the user's real local LLMs first-class in the matrix (priced at $0).
+    # The same set tells us which ollama entries are actually *pulled* (vs the
+    # generic catalog suggestions the user hasn't downloaded yet).
+    installed_local = {m for m in (local_models or []) if m}
     if local_models:
         _register_local_models(catalog, local_models)
 
@@ -515,6 +522,7 @@ def compute_formula_matrix(
                         hist_rate=hist_rate,
                         hist_n=hist_n,
                         history=history,
+                        installed=provider == "ollama" and model in installed_local,
                     )
                 )
 
@@ -548,6 +556,7 @@ def _build_formula(
     hist_rate: float | None,
     hist_n: int,
     history: _HistoryStats | None = None,
+    installed: bool = False,
 ) -> Formula:
     # Choose the token basis: measured (this model's own runs) > calibrated
     # (other models' runs in this project) > heuristic (synthetic volumes).
@@ -620,5 +629,6 @@ def _build_formula(
         energy_kwh=energy_kwh,
         cost_basis=cost_basis,
         cost_confidence=cost_confidence,
+        installed=installed,
         rationale=success.rationale,
     )

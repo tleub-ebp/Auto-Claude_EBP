@@ -479,18 +479,29 @@ def _fetch_ollama() -> list[dict[str, Any]]:
     """
     root = _local_llm_root()
 
+    # Tag each model with tool-calling support (hide non-tool models) and its
+    # parameter size (warn that a small model is weak for planning).
+    from ollama_model_detector import model_meta
+
+    def _entry(name: str) -> dict[str, Any]:
+        meta = model_meta(root, name)
+        return {
+            "value": name,
+            "label": name,
+            "tier": "local",
+            "supports_tools": meta["supports_tools"],
+            "param_b": meta["param_b"],
+        }
+
     # 1) OpenAI-compatible endpoint (LM Studio, vLLM, llama.cpp, Ollama ≥ /v1)
     try:
         with httpx.Client(timeout=HTTP_TIMEOUT) as client:
             resp = client.get(f"{root}/v1/models")
         resp.raise_for_status()
         items = resp.json().get("data", [])
-        out: list[dict[str, Any]] = []
-        for it in items:
-            name = it.get("id", "")
-            if not name:
-                continue
-            out.append({"value": name, "label": name, "tier": "local"})
+        out: list[dict[str, Any]] = [
+            _entry(it.get("id", "")) for it in items if it.get("id")
+        ]
         if out:
             return out
     except (httpx.HTTPError, OSError, ValueError, KeyError):
@@ -504,13 +515,7 @@ def _fetch_ollama() -> list[dict[str, Any]]:
     except (httpx.HTTPError, OSError):
         return []
     items = resp.json().get("models", [])
-    out = []
-    for it in items:
-        name = it.get("name", "")
-        if not name:
-            continue
-        out.append({"value": name, "label": name, "tier": "local"})
-    return out
+    return [_entry(it.get("name", "")) for it in items if it.get("name")]
 
 
 def _fetch_windsurf() -> list[dict[str, Any]]:

@@ -1233,6 +1233,7 @@ function TaskDetailModalContent({
 									<TaskLogs
 										task={task}
 										phaseLogs={state.phaseLogs}
+										perLlmLogs={state.perLlmLogs}
 										isLoadingLogs={state.isLoadingLogs}
 										expandedPhases={state.expandedPhases}
 										isStuck={state.isStuck}

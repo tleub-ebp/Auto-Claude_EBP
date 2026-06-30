@@ -11,6 +11,7 @@ import type {
 	WorktreeDiff,
 	WorktreeStatus,
 } from "../../../../shared/types";
+import { getActiveLogPhase } from "../../../../shared/utils/task-logs";
 import { isTaskPaused } from "../../../../shared/utils/task-pause";
 import { consumePendingTaskDetailTab } from "../../../lib/task-detail-nav";
 import { useProjectStore } from "../../../stores/project-store";
@@ -121,6 +122,11 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		string | undefined
 	>(undefined);
 	const [phaseLogs, setPhaseLogs] = useState<TaskLogs | null>(null);
+	// Physical per-LLM log files (one per provider/model) so a phase can show
+	// ONLY the selected model's logs, sourced from task_logs.<slug>.json.
+	const [perLlmLogs, setPerLlmLogs] = useState<
+		{ provider: string; model: string; logs: TaskLogs }[]
+	>([]);
 	const [isLoadingLogs, setIsLoadingLogs] = useState(false);
 	const [expandedPhases, setExpandedPhases] = useState<Set<TaskLogPhase>>(
 		new Set(),
@@ -132,6 +138,10 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 	const logsEndRef = useRef<HTMLDivElement>(null);
 	const logsContainerRef = useRef<HTMLDivElement>(null);
 	const prevStatusRef = useRef<string | undefined>(task.status);
+	// Last phase we auto-focused, so a phase *change* (esp. a regression like
+	// validation → planning) can pull the viewport onto the now-active phase
+	// even if the user had scrolled away — distinct from the per-entry follow.
+	const prevActivePhaseRef = useRef<TaskLogPhase | null>(null);
 
 	// Merge preview state
 	const [mergePreview, setMergePreview] = useState<{
@@ -238,33 +248,97 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		}
 	}, [task.status, selectedProject]);
 
-	// Handle scroll events in logs to detect if user scrolled away from anchor
+	// Locate the active phase's section element inside the logs container, so we
+	// can anchor scrolling on it rather than on the absolute document end. When
+	// no phase is active (task finished) this returns null and callers fall back
+	// to the document top/bottom.
+	const getActivePhaseEl = useCallback((): HTMLElement | null => {
+		const active = getActiveLogPhase(phaseLogs);
+		const container = logsContainerRef.current;
+		if (!active || !container) return null;
+		return container.querySelector<HTMLElement>(
+			`[data-phase-section="${active}"]`,
+		);
+	}, [phaseLogs]);
+
+	// Handle scroll events in logs to detect if the user scrolled away from the
+	// follow anchor. The anchor is the ACTIVE phase's section (its bottom for
+	// chronological order, its top for reverse) — not the document end — because
+	// phases render in a fixed order, so the running phase isn't necessarily the
+	// last section (e.g. after a validation → planning regression).
 	const handleLogsScroll = (e: React.UIEvent<HTMLDivElement>) => {
 		const target = e.target as HTMLDivElement;
 		const isReverseOrder = logOrder === "reverse-chronological";
+		const anchorEl = getActivePhaseEl();
 
-		// Check distance from top for reverse order, bottom for chronological
-		const isAtAnchor = isReverseOrder
-			? target.scrollTop < 100
-			: target.scrollHeight - target.scrollTop - target.clientHeight < 100;
+		let isAtAnchor: boolean;
+		if (anchorEl) {
+			const cRect = target.getBoundingClientRect();
+			const aRect = anchorEl.getBoundingClientRect();
+			// Within ~120px of the tracked edge of the active phase section.
+			isAtAnchor = isReverseOrder
+				? Math.abs(aRect.top - cRect.top) < 120
+				: Math.abs(aRect.bottom - cRect.bottom) < 120;
+		} else {
+			// No active phase: fall back to document top (reverse) / bottom.
+			isAtAnchor = isReverseOrder
+				? target.scrollTop < 100
+				: target.scrollHeight - target.scrollTop - target.clientHeight < 100;
+		}
 
 		setIsUserScrolledUp(!isAtAnchor);
 	};
 
-	// Auto-scroll logs to anchor (top for reverse, bottom for chronological) only if user hasn't scrolled away
+	// Auto-scroll logs to the running phase. Anchors on the ACTIVE phase section
+	// (not the document end) so that when a task regresses to an earlier phase
+	// — e.g. validation → planning — the viewport jumps to the now-active phase
+	// instead of staying on the stale logs of a later, already-finished phase.
+	//
+	// Two modes share this effect:
+	//   • Phase change → FORCE focus on the new phase (block:"start"), even if
+	//     the user had scrolled away. This is the user-visible "refocus on the
+	//     current phase" behavior.
+	//   • Same phase, new entries → only FOLLOW (track the phase tail) when the
+	//     user is still anchored.
 	useEffect(() => {
+		if (activeTab !== "logs") return;
 		const isReverseOrder = logOrder === "reverse-chronological";
 
-		if (activeTab !== "logs" || isUserScrolledUp) return;
+		const active = getActiveLogPhase(phaseLogs);
+		const phaseChanged = active !== null && active !== prevActivePhaseRef.current;
+		if (active !== null) prevActivePhaseRef.current = active;
 
-		// Small timeout to ensure the DOM has rendered (tab switch or new log entry)
+		// Without a phase change, respect a user who scrolled away from the tail.
+		if (!phaseChanged && isUserScrolledUp) return;
+
+		// Small timeout to ensure the DOM has rendered (tab switch or new entry).
 		const timer = setTimeout(() => {
-			if (isReverseOrder && logsContainerRef.current) {
-				logsContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
-			} else if (!isReverseOrder && logsEndRef.current) {
+			const container = logsContainerRef.current;
+			if (!container) return;
+			const anchorEl = active
+				? container.querySelector<HTMLElement>(
+						`[data-phase-section="${active}"]`,
+					)
+				: null;
+
+			if (anchorEl) {
+				// On a transition, show the phase from its start so the user sees
+				// "we're now in <phase>"; otherwise track its newest entries.
+				const block: ScrollLogicalPosition = phaseChanged
+					? "start"
+					: isReverseOrder
+						? "start"
+						: "end";
+				anchorEl.scrollIntoView({ behavior: "smooth", block });
+			} else if (isReverseOrder) {
+				container.scrollTo({ top: 0, behavior: "smooth" });
+			} else if (logsEndRef.current) {
 				logsEndRef.current.scrollIntoView({ behavior: "smooth" });
 			}
-		}, 50);
+
+			// A forced focus re-anchors the user on the new phase.
+			if (phaseChanged) setIsUserScrolledUp(false);
+		}, 60);
 
 		return () => clearTimeout(timer);
 	}, [activeTab, isUserScrolledUp, logOrder, phaseLogs]);
@@ -338,9 +412,7 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 						"coding",
 						"validation",
 					] as TaskLogPhase[];
-					const activePhase = phaseKeys.find(
-						(phase) => result.data?.phases[phase]?.status === "active",
-					);
+					const activePhase = getActiveLogPhase(result.data);
 					if (activePhase) {
 						// Auto-expand active phase
 						setExpandedPhases(new Set([activePhase]));
@@ -355,6 +427,16 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 							setExpandedPhases(new Set(populated));
 						}
 					}
+				}
+
+				// Physical per-LLM files, so each phase can show only the selected
+				// model's logs (sourced from task_logs.<provider>-<model>.json).
+				const perResult = await window.electronAPI.getTaskLogsPerLlm(
+					selectedProject.id,
+					task.specId,
+				);
+				if (perResult.success && perResult.data) {
+					setPerLlmLogs(perResult.data);
 				}
 			} catch (err) {
 				console.error("Failed to load task logs:", err);
@@ -372,10 +454,20 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		const unsubscribe = window.electronAPI.onTaskLogsChanged((specId, logs) => {
 			if (specId === task.specId) {
 				setPhaseLogs(logs);
+				// Refresh the per-LLM files too so the per-model view stays live.
+				void (async () => {
+					try {
+						const r = await window.electronAPI.getTaskLogsPerLlm(
+							selectedProject.id,
+							task.specId,
+						);
+						if (r.success && r.data) setPerLlmLogs(r.data);
+					} catch {
+						// best-effort refresh
+					}
+				})();
 				// Auto-expand newly active phase
-				const activePhase = (
-					["planning", "coding", "validation"] as TaskLogPhase[]
-				).find((phase) => logs.phases[phase]?.status === "active");
+				const activePhase = getActiveLogPhase(logs);
 				if (activePhase) {
 					setExpandedPhases((prev) => {
 						const next = new Set(prev);
@@ -732,6 +824,7 @@ export function useTaskDetail({ task }: UseTaskDetailOptions) {
 		stagedProjectPath,
 		suggestedCommitMessage,
 		phaseLogs,
+		perLlmLogs,
 		isLoadingLogs,
 		expandedPhases,
 		currentLogPhase,

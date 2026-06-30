@@ -43,6 +43,7 @@ if (_repo_root / "apps").is_dir():
     sys.path.insert(0, str(_repo_root))
 
 from cost_intelligence import compute_formula_matrix  # noqa: E402
+from cost_intelligence.formula_matrix import discover_local_models  # noqa: E402
 
 
 def _split_csv(raw: str | None) -> list[str] | None:
@@ -63,6 +64,10 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        # Best-effort: list the models actually pulled into the local Ollama
+        # server so the Formula Lab can flag which ones are downloaded. Never
+        # blocks for long and never raises (returns [] when Ollama is down).
+        local_models = discover_local_models()
         matrix = compute_formula_matrix(
             ticket_id=args.ticket_id,
             description=args.description or "",
@@ -70,6 +75,7 @@ def main() -> None:
             project_root=Path(args.project_root) if args.project_root else None,
             providers=_split_csv(args.providers),
             complexity_score=args.complexity,
+            local_models=local_models,
         )
         print(json.dumps({"matrix": matrix.to_dict()}, default=str), flush=True)
     except Exception as exc:  # noqa: BLE001

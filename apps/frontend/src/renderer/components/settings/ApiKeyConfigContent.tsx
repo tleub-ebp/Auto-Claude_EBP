@@ -76,6 +76,9 @@ export function ApiKeyConfigContent({
 					<OllamaInstalledModels
 						className="pt-2 border-t border-border"
 						baseUrl={formData.apiUrl}
+						onSelectModel={(model) =>
+							onFormDataChange({ ...formData, model })
+						}
 					/>
 					<HuggingFaceModelDiscovery
 						className="pt-2 border-t border-border"

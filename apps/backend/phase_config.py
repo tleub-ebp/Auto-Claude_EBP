@@ -582,21 +582,28 @@ def get_phase_model(
     Returns:
         Resolved full model ID
     """
-    # 1. CLI argument takes precedence
-    cli_result = _resolve_cli_model(cli_model)
-    if cli_result:
-        return cli_result
-
-    # 2. Load task metadata
+    # Load task metadata up front so the per-phase config can be consulted
+    # before the CLI default.
     metadata = load_task_metadata(spec_dir)
 
-    # 3. Auto profile with phase-specific config
+    # 1. Auto-profile (per-phase) config is AUTHORITATIVE — it must win over the
+    # CLI --model. The frontend passes the SPEC phase model as the global
+    # --model, so honoring the CLI arg first forced EVERY phase onto the spec
+    # model and silently ignored the user's per-phase Planning/Coding/QA
+    # selections (changing one phase's model then had no effect). Guarded
+    # internally by isAutoProfile, so this is a no-op for single-model tasks.
     if metadata:
         auto_profile_result = _resolve_auto_profile_model(metadata, phase, cli_provider)
         if auto_profile_result:
             return auto_profile_result
 
-        # 4. Non-auto profile: use single model
+    # 2. CLI argument (the override for non-auto-profile tasks).
+    cli_result = _resolve_cli_model(cli_model)
+    if cli_result:
+        return cli_result
+
+    # 3. Non-auto profile: single model from metadata.
+    if metadata:
         single_model_result = _resolve_single_model(metadata, cli_provider)
         if single_model_result:
             return single_model_result
