@@ -1211,6 +1211,21 @@ function PhaseLogSection({
 															{t("tasks:logs.model.downloadable", "to download")}
 														</span>
 													) : null}
+													{typeof m.param_b === "number" && m.param_b < 24 ? (
+														<span
+															className="text-[10px] text-amber-500"
+															title={t(
+																"tasks:logs.model.smallWarnTip",
+																"Petit modèle ({{n}}B) — déconseillé pour la planification (préférez ≥24B ou Claude) ; limité sur les tâches complexes.",
+																{ n: m.param_b },
+															)}
+														>
+															{t(
+																"tasks:logs.model.smallWarn",
+																"⚠ petit — déconseillé planif",
+															)}
+														</span>
+													) : null}
 												</span>
 											</SelectItem>
 										))}

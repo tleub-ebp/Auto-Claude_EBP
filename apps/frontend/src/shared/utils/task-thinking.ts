@@ -248,6 +248,9 @@ interface ModelSelectOption {
 	label: string;
 	/** Local providers only: model is pulled on the server (vs catalog-only). */
 	installed?: boolean;
+	/** Local providers only: parameter count in billions, to warn that a small
+	 * model is weak for planning. null/undefined = unknown. */
+	param_b?: number | null;
 }
 
 /**
@@ -277,6 +280,7 @@ export function buildModelSelectOptions(
 		value: m.value,
 		label: m.label,
 		installed: m.installed,
+		param_b: m.param_b,
 	}));
 	const current = currentValue ?? "";
 	if (!current) return { options, value: current };

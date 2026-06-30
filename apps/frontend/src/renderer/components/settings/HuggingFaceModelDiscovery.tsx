@@ -28,6 +28,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { HuggingFaceModelInfo } from "../../../shared/types/mcp-marketplace";
+import {
+	assessHfModel,
+	estimateGbFromParams,
+	type HfVerdict,
+} from "../../../shared/utils/hf-model-suitability";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
@@ -161,8 +166,28 @@ function formatCount(n?: number): string {
 	return String(n);
 }
 
+// Row tint / badge styling per verdict (logic lives in hf-model-suitability).
+const VERDICT_ROW: Record<HfVerdict, string> = {
+	good: "border-success/40 bg-success/5",
+	ok: "border-warning/30",
+	uncertain: "border-border",
+	unsuitable: "border-border opacity-60",
+};
+const VERDICT_BADGE: Record<HfVerdict, string> = {
+	good: "bg-success/15 text-success",
+	ok: "bg-warning/15 text-warning",
+	uncertain: "bg-muted text-muted-foreground",
+	unsuitable: "bg-muted text-muted-foreground",
+};
+const VERDICT_LABEL: Record<HfVerdict, string> = {
+	good: "Recommandé",
+	ok: "Trop petit pour planifier",
+	uncertain: "Tool-calling à vérifier",
+	unsuitable: "Inadapté",
+};
+
 const selectClass =
-	"flex-1 min-w-0 text-xs rounded-md border border-input bg-background text-foreground px-2 py-1.5";
+	"w-full min-w-0 text-xs rounded-md border border-input bg-background text-foreground px-2 py-1.5";
 
 export function HuggingFaceModelDiscovery({
 	className,
@@ -188,6 +213,12 @@ export function HuggingFaceModelDiscovery({
 	const [language, setLanguage] = useState("");
 	const [license, setLicense] = useState("");
 	const [sort, setSort] = useState<SortOption>("trending");
+	// Pre-filter: hide repos our heuristic flags as inadapté (embeddings, tiny).
+	const [agenticOnly, setAgenticOnly] = useState(true);
+	// Size filters (heuristic, from the repo name): min parameters (B) and max
+	// estimated on-disk size (GB for a Q4 quant). "" = no filter.
+	const [minParamB, setMinParamB] = useState("");
+	const [maxGb, setMaxGb] = useState("");
 	const [models, setModels] = useState<HuggingFaceModelInfo[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -529,8 +560,9 @@ export function HuggingFaceModelDiscovery({
 				)}
 			</div>
 
-			{/* Filter bar — all facets on a single aligned row. */}
-			<div className="flex items-center gap-2">
+			{/* Filters — one uniform responsive grid (HF facets + size filters),
+			    all on a single row on wide screens. */}
+			<div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
 				<select
 					value={task}
 					onChange={(e) => setTask(e.target.value)}
@@ -591,6 +623,63 @@ export function HuggingFaceModelDiscovery({
 						</option>
 					))}
 				</select>
+				{/* Heuristic size filters (from the repo name), same cells as facets. */}
+				<select
+					value={minParamB}
+					onChange={(e) => setMinParamB(e.target.value)}
+					className={selectClass}
+					aria-label="Taille minimale (paramètres)"
+				>
+					<option value="">Params : tous</option>
+					<option value="7">≥ 7B</option>
+					<option value="14">≥ 14B</option>
+					<option value="24">≥ 24B (planif.)</option>
+					<option value="70">≥ 70B</option>
+				</select>
+				<select
+					value={maxGb}
+					onChange={(e) => setMaxGb(e.target.value)}
+					className={selectClass}
+					aria-label="Taille disque max. estimée (Go)"
+				>
+					<option value="">Disque : tous</option>
+					<option value="6">≤ ~6 Go</option>
+					<option value="12">≤ ~12 Go</option>
+					<option value="24">≤ ~24 Go</option>
+					<option value="48">≤ ~48 Go</option>
+				</select>
+			</div>
+
+			{/* Agentic pre-filter toggle. */}
+			<label className="flex w-fit items-center gap-1.5 text-xs text-muted-foreground">
+				<input
+					type="checkbox"
+					checked={agenticOnly}
+					onChange={(e) => setAgenticOnly(e.target.checked)}
+					className="h-3.5 w-3.5 accent-success"
+				/>
+				Masquer les modèles inadaptés (embeddings, trop petits)
+			</label>
+
+			{/* Explicit colour legend (what each model is good for). */}
+			<div className="space-y-0.5 text-[11px] text-muted-foreground">
+				<div>
+					<span className="font-medium text-success">● Recommandé</span> — assez
+					gros (≥24B de paramètres actifs) et compatible tool-calling : bon pour
+					TOUTES les étapes, planification incluse.
+				</div>
+				<div>
+					<span className="font-medium text-warning">
+						● Trop petit pour planifier
+					</span>{" "}
+					— compatible tool-calling mais &lt;24B : ok codage / validation,
+					déconseillé en planification.
+				</div>
+				<div>
+					<span className="font-medium">● Tool-calling à vérifier</span> — non
+					confirmé d'après le nom ; ouvrez la carte du modèle. Les tailles « ~Go
+					» sont estimées (quant 4-bit).
+				</div>
 			</div>
 
 			{error && (
@@ -599,10 +688,26 @@ export function HuggingFaceModelDiscovery({
 				</div>
 			)}
 
-			<div className="flex flex-col gap-1.5 max-h-80 overflow-y-auto">
+			<div className="flex flex-col gap-1.5">
 				{models.map((m) => {
 					const localName = `hf.co/${m.id}`;
 					const isSelected = selectedModel === localName;
+					const assessment = assessHfModel(m);
+					const estGb = estimateGbFromParams(assessment.paramB);
+					// Pre-filters (the active default always stays visible): hide
+					// inadapté repos, and apply the size filters when set. A repo of
+					// unknown size is hidden once a size filter is active (can't verify).
+					if (!isSelected) {
+						if (agenticOnly && assessment.verdict === "unsuitable") return null;
+						if (
+							minParamB &&
+							(assessment.paramB == null ||
+								assessment.paramB < Number(minParamB))
+						) {
+							return null;
+						}
+						if (maxGb && (estGb == null || estGb > Number(maxGb))) return null;
+					}
 					const isActiveProvision =
 						provision.phase === "checking" ||
 						provision.phase === "starting" ||
@@ -628,7 +733,9 @@ export function HuggingFaceModelDiscovery({
 							title={td("setDefaultTooltip", { name: localName })}
 							className={cn(
 								"flex items-center justify-between gap-3 p-2 rounded-md border cursor-pointer hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-								isSelected ? "border-primary bg-primary/5" : "border-border",
+								isSelected
+									? "border-primary bg-primary/5"
+									: VERDICT_ROW[assessment.verdict],
 							)}
 						>
 							<div className="min-w-0">
@@ -644,6 +751,17 @@ export function HuggingFaceModelDiscovery({
 									)}
 								</p>
 								<div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+									<span
+										className={cn(
+											"px-1.5 py-0.5 rounded text-[10px] font-medium",
+											VERDICT_BADGE[assessment.verdict],
+										)}
+										title={assessment.reason}
+									>
+										{VERDICT_LABEL[assessment.verdict]}
+										{assessment.paramB != null ? ` · ${assessment.paramB}B` : ""}
+										{estGb != null ? ` · ~${estGb} Go` : ""}
+									</span>
 									<span className="inline-flex items-center gap-1">
 										<Download className="h-3 w-3" />
 										{formatCount(m.downloads)}
@@ -700,6 +818,18 @@ export function HuggingFaceModelDiscovery({
 									) : (
 										<Copy className="h-4 w-4" />
 									)}
+								</Button>
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									onClick={(e) => {
+										e.stopPropagation();
+										globalThis.electronAPI?.openExternal?.(m.url);
+									}}
+									title={`Ouvrir la carte du modèle (ressource) : ${m.url}`}
+								>
+									<ExternalLink className="h-4 w-4" />
 								</Button>
 							</div>
 						</div>

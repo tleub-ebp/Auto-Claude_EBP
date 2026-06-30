@@ -641,24 +641,38 @@ export function ProviderConfigDialog({
 				/>
 			)}
 
-			<DialogFooter className="flex gap-2">
-				<DialogFooterActions
-					provider={provider}
-					activeTab={activeTab}
-					isTesting={isTesting}
-					formData={formData}
-					onTest={handleTest}
-					onSave={handleSave}
-					onDelete={handleDelete}
-					onOpenChange={onOpenChange}
-				/>
-			</DialogFooter>
 		</>
 	);
 
-	// Si on est dans un Sheet, retourner juste le contenu sans le Dialog
+	const footer = (
+		<DialogFooter className="flex shrink-0 gap-2 border-t border-border/40 pt-3">
+			<DialogFooterActions
+				provider={provider}
+				activeTab={activeTab}
+				isTesting={isTesting}
+				formData={formData}
+				onTest={handleTest}
+				onSave={handleSave}
+				onDelete={handleDelete}
+				onOpenChange={onOpenChange}
+			/>
+		</DialogFooter>
+	);
+
+	// Si on est dans un Sheet, retourner juste le contenu sans le Dialog.
+	// The parent DialogContent is a bounded flex column (h-full, min-h-0,
+	// overflow-hidden), so make the body the only scrollable region and keep the
+	// footer as a flex sibling below it — Tester / Enregistrer then stay visible
+	// at the bottom no matter how long the model list is.
 	if (useSheet) {
-		return <div className="space-y-6">{content}</div>;
+		return (
+			<div className="flex max-h-[93vh] flex-col">
+				<div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1">
+					{content}
+				</div>
+				{footer}
+			</div>
+		);
 	}
 
 	// Sinon, retourner le Dialog complet
@@ -671,6 +685,7 @@ export function ProviderConfigDialog({
 					<DialogDescription>{providerConfig?.description}</DialogDescription>
 				</VisuallyHidden>
 				{content}
+				{footer}
 			</DialogContent>
 		</Dialog>
 	);

@@ -1067,9 +1067,9 @@ export function CleanProviderSection({
 				</div>
 			</div>
 
-			{/* Dialog de configuration - centré */}
+			{/* Dialog de configuration - centré (large pour la liste de modèles HF) */}
 			<Dialog open={configDialogOpen} onOpenChange={setConfigDialogOpen}>
-				<DialogContent className="max-w-[650px]">
+				<DialogContent className="max-w-[1200px] max-h-[98vh]">
 					<ProviderConfigDialog
 						isOpen={configDialogOpen}
 						onOpenChange={setConfigDialogOpen}
