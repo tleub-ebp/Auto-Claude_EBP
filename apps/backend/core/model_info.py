@@ -8,6 +8,7 @@ Similar to frontend functionality but adapted for backend architecture.
 """
 
 import os
+import sys
 
 
 def get_current_model_info() -> dict[str, str]:
@@ -18,12 +19,26 @@ def get_current_model_info() -> dict[str, str]:
         Dictionary containing provider, model, and model_label information
     """
     try:
-        # Try to get selected provider from global state (provider_api.py)
+        # Try to read the selected provider from the running server's global
+        # state (provider_api.py). CRITICAL: only read it if provider_api is
+        # ALREADY imported — never trigger a fresh import here.
+        #
+        # This runs on the debug-logging hot path (every backend log line when
+        # DEBUG=true). Importing provider_api pulls in the entire FastAPI app;
+        # when a log happens *during* the import of a core module — e.g.
+        # core.worktree -> debug -> colored_logs -> model_info — that fresh
+        # import closes a circular loop that leaves core.worktree
+        # half-initialized, so `from core.worktree import WorktreeManager`
+        # later fails in PR-creation subprocesses. Reading from sys.modules
+        # avoids the import entirely; outside the server we fall back to the
+        # env-based detection below.
         try:
-            from provider_api import get_selected_provider
-
-            selected_provider = get_selected_provider()
-        except ImportError:
+            provider_api_module = sys.modules.get("provider_api")
+            if provider_api_module is not None:
+                selected_provider = provider_api_module.get_selected_provider()
+            else:
+                selected_provider = None
+        except Exception:
             selected_provider = None
 
         # If no selected provider, try to detect from environment

@@ -42,7 +42,7 @@ jobs:
       # IMPORTANT: Use PAT_TOKEN instead of GITHUB_TOKEN
       # When GITHUB_TOKEN pushes a tag, it does NOT trigger other workflows (GitHub security feature)
       # PAT_TOKEN allows the tag push to trigger release.yml automatically
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.PAT_TOKEN }}

@@ -10,6 +10,44 @@ from pathlib import Path
 from typing import Any
 
 
+def _pick_arg(arguments: dict[str, Any], *names: str, default: Any = None) -> Any:
+    """First non-empty value among alias ``names`` (case-insensitive).
+
+    Local models are inconsistent about argument keys — e.g. a shell command may
+    arrive as ``command``, ``cmd`` or ``shell_command``; a file's body as
+    ``content``, ``Content``, ``CodeContent`` or ``text``. Matching a set of
+    aliases (and ignoring case) makes the tools tolerant of those variants
+    instead of failing with "X is required".
+    """
+    if not isinstance(arguments, dict):
+        return default
+    for name in names:  # exact match first
+        value = arguments.get(name)
+        if value is not None and value != "":
+            return value
+    lowered = {k.lower(): v for k, v in arguments.items() if isinstance(k, str)}
+    for name in names:  # case-insensitive fallback
+        value = lowered.get(name.lower())
+        if value is not None and value != "":
+            return value
+    return default
+
+
+def _as_bool(value: Any) -> bool:
+    """Interpret a tool-arg flag as a bool.
+
+    Local models frequently pass the STRING ``"false"``/``"true"`` (or
+    ``"0"``/``"1"``) for boolean flags. Python's ``bool("false")`` is ``True``,
+    which would wrongly make ``write_file`` create an EMPTY file. Treat the
+    common falsey strings as ``False``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "0", "no", "none", "null")
+    return bool(value)
+
+
 class ToolExecutor:
     """Executes tools for agent sessions."""
 
@@ -41,27 +79,38 @@ class ToolExecutor:
         Returns:
             Result of the tool execution
         """
-        # Basic tool execution - can be extended with specific tool implementations
+        # Tool dispatch. Argument keys are resolved through alias sets so the
+        # varied names local models emit (cmd/command, file_path/path,
+        # content/Content/CodeContent, …) all map to the right parameter.
+        path_aliases = ("path", "file_path", "filepath", "filename", "file")
+        content_aliases = ("content", "CodeContent", "text", "data", "file_text")
+        dir_aliases = ("directory", "dir", "folder", "path")
+        cmd_aliases = ("command", "cmd", "shell_command", "script", "commandline")
+        cwd_aliases = ("cwd", "working_directory", "directory", "dir")
+
         if tool_name == "read_file":
-            return await self._read_file(arguments.get("path"))
-        elif tool_name == "write_file":
+            return await self._read_file(_pick_arg(arguments, *path_aliases))
+        elif tool_name in ("write_file", "Write"):  # "Write" = planner alias
             return await self._write_file(
-                arguments.get("path"), arguments.get("content")
-            )
-        elif tool_name == "Write":  # Alias for planner compatibility
-            return await self._write_file(
-                arguments.get("file_path"),
-                arguments.get("CodeContent"),
-                arguments.get("EmptyFile", False),
+                _pick_arg(arguments, *path_aliases),
+                _pick_arg(arguments, *content_aliases),
+                _as_bool(
+                    _pick_arg(
+                        arguments, "EmptyFile", "empty_file", "empty", default=False
+                    )
+                ),
             )
         elif tool_name == "list_files":
-            return await self._list_files(arguments.get("directory", "."))
+            return await self._list_files(
+                _pick_arg(arguments, *dir_aliases, default=".")
+            )
         elif tool_name == "run_command":
             return await self._run_command(
-                arguments.get("command"), arguments.get("cwd")
+                _pick_arg(arguments, *cmd_aliases),
+                _pick_arg(arguments, *cwd_aliases),
             )
         elif tool_name == "create_directory":
-            return await self._create_directory(arguments.get("path"))
+            return await self._create_directory(_pick_arg(arguments, *dir_aliases))
         else:
             raise ValueError(f"Unknown tool: {tool_name}")
 

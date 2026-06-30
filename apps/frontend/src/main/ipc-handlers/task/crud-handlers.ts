@@ -816,9 +816,15 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 				AUTO_BUILD_PATHS.IMPLEMENTATION_PLAN,
 				AUTO_BUILD_PATHS.QA_REPORT,
 				AUTO_BUILD_PATHS.BUILD_PROGRESS,
+				// The phase-log feed shown in the Logs tab. Without clearing it, a
+				// reset kept every past run's entries — so after switching LLM the
+				// user still saw the *previous* model's (and old cloud runs') logs.
+				"task_logs.json",
 				"conversation.jsonl",
 				"conversation_log.jsonl",
 				"PROMPT_TOO_LONG_HALT",
+				"LOCAL_MODEL_NO_TOOLS_HALT",
+				".planning_validation_failures",
 				"RESUME_WITH_PROVIDER",
 				"qa_fix_request.md",
 				"memory",
@@ -841,6 +847,27 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 						warnings.push(`${target}: ${errorMsg}`);
 					}
 				}
+				// Per-model conversation logs are named conversation.<model>.jsonl
+				// (the model is in the filename), plus the .migrated marker — glob
+				// them so a reset clears EVERY model's history, not just the legacy
+				// conversation.jsonl handled above.
+				if (existsSync(specDir)) {
+					for (const name of readdirSync(specDir)) {
+						if (
+							!/^conversation\..+\.jsonl$/.test(name) &&
+							name !== "conversation.jsonl.migrated"
+						) {
+							continue;
+						}
+						try {
+							await rm(path.join(specDir, name), { force: true });
+						} catch (error) {
+							const errorMsg =
+								error instanceof Error ? error.message : "Unknown error";
+							warnings.push(`${path.join(specDir, name)}: ${errorMsg}`);
+						}
+					}
+				}
 			}
 
 			// 3. Drop the XState actor so the next start is a clean planning run
@@ -858,6 +885,9 @@ export function registerTaskCRUDHandlers(agentManager: AgentManager): void {
 				subtasks: [],
 				qaReport: undefined,
 				executionProgress: undefined,
+				// Clear the in-memory feed too (the on-disk task_logs.json is deleted
+				// above) so the Logs tab starts empty for the next run.
+				logs: [],
 				updatedAt: new Date(),
 			};
 			console.warn(`[TASK_RESET] Task ${taskId} reset to backlog`);

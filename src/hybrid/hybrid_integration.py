@@ -60,9 +60,15 @@ class HybridIntegration:
         self._detect_ide()
     
     def _check_bmad_availability(self) -> bool:
-        """Vérifie si BMAD est disponible"""
-        bmad_path = self.project_root / "_bmad"
-        return bmad_path.exists() and (bmad_path / "bmm").exists()
+        """Vérifie si BMAD est disponible.
+
+        BMAD peut être installé à la racine (`_bmad/`) ou mis en cache par
+        l'installeur (`.cache/_bmad/`). On accepte les deux emplacements.
+        """
+        for base in (self.project_root / "_bmad", self.project_root / ".cache" / "_bmad"):
+            if base.exists() and (base / "bmm").exists():
+                return True
+        return False
     
     def _detect_ide(self) -> None:
         """Détecte l'IDE actuel"""
@@ -110,18 +116,13 @@ class HybridIntegration:
         return enhanced_data
     
     def _determine_enhancement_level(self, workflow_name: str) -> str:
-        """Détermine le niveau d'amélioration pour un workflow"""
-        enhancement_levels = {
-            "bmad-bmm-create-prd": "high",
-            "bmad-bmm-create-architecture": "high",
-            "bmad-bmm-dev-story": "high",
-            "bmad-bmm-sprint-planning": "medium",
-            "bmad-bmm-create-epics-and-stories": "medium",
-            "bmad-bmm-code-review": "low",
-            "bmad-bmm-retrospective": "low"
-        }
-        
-        return enhancement_levels.get(workflow_name, "medium")
+        """Niveau d'amélioration pour un workflow.
+
+        Volontairement agnostique : aucun couplage à un provider/LLM/effort ou à
+        une commande BMAD précise. L'effort réel est décidé en aval par la config
+        provider du projet (cf. core.oneshot), pas figé ici par nom de commande.
+        """
+        return "adaptive"
     
     def _get_autonomous_capabilities(self, workflow_name: str) -> list[str]:
         """Retourne les capacités autonomous pour un workflow"""

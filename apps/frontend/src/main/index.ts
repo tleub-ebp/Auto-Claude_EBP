@@ -81,6 +81,7 @@ import {
 	restoreSession,
 } from "./server-connection";
 import { initializeCredentialIntegration } from "./services/credential-integration";
+import { ensureOllamaReady } from "./services/ollama-portable";
 import { ensureOAuthServerRunning } from "./oauth-server";
 import { isMacOS, isWindows } from "./platform";
 import { pythonEnvManager } from "./python-env-manager";
@@ -926,6 +927,41 @@ function initializeAppUpdaterIfNeeded() {
 	}
 }
 
+/**
+ * Auto-start the local Ollama server at app startup when Ollama is the selected
+ * provider, so the daemon is already listening (on 127.0.0.1) by the time the
+ * user launches a task — instead of the first run surfacing a spurious "Ollama
+ * ne répond pas". Fully non-blocking and best-effort: a failure is logged and
+ * the per-task ensureLocalServerIfNeeded still runs as a fallback. We only act
+ * when Ollama is actually selected so users on other providers never get a
+ * background server they didn't ask for.
+ */
+function autoStartOllamaIfSelected(): void {
+	try {
+		const settings = readSettingsFile();
+		const provider = (
+			settings?.selectedProvider as string | undefined
+		)?.toLowerCase();
+		if (provider !== "ollama") return;
+		const baseUrl =
+			((settings?.globalOllamaApiUrl as string) || "").trim() ||
+			"http://127.0.0.1:11434";
+		ensureOllamaReady(baseUrl, () => {
+			/* no progress stream at startup */
+		})
+			.then((res) => {
+				if (!res.success) {
+					console.warn("[main] Ollama auto-start at startup failed:", res.error);
+				}
+			})
+			.catch((err) => {
+				console.warn("[main] Ollama auto-start error:", err);
+			});
+	} catch (err) {
+		console.warn("[main] autoStartOllamaIfSelected error:", err);
+	}
+}
+
 // Initialize the application
 async function main() {
 	await app.whenReady();
@@ -996,6 +1032,10 @@ async function main() {
 			console.warn("[main] Failed to pre-warm CLI cache:", error);
 		});
 	});
+
+	// Bring up the local Ollama server in the background when it's the selected
+	// provider, so it's ready before the first task (non-blocking, best-effort).
+	setImmediate(() => autoStartOllamaIfSelected());
 
 	// Initialize profile manager and handle migrated profiles
 	await initializeProfileManager();

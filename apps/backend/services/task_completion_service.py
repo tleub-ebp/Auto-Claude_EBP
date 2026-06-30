@@ -170,52 +170,37 @@ class TaskCompletionService:
 
         target = target_branch or self.base_branch
 
-        # Étape 0: Commit any uncommitted changes in the worktree
-        has_changes, changed_files = self.worktree_manager._has_uncommitted_changes(
-            spec_id
-        )
-        if has_changes:
+        # Étape 0: Si une PR est déjà ouverte pour cette branche, on finalise
+        # sans re-pousser. Cas fréquent : la branche a été poussée lors d'une
+        # session précédente et le push échoue désormais (ex. PAT Azure DevOps
+        # en lecture seule -> push refusé 403, alors que l'API REST de lecture
+        # répond). La tâche est déjà « en revue » : il suffit de retrouver
+        # l'URL de sa PR. Lookup best-effort, provider-aware, ne lève jamais.
+        existing_pr_url = self.worktree_manager.find_existing_pr_url(spec_id, target)
+        if existing_pr_url:
             logger.info(
-                f"[TaskCompletionService] Found {len(changed_files)} uncommitted files, committing..."
+                f"[TaskCompletionService] PR déjà existante, push ignoré: {existing_pr_url}"
             )
-            commit_ok = self.worktree_manager.commit_in_worktree(
-                spec_id, f"auto-claude: {task_title}"
-            )
-            if not commit_ok:
-                error_msg = "Failed to commit uncommitted changes before push"
-                logger.error(f"[TaskCompletionService] {error_msg}")
-                return TaskCompletionResult(
-                    success=False,
-                    pr_url=None,
-                    pr_already_exists=False,
-                    error=error_msg,
-                )
-            logger.info(f"[TaskCompletionService] Committed {len(changed_files)} files")
-
-        # Étape 1: Push de la branche vers origin
-        logger.info("[TaskCompletionService] Push de la branche vers origin...")
-        push_result = self.worktree_manager.push_branch(spec_id, force=False)
-
-        if not push_result["success"]:
-            error_msg = f"Échec du push de la branche: {push_result.get('error', 'Erreur inconnue')}"
-            logger.error(f"[TaskCompletionService] {error_msg}")
             return TaskCompletionResult(
-                success=False,
-                pr_url=None,
-                pr_already_exists=False,
-                error=error_msg,
+                success=True,
+                pr_url=existing_pr_url,
+                pr_already_exists=True,
+                error=None,
             )
 
-        logger.info(
-            f"[TaskCompletionService] Branche {push_result['branch']} poussée avec succès"
-        )
-
-        # Étape 2: Création de la PR avec template de vérification humaine
+        # Étape 1: Push de la branche + création de la PR/MR. On délègue au
+        # dispatcher provider-aware (`push_and_create_pr`) qui route vers
+        # GitHub / GitLab / Azure DevOps, commit les changements en attente,
+        # applique la discard-list et refuse une PR vide. Appeler
+        # `create_pull_request` (spécifique GitHub) à la main faisait échouer
+        # la complétion sur les dépôts Azure DevOps.
         pr_title = self._build_pr_title(task_title)
         pr_body = self._build_pr_body(task_title, task_description)
 
-        logger.info(f"[TaskCompletionService] Création de la PR vers {target}...")
-        pr_result = self.worktree_manager.create_pull_request(
+        logger.info(
+            f"[TaskCompletionService] Push + création de la PR vers {target}..."
+        )
+        pr_result = self.worktree_manager.push_and_create_pr(
             spec_name=spec_id,
             target_branch=target,
             title=pr_title,
@@ -223,9 +208,9 @@ class TaskCompletionService:
             draft=False,  # PR normale qui nécessite review
         )
 
-        if not pr_result["success"]:
-            error_msg = f"Échec de la création de la PR: {pr_result.get('error', 'Erreur inconnue')}"
-            logger.error(f"[TaskCompletionService] {error_msg}")
+        if not pr_result.get("success"):
+            error_msg = pr_result.get("error", "Erreur inconnue")
+            logger.error(f"[TaskCompletionService] Échec de la complétion: {error_msg}")
             return TaskCompletionResult(
                 success=False,
                 pr_url=None,
@@ -249,7 +234,7 @@ class TaskCompletionService:
                     task_description=task_description,
                     pr_url=pr_url,
                     project_name=self.project_path.name,
-                    branch=push_result.get("branch"),
+                    branch=pr_result.get("branch"),
                     target_branch=target,
                     spec_id=spec_id,
                 ),

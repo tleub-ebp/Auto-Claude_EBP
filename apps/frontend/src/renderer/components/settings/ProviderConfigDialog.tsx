@@ -1,6 +1,7 @@
 import { AlertCircle, CheckCircle, Globe, Key, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
 	Dialog,
@@ -50,6 +51,24 @@ export function ProviderConfigDialog({
 	onProviderActivated,
 }: ProviderConfigDialogProps) {
 	const { t } = useTranslation("settings");
+	const { toast } = useToast();
+
+	// Confirmation visible après sauvegarde — sans ce retour, le dialogue se
+	// ferme en silence et l'utilisateur a l'impression que "rien ne se passe".
+	const notifySaved = useCallback(
+		(providerName: string, model?: string) => {
+			toast({
+				title: t("sections.accounts.providerConfig.savedTitle", {
+					defaultValue: "Fournisseur enregistré",
+				}),
+				description:
+					model && model.trim()
+						? `${providerName} enregistré (modèle : ${model.trim()}) et défini comme fournisseur actif.`
+						: `${providerName} enregistré et défini comme fournisseur actif.`,
+			});
+		},
+		[toast, t],
+	);
 
 	// Mémoriser providerFields pour éviter les recréations infinies
 	const providerFields: Record<string, ProviderConfig> = useMemo(
@@ -329,6 +348,7 @@ export function ProviderConfigDialog({
 
 		onSettingsChange(newSettings);
 		onProviderActivated?.(provider.id);
+		notifySaved(provider.name, formData.model);
 		onOpenChange(false);
 	};
 
@@ -621,36 +641,51 @@ export function ProviderConfigDialog({
 				/>
 			)}
 
-			<DialogFooter className="flex gap-2">
-				<DialogFooterActions
-					provider={provider}
-					activeTab={activeTab}
-					isTesting={isTesting}
-					formData={formData}
-					onTest={handleTest}
-					onSave={handleSave}
-					onDelete={handleDelete}
-					onOpenChange={onOpenChange}
-				/>
-			</DialogFooter>
 		</>
 	);
 
-	// Si on est dans un Sheet, retourner juste le contenu sans le Dialog
+	const footer = (
+		<DialogFooter className="flex shrink-0 gap-2 border-t border-border/40 pt-3">
+			<DialogFooterActions
+				provider={provider}
+				activeTab={activeTab}
+				isTesting={isTesting}
+				formData={formData}
+				onTest={handleTest}
+				onSave={handleSave}
+				onDelete={handleDelete}
+				onOpenChange={onOpenChange}
+			/>
+		</DialogFooter>
+	);
+
+	// Si on est dans un Sheet, retourner juste le contenu sans le Dialog.
+	// The parent DialogContent is a bounded flex column (h-full, min-h-0,
+	// overflow-hidden), so make the body the only scrollable region and keep the
+	// footer as a flex sibling below it — Tester / Enregistrer then stay visible
+	// at the bottom no matter how long the model list is.
 	if (useSheet) {
-		return <div className="space-y-6">{content}</div>;
+		return (
+			<div className="flex max-h-[93vh] flex-col">
+				<div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1">
+					{content}
+				</div>
+				{footer}
+			</div>
+		);
 	}
 
 	// Sinon, retourner le Dialog complet
 	return (
 		<Dialog open={isOpen} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-[650px]">
+			<DialogContent className="max-w-[860px]">
 				{/* Hidden titles for accessibility */}
 				<VisuallyHidden>
 					<DialogTitle>{provider?.name}</DialogTitle>
 					<DialogDescription>{providerConfig?.description}</DialogDescription>
 				</VisuallyHidden>
 				{content}
+				{footer}
 			</DialogContent>
 		</Dialog>
 	);

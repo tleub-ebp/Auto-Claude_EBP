@@ -1,7 +1,13 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { memo, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import type { Task, TaskStatus } from "../../shared/types";
+import {
+	formatAgingDuration,
+	getTaskAgingHours,
+	getTaskAgingLevel,
+} from "../lib/kanban-aging";
 import { cn } from "../lib/utils";
 import { TaskCard } from "./TaskCard";
 
@@ -52,6 +58,7 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 	isSelected,
 	onToggleSelect,
 }: SortableTaskCardProps) {
+	const { t } = useTranslation(["tasks"]);
 	const {
 		attributes,
 		listeners,
@@ -69,6 +76,16 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 		zIndex: isDragging ? 50 : undefined,
 	};
 
+	// Aging heat: a left accent flags cards that have idled too long in an
+	// actionable column. Hidden while dragging to keep the overlay clean.
+	const agingLevel = isDragging ? "none" : getTaskAgingLevel(task);
+	const agingLabel =
+		agingLevel === "none"
+			? undefined
+			: t("kanban.aging.idleFor", {
+					duration: formatAgingDuration(getTaskAgingHours(task)),
+				});
+
 	// Memoize onClick to prevent unnecessary TaskCard re-renders
 	const handleClick = useCallback(() => {
 		onClick();
@@ -79,7 +96,7 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 			ref={setNodeRef}
 			style={style}
 			className={cn(
-				"touch-none transition-all duration-200",
+				"relative touch-none transition-all duration-200",
 				isDragging && "dragging-placeholder opacity-40 scale-[0.98]",
 				isOver &&
 					!isDragging &&
@@ -88,6 +105,19 @@ export const SortableTaskCard = memo(function SortableTaskCard({
 			{...attributes}
 			{...listeners}
 		>
+			{agingLevel !== "none" && (
+				<span
+					role="img"
+					title={agingLabel}
+					aria-label={agingLabel}
+					className={cn(
+						"pointer-events-none absolute left-0 top-2 bottom-2 z-10 w-1 rounded-full",
+						agingLevel === "stuck"
+							? "bg-destructive/80"
+							: "bg-amber-500/70",
+					)}
+				/>
+			)}
 			<TaskCard
 				task={task}
 				onClick={handleClick}

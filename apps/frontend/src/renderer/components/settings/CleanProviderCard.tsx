@@ -4,6 +4,7 @@ import {
 	EyeOff,
 	Key,
 	Loader2,
+	LogIn,
 	MoreHorizontal,
 	Settings,
 } from "lucide-react";
@@ -335,8 +336,14 @@ export function CleanProviderCard({
 		<div className="w-4 h-4 bg-gray-400 rounded" />
 	);
 
+	// An account whose token can no longer be auto-refreshed (revoked/expired
+	// refresh token). Takes visual priority over the generic "active" state so
+	// the card never shows "OAuth connected" and "re-auth required" at once.
+	const needsReauth = provider.realUsageData?.needsReauthentication === true;
+
 	const getStatusColor = () => {
 		if (!provider.isConfigured) return "text-muted-foreground";
+		if (needsReauth) return "text-amber-600 dark:text-amber-500";
 		if (provider.isWorking === false) return "text-destructive";
 		return "text-foreground";
 	};
@@ -344,6 +351,10 @@ export function CleanProviderCard({
 	const getStatusText = () => {
 		if (!provider.isConfigured) {
 			return t("sections.accounts.providerCard.status.notConfigured");
+		}
+
+		if (needsReauth) {
+			return t("sections.accounts.providerCard.needsReauth");
 		}
 
 		if (provider.isWorking === false) {
@@ -355,6 +366,7 @@ export function CleanProviderCard({
 
 	const getCompactStatusText = () => {
 		if (!provider.isConfigured) return "NC"; // Non Configuré
+		if (needsReauth) return "RE-AUTH"; // Token révoqué/expiré
 		if (provider.isWorking === false) return "ERR"; // Erreur
 		return "OK"; // Actif
 	};
@@ -421,6 +433,28 @@ export function CleanProviderCard({
 	};
 
 	const renderAuthStatus = () => {
+		// Re-auth required takes priority over the credential/OAuth badge: the
+		// token exists but is revoked/expired, so showing "OAuth connected" here
+		// would contradict the status. Offer a one-click reconnect instead.
+		if (needsReauth) {
+			return (
+				<div className="flex items-center gap-2 min-w-0">
+					<span className="px-2 py-1 rounded text-xs font-medium text-amber-700 dark:text-amber-500 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 truncate">
+						{t("sections.accounts.providerCard.needsReauth")}
+					</span>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={handleConfigure}
+						className="h-6 px-2 text-xs shrink-0 text-amber-700 dark:text-amber-500 hover:bg-amber-100/60 dark:hover:bg-amber-500/15"
+					>
+						<LogIn className="w-3 h-3 mr-1" />
+						{t("common:usage.reauthToastAction")}
+					</Button>
+				</div>
+			);
+		}
+
 		if (!provider.realApiKeyInfo?.hasKey) {
 			return (
 				<span className="text-gray-400 italic">
@@ -530,8 +564,15 @@ export function CleanProviderCard({
 							className={cn(
 								"w-1.5 h-1.5 rounded-full shrink-0",
 								!provider.isConfigured && "bg-muted-foreground",
-								provider.isWorking === false && "bg-destructive",
 								provider.isConfigured &&
+									needsReauth &&
+									"bg-amber-500 motion-safe:animate-pulse",
+								provider.isConfigured &&
+									!needsReauth &&
+									provider.isWorking === false &&
+									"bg-destructive",
+								provider.isConfigured &&
+									!needsReauth &&
 									provider.isWorking !== false &&
 									"bg-green-500",
 							)}
@@ -673,15 +714,8 @@ export function CleanProviderCard({
 							</span>
 						</div>
 					)}
-
-					{provider.realUsageData?.needsReauthentication && (
-						<div className="flex items-center justify-between text-xs text-red-600">
-							<span>{t("sections.accounts.providerCard.statusLabel")}</span>
-							<span className="font-medium">
-								{t("sections.accounts.providerCard.needsReauth")}
-							</span>
-						</div>
-					)}
+					{/* Re-auth state is surfaced in the header status + auth row above
+					    (with a reconnect action), so it is intentionally not repeated here. */}
 				</div>
 			)}
 		</div>

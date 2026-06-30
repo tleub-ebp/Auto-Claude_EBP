@@ -22,6 +22,9 @@ export const IPC_CHANNELS = {
 	// Kanban preferences (per-project column collapse state)
 	KANBAN_PREFS_GET: "kanbanPrefs:get",
 	KANBAN_PREFS_SAVE: "kanbanPrefs:save",
+	// Kanban board view-state (per-project column order, filters, saved views)
+	KANBAN_STATE_GET: "kanbanState:get",
+	KANBAN_STATE_SAVE: "kanbanState:save",
 
 	// Task operations
 	TASK_LIST: "task:list",
@@ -85,6 +88,7 @@ export const IPC_CHANNELS = {
 
 	// Task phase logs (persistent, collapsible logs by phase)
 	TASK_LOGS_GET: "task:logsGet", // Load logs from spec dir
+	TASK_LOGS_GET_PER_LLM: "task:logsGetPerLlm", // Load per-LLM log files (one per provider/model)
 	TASK_LOGS_WATCH: "task:logsWatch", // Start watching for log changes
 	TASK_LOGS_UNWATCH: "task:logsUnwatch", // Stop watching for log changes
 	TASK_LOGS_CHANGED: "task:logsChanged", // Event: logs changed (main -> renderer)
@@ -514,10 +518,14 @@ export const IPC_CHANNELS = {
 	OLLAMA_CHECK_STATUS: "ollama:checkStatus",
 	OLLAMA_CHECK_INSTALLED: "ollama:checkInstalled",
 	OLLAMA_INSTALL: "ollama:install",
+	OLLAMA_START_SERVER: "ollama:startServer",
+	OLLAMA_ENSURE: "ollama:ensure",
+	OLLAMA_INSTALL_PROGRESS: "ollama:installProgress",
 	OLLAMA_LIST_MODELS: "ollama:listModels",
 	OLLAMA_LIST_EMBEDDING_MODELS: "ollama:listEmbeddingModels",
 	OLLAMA_PULL_MODEL: "ollama:pullModel",
 	OLLAMA_PULL_PROGRESS: "ollama:pullProgress",
+	OLLAMA_DELETE_MODEL: "ollama:deleteModel",
 
 	// WorkPilot AI source environment configuration
 	AUTOBUILD_SOURCE_ENV_GET: "autobuild:source:env:get",
@@ -663,6 +671,9 @@ export const IPC_CHANNELS = {
 	MCP_MARKETPLACE_GET_BUILDER_PROJECTS: "mcpMarketplace:getBuilderProjects", // List builder projects
 	MCP_MARKETPLACE_DELETE_BUILDER: "mcpMarketplace:deleteBuilder", // Delete builder project
 	MCP_MARKETPLACE_EXPORT_BUILDER: "mcpMarketplace:exportBuilder", // Export builder as MCP server
+
+	// Hugging Face Hub discovery (via the official HF MCP server)
+	HUGGINGFACE_SEARCH_MODELS: "huggingface:searchModels", // Live model search on the Hub
 
 	// Sentry error reporting
 	SENTRY_STATE_CHANGED: "sentry:state-changed", // Notify main process when setting changes
