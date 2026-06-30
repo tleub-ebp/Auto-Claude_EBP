@@ -1,11 +1,15 @@
 import {
 	ArrowDownNarrowWide,
 	ArrowUpNarrowWide,
+	Bookmark,
 	Check,
+	Plus,
 	SlidersHorizontal,
 	Search,
+	Trash2,
 	X,
 } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	TASK_CATEGORY_COLORS,
@@ -118,9 +122,20 @@ export function KanbanToolbar({ projectPath }: KanbanToolbarProps) {
 	const setSortField = useKanbanFilterStore((s) => s.setSortField);
 	const toggleSortDirection = useKanbanFilterStore((s) => s.toggleSortDirection);
 	const clearFilters = useKanbanFilterStore((s) => s.clearFilters);
+	const savedViews = useKanbanFilterStore((s) => s.savedViews);
+	const saveCurrentView = useKanbanFilterStore((s) => s.saveCurrentView);
+	const applyView = useKanbanFilterStore((s) => s.applyView);
+	const deleteView = useKanbanFilterStore((s) => s.deleteView);
+	const [viewName, setViewName] = useState("");
 
 	const count = activeFilterCount(filters);
 	const filtersActive = hasActiveFilters(filters);
+
+	const commitSaveView = () => {
+		if (!viewName.trim()) return;
+		saveCurrentView(viewName);
+		setViewName("");
+	};
 
 	const sourceLabel = (source: TaskSource): string =>
 		t(`kanban.filter.sources.${source}`);
@@ -281,6 +296,91 @@ export function KanbanToolbar({ projectPath }: KanbanToolbarProps) {
 								)}
 							</div>
 						</FilterSection>
+					</div>
+				</PopoverContent>
+			</Popover>
+
+			<Separator orientation="vertical" className="h-5" />
+
+			{/* Saved views: named filter+sort presets */}
+			<Popover>
+				<PopoverTrigger asChild>
+					<Button
+						variant="ghost"
+						size="sm"
+						className="h-8 gap-2 rounded-full text-muted-foreground hover:text-foreground transition-colors"
+						title={t("kanban.views.title")}
+					>
+						<Bookmark className="h-4 w-4" />
+						{t("kanban.views.button")}
+						{savedViews.length > 0 && (
+							<span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-bold leading-none tabular-nums">
+								{savedViews.length}
+							</span>
+						)}
+					</Button>
+				</PopoverTrigger>
+				<PopoverContent align="start" className="w-72 p-0 overflow-hidden">
+					<div className="flex items-center gap-2 border-b border-border/60 bg-linear-to-br from-primary/5 to-transparent px-4 py-2.5">
+						<Bookmark className="h-4 w-4 text-primary" />
+						<h3 className="text-sm font-semibold">
+							{t("kanban.views.title")}
+						</h3>
+					</div>
+					<div className="space-y-3 p-3">
+						{savedViews.length === 0 ? (
+							<p className="px-0.5 text-xs text-muted-foreground">
+								{t("kanban.views.empty")}
+							</p>
+						) : (
+							<div className="space-y-1">
+								{savedViews.map((view) => (
+									<div
+										key={view.id}
+										className="group flex items-center gap-1"
+									>
+										<button
+											type="button"
+											onClick={() => applyView(view.id)}
+											className="flex-1 truncate rounded px-2 py-1.5 text-left text-sm hover:bg-muted/60 transition-colors"
+										>
+											{view.name}
+										</button>
+										<Button
+											variant="ghost"
+											size="icon"
+											className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+											onClick={() => deleteView(view.id)}
+											aria-label={t("kanban.views.delete")}
+										>
+											<Trash2 className="h-3.5 w-3.5" />
+										</Button>
+									</div>
+								))}
+							</div>
+						)}
+						<Separator />
+						<div className="flex items-center gap-2">
+							<Input
+								value={viewName}
+								onChange={(e) => setViewName(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") commitSaveView();
+								}}
+								placeholder={t("kanban.views.namePlaceholder")}
+								aria-label={t("kanban.views.save")}
+								className="h-8"
+							/>
+							<Button
+								size="icon"
+								className="h-8 w-8 shrink-0"
+								disabled={!viewName.trim()}
+								onClick={commitSaveView}
+								aria-label={t("kanban.views.save")}
+							>
+								<Plus className="h-4 w-4" />
+							</Button>
+						</div>
 					</div>
 				</PopoverContent>
 			</Popover>

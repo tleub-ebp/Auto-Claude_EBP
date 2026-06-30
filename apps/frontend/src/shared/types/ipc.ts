@@ -87,7 +87,7 @@ import type {
 	LinearSyncStatus,
 	LinearTeam,
 } from "./integrations";
-import type { KanbanPreferences } from "./kanban";
+import type { KanbanBoardState, KanbanPreferences } from "./kanban";
 import type {
 	APIProfile,
 	DiscoverModelsResult,
@@ -244,6 +244,14 @@ export interface ElectronAPI {
 	saveKanbanPreferences: (
 		projectId: string,
 		preferences: KanbanPreferences,
+	) => Promise<IPCResult>;
+	// Kanban board view-state (per-project column order, filters, saved views)
+	getKanbanBoardState: (
+		projectId: string,
+	) => Promise<IPCResult<KanbanBoardState | null>>;
+	saveKanbanBoardState: (
+		projectId: string,
+		state: KanbanBoardState,
 	) => Promise<IPCResult>;
 
 	// Task operations

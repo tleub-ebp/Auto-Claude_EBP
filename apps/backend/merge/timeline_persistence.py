@@ -12,8 +12,10 @@ This module handles:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -135,5 +137,21 @@ class TimelinePersistence:
             Path to the timeline JSON file
         """
         # Encode path: src/App.tsx -> src_App.tsx.json
-        safe_name = file_path.replace("/", "_").replace("\\", "_")
+        # Replace EVERY character Windows forbids in a filename (`<>:"/\|?*`,
+        # control chars), not just slashes — git can hand us quoted/escaped paths
+        # for names with spaces or non-ASCII (e.g. accented ".ebp" files), which
+        # otherwise produce an invalid filename and an "[Errno 22] Invalid
+        # argument" on save.
+        safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", file_path)
+        # Windows also rejects names ending in a space or dot.
+        safe_name = safe_name.strip(" .") or "unnamed"
+        # Cap length so deeply-nested paths don't blow past MAX_PATH; keep a hash
+        # suffix so distinct long paths never collide.
+        if len(safe_name) > 200:
+            # Not a security hash — just a short collision-avoidance suffix for
+            # the filename, so flag usedforsecurity=False (clears Bandit B324).
+            digest = hashlib.sha1(
+                file_path.encode("utf-8"), usedforsecurity=False
+            ).hexdigest()[:12]
+            safe_name = f"{safe_name[:150]}_{digest}"
         return self.timelines_dir / f"{safe_name}.json"

@@ -1,6 +1,6 @@
 ---
 name: bmad-bmm-technical-research
-description: Conduct technical research on technologies and architecture. Use when the user says ""create a technical research report on [topic]"".
+description: Conduct technical research on technologies and architecture. Use when the user says "create a technical research report on [topic]".
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:

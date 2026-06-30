@@ -1004,58 +1004,70 @@ async def test_provider_api_key(request: Request, provider: str, payload: dict):
         except Exception as e:
             return {"success": False, "error": _safe_error_message(e)}
 
-    # --- Ollama (local — no key needed) ---
-    if provider == "ollama":
+    # --- Ollama / local LLM (no key needed) ---
+    if provider in ("ollama", "local", "lmstudio"):
 
-        def build_ollama_url(raw_base_url: str | None) -> str:
-            """
-            Build a safe Ollama URL from an optional base URL.
+        def build_local_root(raw_base_url: str | None) -> str | None:
+            """Return a safe local server root (no path) from an optional URL.
 
-            Only allow localhost/127.0.0.1 on the standard Ollama port.
-            Fall back to the default if validation fails.
+            Accepts any localhost/127.0.0.1 port (Ollama 11434, LM Studio 1234,
+            llama.cpp, vLLM, …) so the test is provider-agnostic. Rejects any
+            non-local host (SSRF) and non-http(s) scheme. Returns None if invalid.
             """
             default_base = "http://localhost:11434"
             if not raw_base_url:
-                return default_base + "/api/tags"
+                return default_base
 
             try:
                 parsed = urlparse(raw_base_url)
             except Exception:
-                # Malformed URL; use safe default
-                return default_base + "/api/tags"
+                return default_base
 
-            # Require HTTP scheme
-            if parsed.scheme not in ("http",):
-                return default_base + "/api/tags"
+            if parsed.scheme not in ("http", "https"):
+                return None
 
-            # Only allow localhost-style hosts
             hostname = parsed.hostname or ""
-            allowed_hosts = {"localhost", "127.0.0.1"}
-            if hostname not in allowed_hosts:
-                return default_base + "/api/tags"
+            if hostname not in ("localhost", "127.0.0.1"):
+                # Local LLM servers are local by definition — refuse anything
+                # else to avoid turning this endpoint into an SSRF probe.
+                return None
 
-            # Enforce allowed port (default 11434 if missing)
-            port = parsed.port or 11434
-            if port != 11434:
-                return default_base + "/api/tags"
+            root = f"{parsed.scheme}://{hostname}"
+            if parsed.port:
+                root += f":{parsed.port}"
+            root = root.rstrip("/")
+            # Strip any OpenAI-style suffix the user may have included.
+            for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
+                if root.endswith(suffix):
+                    root = root[: -len(suffix)].rstrip("/")
+                    break
+            return root
 
-            safe_base = f"{parsed.scheme}://{hostname}:{port}"
-            return safe_base + "/api/tags"
-
-        try:
-            url = build_ollama_url(base_url)
-            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
-                resp = await client.get(url, timeout=5)
-            if resp.status_code == 200:
-                return {"success": True}
+        root = build_local_root(base_url)
+        if root is None:
             return {
                 "success": False,
-                "error": f"Ollama returned HTTP {resp.status_code}",
+                "error": "Only local (localhost/127.0.0.1) URLs are allowed.",
+            }
+        # Probe the OpenAI-compatible endpoint first (LM Studio, vLLM, llama.cpp,
+        # Ollama ≥ /v1), then Ollama's native /api/tags.
+        try:
+            async with httpx.AsyncClient(timeout=DEFAULT_HTTP_TIMEOUT) as client:
+                for path in ("/v1/models", "/api/tags"):
+                    try:
+                        resp = await client.get(f"{root}{path}", timeout=5)
+                    except httpx.HTTPError:
+                        continue
+                    if resp.status_code == 200:
+                        return {"success": True}
+            return {
+                "success": False,
+                "error": "Local LLM server not reachable (tried /v1/models and /api/tags).",
             }
         except Exception as e:
             return {
                 "success": False,
-                "error": f"Ollama not reachable: {_safe_error_message(e)}",
+                "error": f"Local LLM server not reachable: {_safe_error_message(e)}",
             }
 
     return {

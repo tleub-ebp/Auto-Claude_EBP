@@ -427,6 +427,49 @@ export class CredentialManager extends EventEmitter {
 				return await this.testWindsurfProvider();
 			}
 
+			// Cas spécial pour le LLM local (Ollama / LM Studio / llama.cpp / vLLM):
+			// aucune clé API requise — on sonde la connectivité du serveur local au
+			// lieu d'exiger une clé (sinon "Provider not configured" à tort).
+			if (provider === "ollama" || provider === "local" || provider === "lmstudio") {
+				let raw = "";
+				try {
+					const settings = readSettingsFile();
+					// biome-ignore lint/suspicious/noExplicitAny: settings shape is loose
+					const s = settings as any;
+					raw = (s?.globalOllamaApiUrl || s?.globalOllamaBaseUrl || "") as string;
+				} catch {
+					/* settings unavailable — fall back to default below */
+				}
+				let root = (raw.trim() || "http://localhost:11434").replace(/\/+$/, "");
+				root = root
+					.replace(/\/v1\/chat\/completions$/, "")
+					.replace(/\/chat\/completions$/, "")
+					.replace(/\/v1$/, "");
+				// Probe the OpenAI-compatible endpoint first (LM Studio, vLLM,
+				// llama.cpp, Ollama >= /v1), then Ollama's native /api/tags.
+				for (const apiPath of ["/v1/models", "/api/tags"]) {
+					try {
+						const resp = await fetch(`${root}${apiPath}`, {
+							method: "GET",
+							signal: AbortSignal.timeout(5000),
+						});
+						if (resp.ok) {
+							return {
+								success: true,
+								message: `Serveur LLM local accessible (${root})`,
+								details: { baseUrl: root, endpoint: apiPath },
+							};
+						}
+					} catch {
+						/* try the next path */
+					}
+				}
+				return {
+					success: false,
+					message: `Serveur LLM local injoignable à ${root}. Vérifie qu'Ollama/LM Studio tourne et que l'URL est correcte.`,
+				};
+			}
+
 			// Pour les autres providers (openai, mistral, google, deepseek, grok, ollama, etc.)
 			// Source 1: Chercher un profil API dans profiles.json (Custom Endpoints)
 			let apiKey: string | undefined;
@@ -1601,13 +1644,29 @@ export class CredentialManager extends EventEmitter {
 				const baseUrlVar = baseUrlMap[selectedProvider];
 				if (baseUrlVar && baseUrl) env[baseUrlVar] = baseUrl;
 
-				// Ollama: just inject base URL if configured
+				// Ollama / local LLM: inject base URL if configured.
+				// The provider form, detection and service all persist this under
+				// `globalOllamaApiUrl` — read that first (the legacy
+				// `globalOllamaBaseUrl` key was never written anywhere). Without this
+				// the configured URL never reached the backend, so LM Studio (1234)
+				// and custom Ollama ports silently fell back to the default.
 				if (selectedProvider === "ollama") {
 					// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
-					const ollamaUrl = (settings as any)?.globalOllamaBaseUrl as
+					const s = settings as any;
+					const ollamaUrl = (s?.globalOllamaApiUrl ?? s?.globalOllamaBaseUrl) as
 						| string
 						| undefined;
 					if (ollamaUrl?.trim()) env.OLLAMA_BASE_URL = ollamaUrl.trim();
+					// The model the user picked (incl. HF-discovered ids like
+					// "hf.co/org/model") is stored under `globalOllamaModel`. Inject it
+					// so the backend asks the local server for THIS model instead of
+					// falling back to the registry default ("llama3.3"). LOCAL_LLM_MODEL
+					// is the generic alias consumed by the same backend resolution.
+					const ollamaModel = s?.globalOllamaModel as string | undefined;
+					if (ollamaModel?.trim()) {
+						env.OLLAMA_MODEL = ollamaModel.trim();
+						env.LOCAL_LLM_MODEL = ollamaModel.trim();
+					}
 				}
 
 				return Object.fromEntries(

@@ -1,6 +1,6 @@
 ---
 name: bmad-bmm-domain-research
-description: Conduct domain and industry research. Use when the user says ""lets create a research report on [domain or industry]""
+description: Conduct domain and industry research. Use when the user says "lets create a research report on [domain or industry]"
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:

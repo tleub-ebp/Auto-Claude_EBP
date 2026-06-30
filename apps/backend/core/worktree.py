@@ -2804,6 +2804,83 @@ class WorktreeManager:
 
         return None
 
+    def _get_existing_azure_pr_url(
+        self, spec_name: str, target_branch: str | None = None
+    ) -> str | None:
+        """Best-effort lookup of an existing open Azure DevOps PR for this branch.
+
+        Mirrors the existing-PR probe inside ``create_azure_pull_request`` but
+        as a standalone read-only query, so a redundant push can be skipped
+        when the PR already exists. A read (GET) often still succeeds when
+        ``git push`` is rejected with 403 (e.g. a read-scoped PAT). Never raises.
+        """
+        info = self.get_worktree_info(spec_name)
+        if not info:
+            return None
+
+        org = extract_azure_devops_org(self.project_dir)
+        project = extract_azure_devops_project(self.project_dir)
+        repository = extract_azure_devops_repository(self.project_dir)
+        if not (org and project and repository):
+            return None
+
+        creds = self._get_azure_devops_credentials()
+        if not creds:
+            return None
+
+        target = target_branch or self.base_branch
+        try:
+            from urllib.parse import quote
+
+            import requests
+
+            project_encoded = quote(project, safe="")
+            repository_encoded = quote(repository, safe="")
+            base_url = (
+                f"https://dev.azure.com/{quote(org, safe='')}/{project_encoded}"
+                f"/_apis/git/repositories/{repository_encoded}"
+            )
+            search_url = (
+                f"{base_url}/pullrequests?api-version=7.1"
+                f"&searchCriteria.sourceRefName=refs/heads/{info.branch}"
+                f"&searchCriteria.targetRefName=refs/heads/{target}"
+                f"&searchCriteria.status=active"
+            )
+            resp = requests.get(search_url, auth=creds, timeout=30)
+            if resp.status_code == 200:
+                prs = resp.json().get("value", [])
+                if prs:
+                    pr_id = prs[0].get("pullRequestId")
+                    return (
+                        f"https://dev.azure.com/{quote(org, safe='')}"
+                        f"/{project_encoded}/_git/{repository_encoded}"
+                        f"/pullrequest/{pr_id}"
+                    )
+        except Exception as e:
+            debug_warning("worktree", f"Could not get existing Azure PR URL: {e}")
+
+        return None
+
+    def find_existing_pr_url(
+        self, spec_name: str, target_branch: str | None = None
+    ) -> str | None:
+        """Return the URL of an existing open PR/MR for this spec's branch, or None.
+
+        Provider-aware and best-effort — used to finalize a task without a
+        redundant push when the PR already exists. Never raises.
+        """
+        try:
+            provider = detect_git_provider(self.project_dir)
+        except Exception:
+            provider = None
+
+        if provider == "azure_devops":
+            return self._get_existing_azure_pr_url(spec_name, target_branch)
+        if provider == "gitlab":
+            return self._get_existing_mr_url(spec_name, target_branch)
+        # Default to GitHub (gh CLI handles the common case).
+        return self._get_existing_pr_url(spec_name, target_branch)
+
     def _apply_discard_list(self, spec_name: str, target_branch: str) -> list[str]:
         """Applique la ``.workpilot-discard-list`` au worktree avant le push.
 

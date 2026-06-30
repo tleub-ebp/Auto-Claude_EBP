@@ -40,6 +40,11 @@ interface KanbanSettingsState {
 	toggleColumnLocked: (column: TaskStatusColumn) => void;
 	/** Set column locked state explicitly */
 	setColumnLocked: (column: TaskStatusColumn, isLocked: boolean) => void;
+	/** Set (or clear, with `undefined`) the soft WIP limit for a column */
+	setColumnWipLimit: (
+		column: TaskStatusColumn,
+		wipLimit: number | undefined,
+	) => void;
 	/** Set column display order and persist to localStorage */
 	setColumnOrder: (order: TaskStatusColumn[], projectId?: string) => void;
 	/** Load preferences from main process (IPC), falling back to localStorage */
@@ -163,6 +168,16 @@ function validatePreferences(data: unknown): data is KanbanColumnPreferences {
 		) {
 			return false;
 		}
+
+		// wipLimit is optional; when present it must be a positive integer.
+		if (
+			cp.wipLimit !== undefined &&
+			(typeof cp.wipLimit !== "number" ||
+				!Number.isFinite(cp.wipLimit) ||
+				cp.wipLimit < 1)
+		) {
+			return false;
+		}
 	}
 
 	return true;
@@ -231,6 +246,17 @@ export const useKanbanSettingsStore = create<KanbanSettingsState>(
 					);
 				} catch {
 					// localStorage write failed, non-critical
+				}
+				// Persist to main process too, so the order survives across machines
+				// in server mode (localStorage is per-device only).
+				try {
+					globalThis.electronAPI
+						.saveKanbanBoardState(projectId, { columnOrder: order })
+						.catch(() => {
+							// non-critical — localStorage cache still holds the order
+						});
+				} catch {
+					// electronAPI unavailable (e.g. tests) — ignore
 				}
 			}
 		},
@@ -322,6 +348,28 @@ export const useKanbanSettingsStore = create<KanbanSettingsState>(
 			});
 		},
 
+		setColumnWipLimit: (column, wipLimit) => {
+			set((state) => {
+				if (!state.columnPreferences) return state;
+
+				// Clamp to a sane positive integer, or clear the limit entirely.
+				const normalized =
+					wipLimit === undefined || !Number.isFinite(wipLimit) || wipLimit < 1
+						? undefined
+						: Math.floor(wipLimit);
+
+				return {
+					columnPreferences: {
+						...state.columnPreferences,
+						[column]: {
+							...state.columnPreferences[column],
+							wipLimit: normalized,
+						},
+					},
+				};
+			});
+		},
+
 		loadPreferences: (projectId) => {
 			// Clear any pending save from previous project to prevent cross-project contamination
 			if (saveKanbanPrefsTimeout) {
@@ -368,6 +416,31 @@ export const useKanbanSettingsStore = create<KanbanSettingsState>(
 			} catch {
 				set({ columnOrder: [...TASK_STATUS_COLUMNS] });
 			}
+
+			// Async: pull the column order from the main process (source of truth,
+			// shared across machines in server mode), overriding the local cache.
+			(async () => {
+				try {
+					const result =
+						await globalThis.electronAPI.getKanbanBoardState(projectId);
+					// Discard if the project changed while the IPC was in flight.
+					if (currentLoadingProjectId !== projectId) return;
+					const order = result?.data?.columnOrder;
+					if (result?.success && validateColumnOrder(order)) {
+						set({ columnOrder: order });
+						try {
+							localStorage.setItem(
+								getColumnOrderKey(projectId),
+								JSON.stringify(order),
+							);
+						} catch {
+							// localStorage write failed, non-critical
+						}
+					}
+				} catch {
+					// IPC unavailable/failed — keep localStorage/default order
+				}
+			})();
 
 			// Then, async load from main process via IPC (source of truth)
 			(async () => {

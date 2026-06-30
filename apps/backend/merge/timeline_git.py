@@ -63,6 +63,7 @@ class TimelineGitHelper:
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=True,
                 env=get_isolated_git_env(),
             )
@@ -89,6 +90,7 @@ class TimelineGitHelper:
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 env=get_isolated_git_env(),
             )
             if result.returncode == 0:
@@ -111,6 +113,10 @@ class TimelineGitHelper:
             result = subprocess.run(
                 [
                     "git",
+                    # Emit paths as UTF-8 verbatim (no octal-escaped, double-quoted
+                    # names for accented/space paths like French ".ebp" files).
+                    "-c",
+                    "core.quotepath=false",
                     "diff-tree",
                     "--no-commit-id",
                     "--name-only",
@@ -120,6 +126,7 @@ class TimelineGitHelper:
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 check=True,
                 env=get_isolated_git_env(),
             )
@@ -145,6 +152,7 @@ class TimelineGitHelper:
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 env=env,
             )
             if result.returncode == 0:
@@ -155,6 +163,7 @@ class TimelineGitHelper:
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 env=env,
             )
             if result.returncode == 0:
@@ -165,6 +174,7 @@ class TimelineGitHelper:
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 env=env,
             )
             if result.returncode == 0:
@@ -228,10 +238,18 @@ class TimelineGitHelper:
 
         try:
             result = subprocess.run(
-                ["git", "diff", "--name-only", f"{target_branch}...HEAD"],
+                [
+                    "git",
+                    "-c",
+                    "core.quotepath=false",
+                    "diff",
+                    "--name-only",
+                    f"{target_branch}...HEAD",
+                ],
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 env=get_isolated_git_env(),
             )
 
@@ -266,6 +284,7 @@ class TimelineGitHelper:
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 env=get_isolated_git_env(),
             )
 
@@ -299,6 +318,7 @@ class TimelineGitHelper:
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 env=env,
             )
             if result.returncode == 0 and result.stdout.strip():
@@ -316,6 +336,7 @@ class TimelineGitHelper:
                     cwd=worktree_path,
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     env=env,
                 )
                 if result.returncode == 0:
@@ -342,6 +363,7 @@ class TimelineGitHelper:
                 cwd=self.project_path,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 env=get_isolated_git_env(),
             )
 

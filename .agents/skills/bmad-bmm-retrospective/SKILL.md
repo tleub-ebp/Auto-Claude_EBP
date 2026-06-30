@@ -1,6 +1,6 @@
 ---
 name: bmad-bmm-retrospective
-description: Post-epic review to extract lessons and assess success. Use when the user says ""run a retrospective"" or ""lets retro the epic [epic]""
+description: Post-epic review to extract lessons and assess success. Use when the user says "run a retrospective" or "lets retro the epic [epic]"
 ---
 
 IT IS CRITICAL THAT YOU FOLLOW THESE STEPS - while staying in character as the current agent persona you may have loaded:

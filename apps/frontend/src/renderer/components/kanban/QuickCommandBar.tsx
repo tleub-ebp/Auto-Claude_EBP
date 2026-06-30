@@ -1,4 +1,4 @@
-import { Loader2, Play, Terminal } from "lucide-react";
+import { ListPlus, Loader2, Play, Terminal } from "lucide-react";
 import {
 	type KeyboardEvent,
 	useCallback,
@@ -9,6 +9,8 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { useProjectStore } from "../../stores/project-store";
+import { createTask } from "../../stores/task-store";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 
@@ -53,6 +55,8 @@ export function QuickCommandBar({
 	const [isRunning, setIsRunning] = useState(false);
 	const [open, setOpen] = useState(false);
 	const inputRef = useRef<HTMLInputElement | null>(null);
+	// Active Kanban tab — needed to attach a "Run as task" creation to a project.
+	const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
 	// Fetch command list whenever the active project changes. Errors are
 	// swallowed: an empty picker is acceptable, we don't want to spam toasts
@@ -148,8 +152,68 @@ export function QuickCommandBar({
 		[projectPath, parseInput, t],
 	);
 
+	// "Run as task": instead of the one-shot run, seed a real Kanban task with
+	// the command's instruction body so it flows through the interactive pipeline
+	// (planning, plan-approval, conversation). The body is resolved server-side
+	// from the agnostic .agents/skills/ source.
+	const runAsTask = useCallback(
+		async (override?: string) => {
+			if (!projectPath || !activeProjectId) {
+				globalThis.window.alert(t("tasks:kanban.quickCommand.missingProject"));
+				return;
+			}
+			const parsed = override
+				? { command: override, args: "" }
+				: parseInput();
+			if (!parsed) return;
+			setIsRunning(true);
+			setOpen(false);
+			try {
+				const url = `${BACKEND_URL}/api/slash-commands/body?project_dir=${encodeURIComponent(
+					projectPath,
+				)}&command=${encodeURIComponent(parsed.command)}`;
+				const res = await fetch(url);
+				const data = await res.json();
+				if (!res.ok || !data?.success || !data.body) {
+					globalThis.window.alert(
+						`${t("tasks:kanban.quickCommand.errorTitle")}: ${data?.detail ?? data?.error ?? "unknown"}`,
+					);
+					return;
+				}
+				const description = parsed.args.trim()
+					? `${data.body}\n\nArguments: ${parsed.args.trim()}`
+					: data.body;
+				const created = await createTask(
+					activeProjectId,
+					`/${parsed.command}`,
+					description,
+				);
+				if (created) {
+					console.info(
+						`[QuickCommand] created task for /${parsed.command}`,
+						created.id,
+					);
+				} else {
+					globalThis.window.alert(t("tasks:kanban.quickCommand.errorTitle"));
+				}
+			} catch (err) {
+				globalThis.window.alert(
+					`${t("tasks:kanban.quickCommand.errorTitle")}: ${(err as Error).message}`,
+				);
+			} finally {
+				setIsRunning(false);
+				setInput("");
+			}
+		},
+		[projectPath, activeProjectId, parseInput, t],
+	);
+
 	const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
-		if (e.key === "Enter") {
+		if (e.key === "Enter" && (e.shiftKey || e.metaKey || e.ctrlKey)) {
+			// Shift/Ctrl/Cmd+Enter → run as an interactive task.
+			e.preventDefault();
+			void runAsTask();
+		} else if (e.key === "Enter") {
 			e.preventDefault();
 			void runCommand();
 		} else if (e.key === "Escape") {
@@ -230,6 +294,21 @@ export function QuickCommandBar({
 						</span>
 					</>
 				)}
+			</Button>
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				disabled={disabled || input.trim().length === 0}
+				onClick={() => void runAsTask()}
+				className="gap-1 text-muted-foreground hover:text-foreground"
+				aria-label={t("tasks:kanban.quickCommand.runAsTaskLabel")}
+				title={t("tasks:kanban.quickCommand.runAsTaskHint")}
+			>
+				<ListPlus className="h-3.5 w-3.5" />
+				<span className="sr-only">
+					{t("tasks:kanban.quickCommand.runAsTaskLabel")}
+				</span>
 			</Button>
 
 			{open && filtered.length > 0 && (
