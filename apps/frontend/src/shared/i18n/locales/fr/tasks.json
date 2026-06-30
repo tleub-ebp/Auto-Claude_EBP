@@ -807,6 +807,19 @@
 			"downloadable": "à télécharger",
 			"downloadStartedTitle": "Téléchargement du modèle",
 			"downloadStartedDesc": "{{model}} se télécharge en arrière-plan."
+		},
+		"modelGroup": {
+			"toggleAria": "Afficher ou masquer les logs du modèle {{model}}",
+			"unknownModel": "Modèle inconnu"
+		},
+		"compare": {
+			"button": "Comparer",
+			"openAria": "Comparer les modèles",
+			"openTooltip": "Comparer les plans des modèles côte à côte",
+			"title": "Comparaison des plans",
+			"close": "Fermer",
+			"swapAria": "Inverser les colonnes",
+			"selectAria": "Choisir le modèle à comparer"
 		}
 	},
 	"modal": {

@@ -142,3 +142,25 @@ class TestValidateInitScript:
     def test_random_script_rejected(self) -> None:
         ok, _ = validate_init_script("./other.sh")
         assert not ok
+
+    # ── Cross-OS invocations (Windows/macOS/Linux) ──
+
+    def test_bash_init_sh_allowed(self) -> None:
+        assert validate_init_script("bash ./init.sh")[0]
+        assert validate_init_script("bash init.sh")[0]
+        assert validate_init_script("sh ./init.sh")[0]
+
+    def test_powershell_init_ps1_allowed(self) -> None:
+        assert validate_init_script(
+            "powershell -ExecutionPolicy Bypass -File ./init.ps1"
+        )[0]
+        assert validate_init_script("pwsh -File ./init.ps1")[0]
+        assert validate_init_script("./init.ps1")[0]
+
+    def test_interpreter_with_pathed_script_rejected(self) -> None:
+        # The core attack: an interpreter must not run a pathed/staged script.
+        assert not validate_init_script("bash evil/init.sh")[0]
+        assert not validate_init_script("powershell -File ../init.ps1")[0]
+
+    def test_interpreter_without_script_rejected(self) -> None:
+        assert not validate_init_script("bash")[0]
