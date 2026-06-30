@@ -23,14 +23,18 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+	AlertTriangle,
 	Archive,
 	Ban,
+	Check,
 	CheckCheck,
 	CheckCircle2,
 	ChevronLeft,
 	ChevronRight,
 	ChevronsRight,
+	Coins,
 	Eye,
+	Gauge,
 	GitPullRequest,
 	GripVertical,
 	Inbox,
@@ -40,6 +44,7 @@ import {
 	Plus,
 	RefreshCw,
 	Settings,
+	Timer,
 	Trash2,
 	Unlock,
 	X,
@@ -50,7 +55,13 @@ import {
 	TASK_STATUS_COLUMNS,
 	TASK_STATUS_LABELS,
 } from "../../shared/constants";
-import type { Task, TaskOrderState, TaskStatus } from "../../shared/types";
+import type {
+	IPCResult,
+	PlanConflictReport,
+	Task,
+	TaskOrderState,
+	TaskStatus,
+} from "../../shared/types";
 import type {
 	AzureDevOpsWorkItem,
 	JiraWorkItem,
@@ -60,7 +71,10 @@ import { parseAcceptanceCriteriaText } from "../../shared/utils/acceptance-crite
 import AzureDevOpsLogo from "../assets/logos/azure-devops.svg";
 import JiraLogo from "../assets/logos/jira.svg";
 import { useViewState } from "../contexts/ViewStateContext";
+import { useKanbanAccessibility } from "../hooks/useKanbanAccessibility";
 import { useToast } from "../hooks/use-toast";
+import { formatAgingDuration, listAgingTasks } from "../lib/kanban-aging";
+import { computeBoardCostForecast } from "../lib/kanban-cost";
 import {
 	compareTasksBySort,
 	taskMatchesFilters,
@@ -79,6 +93,10 @@ import {
 	useProjectEnvStore,
 } from "../stores/project-env-store";
 import {
+	type BoardConflictInfo,
+	useKanbanConflictStore,
+} from "../stores/kanban-conflict-store";
+import {
 	updateProjectSettings,
 	useProjectStore,
 } from "../stores/project-store";
@@ -95,6 +113,7 @@ import { AzureDevOpsSidePanel } from "./azure-devops-import/AzureDevOpsSidePanel
 import type { ImportableWorkItem } from "./azure-devops-import/ImportConfirmDialog";
 import { ImportConfirmDialog } from "./azure-devops-import/ImportConfirmDialog";
 import { BulkPRDialog } from "./BulkPRDialog";
+import { formatCost } from "./formula-lab/formula-utils";
 import { JiraSidePanel } from "./jira-import/JiraSidePanel";
 import { KanbanToolbar } from "./kanban/KanbanToolbar";
 import { PRFilesModal } from "./PRFilesModal";
@@ -117,6 +136,8 @@ import {
 } from "./ui/alert-dialog";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
+import { Input } from "./ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { WorktreeCleanupDialog } from "./WorktreeCleanupDialog";
@@ -128,6 +149,25 @@ function isValidDropColumn(
 ): id is (typeof TASK_STATUS_COLUMNS)[number] {
 	return VALID_DROP_COLUMNS.has(id);
 }
+
+// Statuses whose plan is (or will be) carried by a live worktree, and thus can
+// collide with another task's plan. Mirrors CONFLICT_RELEVANT_STATUSES in the
+// main-process plan-conflicts util (kept in sync manually — the main util can't
+// be imported into the renderer bundle).
+const CONFLICT_RELEVANT_STATUSES = new Set<TaskStatus>([
+	"queue",
+	"in_progress",
+	"ai_review",
+	"human_review",
+	"error",
+]);
+
+// Max cards a single column renders before collapsing the tail behind a
+// "show more" toggle. Huge columns (e.g. a freshly bulk-imported backlog)
+// otherwise mount hundreds of cards and jank the board. Capping keeps the DOM
+// bounded while reusing the exact same (drag-enabled) render path for the
+// visible slice — no change to drag-and-drop behaviour.
+const COLUMN_RENDER_CAP = 60;
 
 // Columns where external work items (Azure DevOps / Jira) can be dropped
 const IMPORT_ALLOWED_COLUMNS = new Set<string>([
@@ -192,6 +232,10 @@ interface DroppableColumnProps {
 	onQueueSettings?: () => void;
 	onQueueAll?: () => void;
 	maxParallelTasks?: number;
+	/** Soft WIP limit for this column (undefined = no limit). */
+	wipLimit?: number;
+	/** Set or clear (undefined) the soft WIP limit for this column. */
+	onSetWipLimit?: (limit: number | undefined) => void;
 	archivedCount?: number;
 	showArchived?: boolean;
 	onToggleArchived?: () => void;
@@ -264,6 +308,8 @@ function droppableColumnPropsAreEqual(
 	if (prevProps.onQueueSettings !== nextProps.onQueueSettings) return false;
 	if (prevProps.onQueueAll !== nextProps.onQueueAll) return false;
 	if (prevProps.maxParallelTasks !== nextProps.maxParallelTasks) return false;
+	if (prevProps.wipLimit !== nextProps.wipLimit) return false;
+	if (prevProps.onSetWipLimit !== nextProps.onSetWipLimit) return false;
 	if (prevProps.archivedCount !== nextProps.archivedCount) return false;
 	if (prevProps.showArchived !== nextProps.showArchived) return false;
 	if (prevProps.onToggleArchived !== nextProps.onToggleArchived) return false;
@@ -359,6 +405,107 @@ const getEmptyStateContent = (
 	}
 };
 
+interface WipLimitPopoverProps {
+	wipLimit?: number;
+	onSetWipLimit: (limit: number | undefined) => void;
+}
+
+/**
+ * Small popover to set or clear a column's soft WIP limit. Kept self-contained
+ * so the memoized DroppableColumn only re-renders on the `wipLimit` value.
+ */
+function WipLimitPopover({ wipLimit, onSetWipLimit }: WipLimitPopoverProps) {
+	const { t } = useTranslation(["tasks"]);
+	const [open, setOpen] = useState(false);
+	const [draft, setDraft] = useState<string>(wipLimit ? String(wipLimit) : "");
+
+	// Re-sync the input whenever the popover opens or the stored value changes.
+	useEffect(() => {
+		if (open) setDraft(wipLimit ? String(wipLimit) : "");
+	}, [open, wipLimit]);
+
+	const commit = useCallback(() => {
+		const parsed = Number.parseInt(draft, 10);
+		onSetWipLimit(
+			Number.isFinite(parsed) && parsed >= 1 ? parsed : undefined,
+		);
+		setOpen(false);
+	}, [draft, onSetWipLimit]);
+
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			<Tooltip delayDuration={200}>
+				<TooltipTrigger asChild>
+					<PopoverTrigger asChild>
+						<Button
+							variant="ghost"
+							size="icon"
+							className={cn(
+								"h-7 w-7 transition-colors",
+								wipLimit
+									? "text-primary bg-primary/10 hover:bg-primary/20"
+									: "hover:bg-muted-foreground/10 hover:text-muted-foreground",
+							)}
+							aria-label={t("kanban.wipLimit.set")}
+						>
+							<Gauge className="h-3.5 w-3.5" />
+						</Button>
+					</PopoverTrigger>
+				</TooltipTrigger>
+				<TooltipContent side="left">
+					{t("kanban.wipLimit.set")}
+				</TooltipContent>
+			</Tooltip>
+			<PopoverContent align="end" className="w-60 space-y-3 p-3">
+				<div className="space-y-1">
+					<span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+						{t("kanban.wipLimit.label")}
+					</span>
+					<p className="text-xs text-muted-foreground">
+						{t("kanban.wipLimit.description")}
+					</p>
+				</div>
+				<div className="flex items-center gap-2">
+					<Input
+						type="number"
+						min={1}
+						value={draft}
+						onChange={(e) => setDraft(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") commit();
+						}}
+						placeholder={t("kanban.wipLimit.placeholder")}
+						className="h-8"
+						autoFocus
+					/>
+					<Button
+						size="icon"
+						className="h-8 w-8 shrink-0"
+						onClick={commit}
+						aria-label={t("kanban.wipLimit.set")}
+					>
+						<Check className="h-4 w-4" />
+					</Button>
+				</div>
+				{wipLimit !== undefined && (
+					<Button
+						variant="ghost"
+						size="sm"
+						className="h-7 w-full text-xs text-muted-foreground hover:text-destructive"
+						onClick={() => {
+							onSetWipLimit(undefined);
+							setOpen(false);
+						}}
+					>
+						<X className="mr-1 h-3 w-3" />
+						{t("kanban.wipLimit.clear")}
+					</Button>
+				)}
+			</PopoverContent>
+		</Popover>
+	);
+}
+
 const DroppableColumn = memo(function DroppableColumn({
 	status,
 	tasks,
@@ -371,6 +518,8 @@ const DroppableColumn = memo(function DroppableColumn({
 	onQueueSettings,
 	onQueueAll,
 	maxParallelTasks,
+	wipLimit,
+	onSetWipLimit,
 	archivedCount,
 	showArchived,
 	onToggleArchived,
@@ -426,8 +575,21 @@ const DroppableColumn = memo(function DroppableColumn({
 		}
 	}, [isAllSelected, onSelectAll, onDeselectAll]);
 
+	// Render cap: a very large column only mounts its first COLUMN_RENDER_CAP
+	// cards until the user opts to reveal the rest. The common case (columns
+	// under the cap) is byte-for-byte the previous behaviour.
+	const [showAllCards, setShowAllCards] = useState(false);
+	const visibleTasks = useMemo(
+		() =>
+			showAllCards || tasks.length <= COLUMN_RENDER_CAP
+				? tasks
+				: tasks.slice(0, COLUMN_RENDER_CAP),
+		[tasks, showAllCards],
+	);
+	const hiddenCardCount = tasks.length - visibleTasks.length;
+
 	// Memoize taskIds to prevent SortableContext from re-rendering unnecessarily
-	const taskIds = useMemo(() => tasks.map((t) => t.id), [tasks]);
+	const taskIds = useMemo(() => visibleTasks.map((t) => t.id), [visibleTasks]);
 
 	// Create stable onClick handlers for each task to prevent unnecessary re-renders
 	const onClickHandlers = useMemo(() => {
@@ -506,7 +668,7 @@ const DroppableColumn = memo(function DroppableColumn({
 	const taskCards = useMemo(() => {
 		if (tasks.length === 0) return null;
 		const isSelectable = !!onToggleSelectHandlers;
-		return tasks.map((task) => (
+		const cards: React.ReactNode[] = visibleTasks.map((task) => (
 			<SortableTaskCard
 				key={task.id}
 				task={task}
@@ -522,8 +684,31 @@ const DroppableColumn = memo(function DroppableColumn({
 				onPreviewApp={onPreviewAppHandlers?.get(task.id)}
 			/>
 		));
+		// "Show more / less" toggle for capped columns (expanded columns only —
+		// the collapsed strip is a glance preview). It's not a sortable item, so
+		// it sits inside SortableContext harmlessly.
+		if (!isCollapsed && tasks.length > COLUMN_RENDER_CAP) {
+			cards.push(
+				<button
+					key="__show_more_toggle__"
+					type="button"
+					onClick={() => setShowAllCards((v) => !v)}
+					className="w-full rounded-md border border-dashed border-border/60 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+				>
+					{showAllCards
+						? t("kanban.showLess")
+						: t("kanban.showMore", { count: hiddenCardCount })}
+				</button>,
+			);
+		}
+		return cards;
 	}, [
-		tasks,
+		visibleTasks,
+		tasks.length,
+		isCollapsed,
+		showAllCards,
+		hiddenCardCount,
+		t,
 		onClickHandlers,
 		onStatusChangeHandlers,
 		onToggleSelectHandlers,
@@ -761,6 +946,28 @@ const DroppableColumn = memo(function DroppableColumn({
 							>
 								{tasks.length}/{maxParallelTasks}
 							</span>
+						) : wipLimit ? (
+							<Tooltip delayDuration={200}>
+								<TooltipTrigger asChild>
+									<span
+										className={cn(
+											"column-count-badge",
+											tasks.length > wipLimit &&
+												"bg-warning/20 text-warning border-warning/30",
+										)}
+									>
+										{tasks.length}/{wipLimit}
+									</span>
+								</TooltipTrigger>
+								{tasks.length > wipLimit && (
+									<TooltipContent>
+										{t("kanban.wipLimit.exceeded", {
+											count: tasks.length,
+											limit: wipLimit,
+										})}
+									</TooltipContent>
+								)}
+							</Tooltip>
 						) : (
 							<span className="column-count-badge">{tasks.length}</span>
 						)}
@@ -798,6 +1005,14 @@ const DroppableColumn = memo(function DroppableColumn({
 									{isLocked ? t("kanban.unlockColumn") : t("kanban.lockColumn")}
 								</TooltipContent>
 							</Tooltip>
+						)}
+						{/* Soft WIP limit setter (not shown on in_progress, which uses
+						    the hard parallel-task limit instead) */}
+						{onSetWipLimit && (
+							<WipLimitPopover
+								wipLimit={wipLimit}
+								onSetWipLimit={onSetWipLimit}
+							/>
 						)}
 						{status === "backlog" && (
 							<>
@@ -1036,9 +1251,22 @@ export function KanbanBoard({
 }: KanbanBoardProps) {
 	const { t } = useTranslation(["tasks", "dialogs", "common"]);
 	const { toast } = useToast();
+	const { announcement, announce } = useKanbanAccessibility();
 	const [activeTask, setActiveTask] = useState<Task | null>(null);
 	const [overColumnId, setOverColumnId] = useState<string | null>(null);
 	const { showArchived, toggleShowArchived } = useViewState();
+
+	// --- Accessibility helpers (screen-reader drag-and-drop announcements) ---
+	const getColumnLabel = useCallback(
+		(status?: string | null): string | undefined =>
+			status && isValidDropColumn(status)
+				? t(TASK_STATUS_LABELS[status])
+				: undefined,
+		[t],
+	);
+	// Only announce a column hover once, so the live region isn't spammed on
+	// every dragOver tick.
+	const lastAnnouncedColumnRef = useRef<string | null>(null);
 
 	// Project store for queue settings
 	const projects = useProjectStore((state) => state.projects);
@@ -1070,6 +1298,9 @@ export function KanbanBoard({
 	);
 	const toggleColumnLocked = useKanbanSettingsStore(
 		(state) => state.toggleColumnLocked,
+	);
+	const setColumnWipLimit = useKanbanSettingsStore(
+		(state) => state.setColumnWipLimit,
 	);
 	const setColumnOrder = useKanbanSettingsStore(
 		(state) => state.setColumnOrder,
@@ -1280,6 +1511,75 @@ export function KanbanBoard({
 		[tasks],
 	);
 
+	// Board-wide flow signal: the actual list of cards that have idled too long,
+	// surfaced as a clickable "idle tasks" popover rather than an opaque counter.
+	const agingList = useMemo(
+		() => listAgingTasks(filteredTasks),
+		[filteredTasks],
+	);
+	const stuckCount = useMemo(
+		() => agingList.filter((e) => e.level === "stuck").length,
+		[agingList],
+	);
+	const [stalePopoverOpen, setStalePopoverOpen] = useState(false);
+
+	// Board-wide cost forecast from applied Formula Lab estimates.
+	const costForecast = useMemo(
+		() => computeBoardCostForecast(filteredTasks),
+		[filteredTasks],
+	);
+
+	// Plan-conflict surfacing: recompute file overlaps for every task whose plan
+	// is carried by a (current or pending) worktree and publish them to the
+	// conflict store the cards subscribe to. The status set mirrors the backend's
+	// CONFLICT_RELEVANT_STATUSES so a task in queue / human_review involved in a
+	// conflict gets a badge on its own card, not just the actively-running ones.
+	// Keyed on the relevant id set so it only re-runs when that set changes.
+	const setBoardConflicts = useKanbanConflictStore((s) => s.setConflicts);
+	const conflictRelevantIds = useMemo(
+		() =>
+			filteredTasks
+				.filter((t) => CONFLICT_RELEVANT_STATUSES.has(t.status))
+				.map((t) => t.id)
+				.sort()
+				.join(","),
+		[filteredTasks],
+	);
+
+	useEffect(() => {
+		if (!conflictRelevantIds) {
+			setBoardConflicts({});
+			return;
+		}
+		const ids = conflictRelevantIds.split(",");
+		let cancelled = false;
+		(async () => {
+			const next: Record<string, BoardConflictInfo> = {};
+			for (const id of ids) {
+				try {
+					const res: IPCResult<PlanConflictReport> =
+						await globalThis.electronAPI.checkPlanConflicts(id);
+					if (
+						res.success &&
+						res.data &&
+						res.data.conflictingTasks.length > 0
+					) {
+						next[id] = {
+							titles: res.data.conflictingTasks.map((c) => c.taskTitle),
+							files: res.data.totalConflictingFiles,
+						};
+					}
+				} catch {
+					// Conflict check is best-effort; ignore failures.
+				}
+			}
+			if (!cancelled) setBoardConflicts(next);
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [conflictRelevantIds, setBoardConflicts]);
+
 	const sensors = useSensors(
 		useSensor(PointerSensor, {
 			activationConstraint: {
@@ -1441,12 +1741,39 @@ export function KanbanBoard({
 		setDeleteConfirmOpen(true);
 	}, []);
 
+	// Restore a batch of previously deleted tasks (undo for bulk delete)
+	const handleUndoBulkDelete = useCallback(
+		async (taskIds: string[]) => {
+			let restored = 0;
+			for (const id of taskIds) {
+				const result = await restoreTask(id);
+				if (result.success) restored++;
+			}
+			setRecentlyDeletedTasks((prev) => {
+				const next = new Map(prev);
+				for (const id of taskIds) next.delete(id);
+				return next;
+			});
+			if (restored > 0) {
+				toast({
+					title: t("kanban.bulkRestoreSuccess", { count: restored }),
+					variant: "default",
+				});
+			}
+		},
+		[toast, t],
+	);
+
 	// Handle confirmed bulk delete
 	const handleConfirmDelete = useCallback(async () => {
 		if (selectedTaskIds.size === 0) return;
 
 		setIsDeleting(true);
 		const taskIdsToDelete = Array.from(selectedTaskIds);
+		// Snapshot the full task objects before deletion so the toast can undo.
+		const deletedTasks = useTaskStore
+			.getState()
+			.tasks.filter((task) => selectedTaskIds.has(task.id));
 
 		const result = await deleteTasks(taskIdsToDelete);
 
@@ -1454,8 +1781,23 @@ export function KanbanBoard({
 		setDeleteConfirmOpen(false);
 
 		if (result.success) {
+			setRecentlyDeletedTasks((prev) => {
+				const next = new Map(prev);
+				for (const task of deletedTasks) next.set(task.id, task);
+				return next;
+			});
+			const deletedIds = deletedTasks.map((task) => task.id);
 			toast({
 				title: t("kanban.deleteSuccess", { count: taskIdsToDelete.length }),
+				action: (
+					<button
+						type="button"
+						onClick={() => handleUndoBulkDelete(deletedIds)}
+						className="px-2 py-1 text-sm bg-primary/10 hover:bg-primary/20 text-primary rounded transition-colors"
+					>
+						{t("kanban.undo")}
+					</button>
+				),
 				variant: "default",
 			});
 			deselectAllTasks();
@@ -1471,7 +1813,7 @@ export function KanbanBoard({
 				setSelectedTaskIds(remainingIds);
 			}
 		}
-	}, [selectedTaskIds, deselectAllTasks, toast, t]);
+	}, [selectedTaskIds, deselectAllTasks, handleUndoBulkDelete, toast, t]);
 
 	// Handle bulk move of all selected tasks to a target status
 	const handleBulkMove = useCallback(
@@ -1507,10 +1849,10 @@ export function KanbanBoard({
 		setBulkPRDialogOpen(true);
 	}, []);
 
-	// Handle bulk PR dialog completion - clear selection
+	// Handle bulk PR dialog completion - clear the lingering selection
 	const handleBulkPRComplete = useCallback(() => {
-		/* intentionally empty */
-	}, []);
+		deselectAllTasks();
+	}, [deselectAllTasks]);
 
 	// Handle viewing PR files
 	const handleViewPRFiles = useCallback((prUrl: string, taskId: string) => {
@@ -1860,6 +2202,8 @@ export function KanbanBoard({
 	const handleDragStart = useCallback(
 		(event: DragStartEvent) => {
 			const { active } = event;
+			// Reset the dedup guard for column-hover announcements.
+			lastAnnouncedColumnRef.current = null;
 
 			// Check if this is an Azure DevOps work item drag
 			if (active.id.toString().startsWith("azure-devops-")) {
@@ -1870,6 +2214,10 @@ export function KanbanBoard({
 			// Check if this is a column drag
 			if (active.id.toString().startsWith("col-")) {
 				setIsDraggingColumn(true);
+				const label = getColumnLabel(active.id.toString().slice(4));
+				if (label) {
+					announce(t("kanban.a11y.columnPickedUp", { column: label }));
+				}
 				return;
 			}
 
@@ -1882,36 +2230,55 @@ export function KanbanBoard({
 				setIsDraggingBulkSelected(
 					selectedTaskIds.has(task.id) && selectedTaskIds.size > 1,
 				);
+				announce(t("kanban.a11y.pickedUp", { title: task.title }));
 			}
 		},
-		[selectedTaskIds],
+		[selectedTaskIds, announce, getColumnLabel, t],
 	);
 
-	const handleDragOver = useCallback((event: DragOverEvent) => {
-		const { active, over } = event;
+	const handleDragOver = useCallback(
+		(event: DragOverEvent) => {
+			const { active, over } = event;
 
-		// Ignore column drags — no task drop highlighting needed
-		if (active.id.toString().startsWith("col-")) return;
+			// Ignore column drags — no task drop highlighting needed
+			if (active.id.toString().startsWith("col-")) return;
 
-		if (!over) {
-			setOverColumnId(null);
-			return;
-		}
+			if (!over) {
+				setOverColumnId(null);
+				return;
+			}
 
-		const overId = over.id as string;
+			const overId = over.id as string;
 
-		// Check if over a column
-		if (isValidDropColumn(overId)) {
-			setOverColumnId(overId);
-			return;
-		}
+			// Resolve both the highlight target (raw status, preserving prior
+			// behaviour) and the column to announce (visual column).
+			let announceColumn: string | null = null;
+			if (isValidDropColumn(overId)) {
+				setOverColumnId(overId);
+				announceColumn = overId;
+			} else {
+				const overTask = useTaskStore
+					.getState()
+					.tasks.find((t) => t.id === overId);
+				if (overTask) {
+					setOverColumnId(overTask.status);
+					announceColumn = getVisualColumn(overTask.status);
+				}
+			}
 
-		// Check if over a task - get its column
-		const overTask = useTaskStore.getState().tasks.find((t) => t.id === overId);
-		if (overTask) {
-			setOverColumnId(overTask.status);
-		}
-	}, []);
+			if (
+				announceColumn &&
+				lastAnnouncedColumnRef.current !== announceColumn
+			) {
+				lastAnnouncedColumnRef.current = announceColumn;
+				const label = getColumnLabel(announceColumn);
+				if (label) {
+					announce(t("kanban.a11y.overColumn", { column: label }));
+				}
+			}
+		},
+		[announce, getColumnLabel, t],
+	);
 
 	/**
 	 * Handle status change with worktree cleanup dialog support
@@ -2519,6 +2886,23 @@ export function KanbanBoard({
 		[toggleColumnLocked, saveKanbanPreferences, projectId],
 	);
 
+	// Set/clear a column's soft WIP limit and persist preferences
+	const handleSetWipLimit = useCallback(
+		(
+			status: (typeof TASK_STATUS_COLUMNS)[number],
+			limit: number | undefined,
+		) => {
+			const currentProjectId = projectId;
+			setColumnWipLimit(status, limit);
+			if (currentProjectId) {
+				setTimeout(() => {
+					saveKanbanPreferences(currentProjectId);
+				}, 0);
+			}
+		},
+		[setColumnWipLimit, saveKanbanPreferences, projectId],
+	);
+
 	// Resize handlers for column width adjustment
 	const handleResizeStart = useCallback(
 		(status: (typeof TASK_STATUS_COLUMNS)[number], startX: number) => {
@@ -2650,7 +3034,10 @@ export function KanbanBoard({
 			setIsDraggingBulkSelected(false);
 			setIsDraggingColumn(false);
 
-			if (!over) return;
+			if (!over) {
+				announce(t("kanban.a11y.cancelled"));
+				return;
+			}
 
 			const activeTaskId = active.id as string;
 			const overId = over.id as string;
@@ -2670,6 +3057,12 @@ export function KanbanBoard({
 					if (oldIndex !== -1 && newIndex !== -1) {
 						const newOrder = arrayMove([...currentOrder], oldIndex, newIndex);
 						setColumnOrder(newOrder, projectId ?? undefined);
+						const label = getColumnLabel(activeStatus);
+						if (label) {
+							announce(
+								t("kanban.a11y.columnReordered", { column: label }),
+							);
+						}
 					}
 				}
 				return;
@@ -2706,6 +3099,16 @@ export function KanbanBoard({
 
 					// Same visual column: reorder within column
 					if (taskVisualColumn === overTaskVisualColumn) {
+						// An explicit sort overrides the manual drag order, so a reorder
+						// would silently snap back. Tell the user instead of no-op'ing.
+						if (kanbanSort.field !== "manual") {
+							toast({
+								title: t("kanban.sortActiveDragHint"),
+								variant: "default",
+							});
+							return;
+						}
+
 						// Ensure both tasks are in the order array before reordering
 						// This handles tasks that existed before ordering was enabled
 						const currentColumnOrder = taskOrder?.[taskVisualColumn] ?? [];
@@ -2729,6 +3132,9 @@ export function KanbanBoard({
 						if (projectId) {
 							saveTaskOrder(projectId);
 						}
+						announce(
+							t("kanban.a11y.droppedSimple", { title: task.title }),
+						);
 						return;
 					}
 
@@ -2826,6 +3232,17 @@ export function KanbanBoard({
 			// Use handleStatusChange to properly handle worktree cleanup dialog
 			await handleStatusChange(activeTaskId, newStatus, task);
 
+			// Announce the move for assistive technology.
+			const droppedLabel = getColumnLabel(getVisualColumn(newStatus));
+			if (droppedLabel) {
+				announce(
+					t("kanban.a11y.dropped", {
+						title: task.title,
+						column: droppedLabel,
+					}),
+				);
+			}
+
 			// Update task order for the new column - add task to top of new column
 			const oldVisualColumn = getVisualColumn(oldStatus);
 			const newVisualColumn = getVisualColumn(newStatus);
@@ -2866,6 +3283,9 @@ export function KanbanBoard({
 			toast,
 			t,
 			setColumnOrder,
+			announce,
+			getColumnLabel,
+			kanbanSort,
 		],
 	);
 
@@ -2879,6 +3299,15 @@ export function KanbanBoard({
 
 	return (
 		<div className="flex h-full flex-col">
+			{/* Screen-reader live region for drag-and-drop announcements */}
+			<div
+				aria-live="polite"
+				aria-atomic="true"
+				role="status"
+				className="sr-only"
+			>
+				{announcement}
+			</div>
 			{/* Kanban header avec bouton paramètres projet */}
 			<div className="flex items-center justify-between px-2 pt-4 pb-2">
 				<div className="flex items-center gap-2">
@@ -2912,6 +3341,124 @@ export function KanbanBoard({
 					)}
 					{/* Unified toolbar: search, filters, sort, and quick commands */}
 					<KanbanToolbar projectPath={project?.path} />
+					{/* Flow signal: a clickable list of cards that have idled too long.
+					    Plain label + concrete task list so the value is obvious. */}
+					{agingList.length > 0 && (
+						<Popover
+							open={stalePopoverOpen}
+							onOpenChange={setStalePopoverOpen}
+						>
+							<PopoverTrigger asChild>
+								<button
+									type="button"
+									className={cn(
+										"flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium tabular-nums transition-colors",
+										stuckCount > 0
+											? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15"
+											: "border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/15 dark:text-amber-500",
+									)}
+								>
+									{stuckCount > 0 ? (
+										<AlertTriangle className="h-3.5 w-3.5" />
+									) : (
+										<Timer className="h-3.5 w-3.5" />
+									)}
+									{t("kanban.stale.chip", { count: agingList.length })}
+								</button>
+							</PopoverTrigger>
+							<PopoverContent
+								align="start"
+								className="w-80 overflow-hidden p-0"
+							>
+								<div className="border-b border-border/60 bg-linear-to-br from-amber-500/5 to-transparent px-4 py-2.5">
+									<div className="flex items-center gap-2">
+										<Timer className="h-4 w-4 text-amber-500" />
+										<h3 className="text-sm font-semibold">
+											{t("kanban.stale.title")}
+										</h3>
+									</div>
+									<p className="mt-1 text-xs text-muted-foreground">
+										{t("kanban.stale.subtitle")}
+									</p>
+								</div>
+								<ScrollArea className="max-h-72">
+									<div className="p-1.5">
+										{agingList.map(({ task, level, hours }) => (
+											<button
+												key={task.id}
+												type="button"
+												onClick={() => {
+													setStalePopoverOpen(false);
+													onTaskClick(task);
+												}}
+												className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted/60"
+											>
+												<span
+													className={cn(
+														"mt-1 h-2 w-2 shrink-0 rounded-full",
+														level === "stuck"
+															? "bg-destructive"
+															: "bg-amber-500",
+													)}
+												/>
+												<span className="min-w-0 flex-1">
+													<span className="block truncate text-sm text-foreground">
+														{task.title}
+													</span>
+													<span className="block text-xs text-muted-foreground">
+														{t("kanban.stale.rowMeta", {
+															column:
+																getColumnLabel(getVisualColumn(task.status)) ??
+																"",
+															duration: formatAgingDuration(hours),
+														})}
+													</span>
+												</span>
+											</button>
+										))}
+									</div>
+								</ScrollArea>
+							</PopoverContent>
+						</Popover>
+					)}
+					{/* Cost forecast: sum of applied Formula Lab estimates */}
+					{costForecast.totalUsd > 0 && (
+						<Tooltip delayDuration={200}>
+							<TooltipTrigger asChild>
+								<div
+									role="status"
+									className="flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/30 px-2.5 py-1 text-xs font-medium tabular-nums"
+								>
+									<Coins className="h-3.5 w-3.5 text-emerald-500" />
+									{formatCost(costForecast.totalUsd)}
+								</div>
+							</TooltipTrigger>
+							<TooltipContent>
+								<div className="space-y-0.5 text-xs">
+									<div className="font-medium">
+										{t("kanban.cost.forecastTooltipTitle")}
+									</div>
+									<div>
+										{t("kanban.cost.tooltipActive", {
+											cost: formatCost(costForecast.activeUsd),
+										})}
+									</div>
+									<div>
+										{t("kanban.cost.tooltipPending", {
+											cost: formatCost(costForecast.pendingUsd),
+										})}
+									</div>
+									{costForecast.withoutFormula > 0 && (
+										<div className="text-muted-foreground">
+											{t("kanban.cost.tooltipNoEstimate", {
+												count: costForecast.withoutFormula,
+											})}
+										</div>
+									)}
+								</div>
+							</TooltipContent>
+						</Tooltip>
+					)}
 				</div>
 				<div className="flex items-center gap-2">
 					{activeProjectId &&
@@ -3046,6 +3593,16 @@ export function KanbanBoard({
 								onArchiveAll={status === "done" ? handleArchiveAll : undefined}
 								maxParallelTasks={
 									status === "in_progress" ? maxParallelTasks : undefined
+								}
+								wipLimit={
+									status === "in_progress"
+										? undefined
+										: columnPreferences?.[status]?.wipLimit
+								}
+								onSetWipLimit={
+									status === "in_progress"
+										? undefined
+										: (limit) => handleSetWipLimit(status, limit)
 								}
 								archivedCount={status === "done" ? archivedCount : undefined}
 								showArchived={status === "done" ? showArchived : undefined}

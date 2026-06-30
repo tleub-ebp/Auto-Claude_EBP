@@ -502,6 +502,71 @@ def parse_rate_limit_reset_time(error_info: dict | None) -> int | None:
     return None
 
 
+def _cleanup_stray_root_plan(project_dir: Path, spec_dir: Path) -> str | None:
+    """Remove a bogus implementation_plan.json a model wrote to the project ROOT
+    instead of the spec dir.
+
+    Weak local models sometimes call ``write_file ./implementation_plan.json``
+    (a relative path → worktree root) and leave a truncated file there — e.g. a
+    lone ``{`` — which is NOT the plan WorkPilot reads (that lives in the spec
+    dir) and just pollutes the tree. Delete it ONLY in worktree mode (root !=
+    spec dir) and ONLY when it's genuinely invalid (unparseable or no
+    ``phases``), so a real plan is never touched. Returns a message if it
+    removed one, else None. Best-effort — never raises.
+    """
+    try:
+        if project_dir.resolve() == spec_dir.resolve():
+            return None  # --direct mode: the root IS the spec dir
+        stray = project_dir / "implementation_plan.json"
+        if not stray.exists():
+            return None
+        try:
+            data = json.loads(stray.read_text(encoding="utf-8"))
+            bogus = not isinstance(data, dict) or not data.get("phases")
+        except (OSError, ValueError):
+            bogus = True
+        if bogus:
+            stray.unlink()
+            return (
+                "Removed a stray/invalid implementation_plan.json the model wrote "
+                f"to the project root ({stray.name}) instead of the spec directory."
+            )
+    except OSError:
+        pass
+    return None
+
+
+# A weak model can loop forever in planning: each fresh session it calls tools,
+# writes the wrong files (./spec.md, ./tasks/…, never a valid
+# implementation_plan.json), reports "done", validation fails, and the next
+# session repeats. The in-memory retry counter resets when planning re-runs as a
+# new process, so the cap is also persisted on disk to break that loop.
+_PLANNING_FAILURES_MARKER = ".planning_validation_failures"
+
+
+def _read_planning_failures(spec_dir: Path) -> int:
+    try:
+        return int((spec_dir / _PLANNING_FAILURES_MARKER).read_text().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def _bump_planning_failures(spec_dir: Path) -> int:
+    count = _read_planning_failures(spec_dir) + 1
+    try:
+        (spec_dir / _PLANNING_FAILURES_MARKER).write_text(str(count))
+    except OSError:
+        pass
+    return count
+
+
+def _clear_planning_failures(spec_dir: Path) -> None:
+    try:
+        (spec_dir / _PLANNING_FAILURES_MARKER).unlink()
+    except OSError:
+        pass
+
+
 async def run_autonomous_agent(
     project_dir: Path,
     spec_dir: Path,
@@ -724,7 +789,8 @@ async def run_autonomous_agent(
     current_log_phase = LogPhase.CODING
     is_planning_phase = False
     planning_retry_context: str | None = None
-    planning_validation_failures = 0
+    # Persisted so the cap survives planning re-running as a fresh process.
+    planning_validation_failures = _read_planning_failures(spec_dir)
     max_planning_validation_retries = 3
 
     def _validate_and_fix_implementation_plan() -> tuple[bool, list[str]]:
@@ -1377,29 +1443,113 @@ async def run_autonomous_agent(
                     response = response_text
                 # This will execute the blocking and continue automatically
 
+        # A local model that only narrates (describes the work / prints file
+        # content as text) instead of calling tools cannot produce a plan or
+        # code. The LocalAgentClient already nudged it once and flagged itself;
+        # halt cleanly here with an actionable message + marker rather than
+        # looping the build (or failing with a generic "no plan created").
+        from services.rate_limit_shield import handle_local_model_no_tools
+
+        _phase_tag = "planning" if is_planning_phase else "coding"
+        if handle_local_model_no_tools(client, spec_dir, _phase_tag, phase_model):
+            halt_msg = (
+                f"Phase {_phase_tag} arrêtée : le modèle local « {phase_model} » "
+                "décrit le travail au lieu d'appeler les outils, il ne peut donc "
+                "rien produire. Passez cette phase à un modèle plus capable "
+                "— un modèle local plus grand, ou un fournisseur cloud (Claude) "
+                "— puis relancez."
+            )
+            print_status(halt_msg, "error")
+            if task_logger:
+                task_logger.end_phase(
+                    current_log_phase, success=False, message=halt_msg
+                )
+            status_manager.update(state=BuildState.ERROR)
+            audit_event(
+                project_dir,
+                kind="agent_failed",
+                actor="coder",
+                correlation_id=spec_dir.name,
+                summary=f"{_phase_tag} halted: local model did not call tools",
+                payload={"model": phase_model, "reason": "local_model_no_tools"},
+            )
+            return
+
         plan_validated = False
         if is_planning_phase and status != "error":
             valid, errors = _validate_and_fix_implementation_plan()
+            # Archive this LLM's plan (valid or not) so plans from different
+            # models can be compared side by side later. One snapshot per
+            # provider/model; survives a reset (lives under plans/).
+            try:
+                from qa.criteria import snapshot_plan_for_model
+
+                # Write to the MAIN project spec dir (source_spec_dir) so the
+                # per-LLM plans persist beyond the worktree and survive a reset.
+                snapshot_plan_for_model(
+                    spec_dir,
+                    client.provider_name(),
+                    phase_model,
+                    valid=valid,
+                    dest_dir=source_spec_dir,
+                )
+            except Exception:
+                pass
             if valid:
                 plan_validated = True
                 planning_retry_context = None
+                _clear_planning_failures(spec_dir)  # success → reset the cap
             else:
-                planning_validation_failures += 1
+                planning_validation_failures = _bump_planning_failures(spec_dir)
+                # The plan WorkPilot reads lives in the spec dir; a model that
+                # wrote ./implementation_plan.json to the worktree root leaves a
+                # stray (often a truncated "{") — clean it so it doesn't linger.
+                stray_msg = _cleanup_stray_root_plan(project_dir, spec_dir)
+
+                # Make explicit this is the MODEL's invalid output (not a
+                # WorkPilot fault) and point local-model users at the fix.
+                provider_hint = ""
+                try:
+                    if client.provider_name() in ("ollama", "local", "lmstudio"):
+                        provider_hint = (
+                            " The local model produced an invalid plan — switch "
+                            "the Planning phase to a tool-capable / cloud model "
+                            "and re-run."
+                        )
+                except Exception:
+                    provider_hint = ""
+
                 if planning_validation_failures >= max_planning_validation_retries:
-                    print_status(
-                        "implementation_plan.json validation failed too many times",
-                        "error",
+                    fail_msg = (
+                        "Planning failed: the model did not produce a valid "
+                        "implementation_plan.json (unparseable or missing "
+                        "`phases`)." + provider_hint
                     )
+                    print_status(fail_msg, "error")
                     for err in errors:
                         print(f"  - {err}")
+                    if stray_msg:
+                        print_status(stray_msg, "warning")
+                    if task_logger:
+                        task_logger.end_phase(
+                            LogPhase.PLANNING, success=False, message=fail_msg
+                        )
+                    # Clear the cap so a deliberate re-run (e.g. after switching
+                    # the Planning model to Claude) starts fresh instead of
+                    # halting immediately.
+                    _clear_planning_failures(spec_dir)
                     status_manager.update(state=BuildState.ERROR)
                     return
 
                 print_status(
-                    "implementation_plan.json invalid - retrying planner", "warning"
+                    "implementation_plan.json invalid - retrying planner"
+                    + provider_hint,
+                    "warning",
                 )
                 for err in errors:
                     print(f"  - {err}")
+                if stray_msg:
+                    print_status(stray_msg, "warning")
 
                 planning_retry_context = (
                     "## IMPLEMENTATION PLAN VALIDATION ERRORS\n\n"

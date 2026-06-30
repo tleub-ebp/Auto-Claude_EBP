@@ -46,8 +46,11 @@ goes through the neutral ContentBlock representation only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
+from collections import OrderedDict
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -58,11 +61,86 @@ from core.agent_client import AgentMessage, ContentBlock, ContentBlockType, Mess
 
 logger = logging.getLogger(__name__)
 
-# Persisted under spec_dir; one file per spec.
+# Legacy single-file name (pre multi-model). Kept for migration + backward
+# compatibility with callers that don't pass a (provider, model).
 CONVERSATION_LOG_FILENAME = "conversation.jsonl"
+
+# Per-model logs are named "conversation.<provider>-<model>.jsonl" so switching
+# a phase's LLM keeps each model's own history: switch away and back and the
+# model resumes its own context, and a never-used model starts fresh.
+_LOG_PREFIX = "conversation"
+_LOG_SUFFIX = ".jsonl"
 
 # Current schema version. Bump when changing the on-disk format.
 SCHEMA_VERSION = 1
+
+
+def _log_slug(provider: str | None, model: str | None) -> str:
+    """Filesystem-safe slug identifying a (provider, model) pair.
+
+    e.g. ("ollama", "qwen2.5-coder:latest") -> "ollama-qwen2.5-coder-latest".
+    Keeps ``[A-Za-z0-9._-]``; everything else (':' '/' spaces) becomes '-'.
+    Long ids (e.g. ``hf.co/org/Model-GGUF:latest``) are truncated with a short
+    hash so the filename stays well under filesystem limits yet stays unique.
+    """
+    raw = f"{(provider or 'local').strip()}-{(model or 'default').strip()}"
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-") or "default"
+    if len(slug) > 80:
+        digest = hashlib.sha1(  # noqa: S324 - filename uniqueness, not security
+            raw.encode("utf-8"), usedforsecurity=False
+        ).hexdigest()[:8]
+        slug = slug[:60].rstrip("-") + "-" + digest
+    return slug
+
+
+def conversation_log_path(
+    spec_dir: Path, provider: str | None, model: str | None
+) -> Path:
+    """Path of the conversation log for a given (provider, model)."""
+    return spec_dir / f"{_LOG_PREFIX}.{_log_slug(provider, model)}{_LOG_SUFFIX}"
+
+
+def migrate_legacy_log(spec_dir: Path) -> None:
+    """One-time split of a pre-multi-model ``conversation.jsonl`` into per-model
+    files.
+
+    Each persisted line already carries its own ``provider``/``model``, so we
+    group the legacy lines by (provider, model) and append them to the matching
+    per-model file, then archive the legacy file (``.migrated``) so it isn't
+    re-split. Idempotent and best-effort — never raises.
+    """
+    legacy = spec_dir / CONVERSATION_LOG_FILENAME
+    if not legacy.exists():
+        return
+    try:
+        groups: OrderedDict[tuple[str, str], list[str]] = OrderedDict()
+        with legacy.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                key = (
+                    entry.get("provider") or "local",
+                    entry.get("model") or "default",
+                )
+                groups.setdefault(key, []).append(line)
+        for (prov, mdl), lines in groups.items():
+            target = conversation_log_path(spec_dir, prov, mdl)
+            with target.open("ab") as f:
+                for ln in lines:
+                    f.write((ln + "\n").encode("utf-8"))
+        legacy.rename(spec_dir / f"{CONVERSATION_LOG_FILENAME}.migrated")
+        logger.info(
+            "[conversation_log] Split legacy log in %s into %d per-model file(s)",
+            spec_dir,
+            len(groups),
+        )
+    except OSError as e:
+        logger.warning("Could not migrate legacy conversation log %s: %s", legacy, e)
 
 
 def _serialize_content_block(block: ContentBlock) -> dict[str, Any]:
@@ -107,7 +185,7 @@ def append_message(
         subtask_id: Optional subtask context.
     """
     try:
-        log_file = spec_dir / CONVERSATION_LOG_FILENAME
+        log_file = conversation_log_path(spec_dir, provider, model)
         entry = {
             "v": SCHEMA_VERSION,
             "ts": datetime.now(timezone.utc)
@@ -137,14 +215,27 @@ def append_message(
         logger.warning(f"Could not append conversation log entry to {spec_dir}: {e}")
 
 
-def read_log(spec_dir: Path) -> list[dict[str, Any]]:
-    """Read all messages from the conversation log.
+def read_log(
+    spec_dir: Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    """Read all messages from a conversation log.
+
+    When ``provider`` and ``model`` are given, reads that model's own log
+    (migrating any pre-existing single-file log first) so each model resumes its
+    own context. When omitted, falls back to the legacy single file (kept for
+    backward-compatible callers).
 
     Skips partial/corrupted lines silently — process crashes mid-write are
     expected and must not block resume. Returns an empty list if the file
     doesn't exist.
     """
-    log_file = spec_dir / CONVERSATION_LOG_FILENAME
+    if provider and model:
+        migrate_legacy_log(spec_dir)
+        log_file = conversation_log_path(spec_dir, provider, model)
+    else:
+        log_file = spec_dir / CONVERSATION_LOG_FILENAME
     if not log_file.exists():
         return []
 
@@ -237,12 +328,57 @@ def has_pending_tool_use(entries: list[dict[str, Any]]) -> bool:
     return bool(pending_tool_ids)
 
 
-def clear_log(spec_dir: Path) -> None:
-    """Delete the conversation log. Used when a task completes or restarts
-    fresh, so the next run isn't replayed against a stale history.
+def archive_all_logs(spec_dir: Path, tag: str = "archived") -> int:
+    """Move every active conversation log (legacy + per-model) aside, e.g. on a
+    prompt-too-long halt, so the next run starts fresh while keeping an audit
+    trail. Already-archived files are skipped. Returns the count moved.
+    Best-effort — never raises.
     """
-    log_file = spec_dir / CONVERSATION_LOG_FILENAME
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    moved = 0
+    seen: set[Path] = set()
+    candidates = [
+        spec_dir / CONVERSATION_LOG_FILENAME,
+        *spec_dir.glob(f"{_LOG_PREFIX}.*{_LOG_SUFFIX}"),
+    ]
+    skip_markers = (".too-long.", ".trimmed.", ".archived.", ".migrated")
+    for path in candidates:
+        if path in seen or not path.exists():
+            continue
+        seen.add(path)
+        if any(marker in path.name for marker in skip_markers):
+            continue
+        try:
+            path.rename(spec_dir / f"{path.stem}.{timestamp}.{tag}.jsonl")
+            moved += 1
+        except OSError as e:
+            logger.warning("Could not archive conversation log %s: %s", path, e)
+    return moved
+
+
+def clear_log(
+    spec_dir: Path,
+    provider: str | None = None,
+    model: str | None = None,
+) -> None:
+    """Delete conversation log(s) so the next run isn't replayed against stale
+    history.
+
+    With ``provider``+``model``, deletes only that model's log. Without them,
+    deletes EVERY conversation log for the spec (legacy single file + all
+    per-model files) — the "reset the whole task" behavior.
+    """
     try:
-        log_file.unlink(missing_ok=True)
+        if provider and model:
+            conversation_log_path(spec_dir, provider, model).unlink(missing_ok=True)
+            return
+        # Whole-task reset: legacy file + every per-model log.
+        legacy = spec_dir / CONVERSATION_LOG_FILENAME
+        legacy.unlink(missing_ok=True)
+        for path in spec_dir.glob(f"{_LOG_PREFIX}.*{_LOG_SUFFIX}"):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning(f"Could not delete conversation log {path}: {e}")
     except OSError as e:
-        logger.warning(f"Could not delete conversation log {log_file}: {e}")
+        logger.warning(f"Could not delete conversation log(s) in {spec_dir}: {e}")

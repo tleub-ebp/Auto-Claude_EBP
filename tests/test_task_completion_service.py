@@ -47,21 +47,14 @@ def test_complete_task_success(temp_project_dir, mock_worktree_manager):
     # Setup mock
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
-    
-    # Mock _has_uncommitted_changes (no changes)
-    mock_instance._has_uncommitted_changes.return_value = (False, [])
 
-    # Mock push_branch success
-    mock_instance.push_branch.return_value = {
-        "success": True,
-        "branch": "auto-claude/test-spec",
-    }
-
-    # Mock create_pull_request success
-    mock_instance.create_pull_request.return_value = {
+    # No pre-existing PR -> go through the push + create path
+    mock_instance.find_existing_pr_url.return_value = None
+    mock_instance.push_and_create_pr.return_value = {
         "success": True,
         "pr_url": "https://github.com/owner/repo/pull/123",
         "already_exists": False,
+        "branch": "auto-claude/test-spec",
     }
 
     # Create service
@@ -76,29 +69,27 @@ def test_complete_task_success(temp_project_dir, mock_worktree_manager):
         task_title="Test Task",
         task_description="Test description",
     )
-    
+
     # Assertions
     assert result["success"] is True
     assert result["pr_url"] == "https://github.com/owner/repo/pull/123"
     assert result["pr_already_exists"] is False
     assert result["error"] is None
-    
+
     # Vérifier les appels
-    mock_instance.push_branch.assert_called_once_with("test-spec", force=False)
-    mock_instance.create_pull_request.assert_called_once()
+    mock_instance.find_existing_pr_url.assert_called_once()
+    mock_instance.push_and_create_pr.assert_called_once()
 
 
 def test_complete_task_push_failure(temp_project_dir, mock_worktree_manager):
-    """Test de complétion avec échec du push"""
+    """Test de complétion avec échec du push/création (erreur propagée)"""
     # Setup mock
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
-    
-    # Mock _has_uncommitted_changes (no changes)
-    mock_instance._has_uncommitted_changes.return_value = (False, [])
 
-    # Mock push_branch failure
-    mock_instance.push_branch.return_value = {
+    # No pre-existing PR; the push/create dispatcher fails
+    mock_instance.find_existing_pr_url.return_value = None
+    mock_instance.push_and_create_pr.return_value = {
         "success": False,
         "error": "Network error",
     }
@@ -114,14 +105,11 @@ def test_complete_task_push_failure(temp_project_dir, mock_worktree_manager):
         spec_id="test-spec",
         task_title="Test Task",
     )
-    
-    # Assertions
+
+    # Assertions — the dispatcher's error is surfaced verbatim
     assert result["success"] is False
     assert result["pr_url"] is None
-    assert "Échec du push de la branche" in result["error"]
-    
-    # Vérifier que create_pull_request n'a pas été appelé
-    mock_instance.create_pull_request.assert_not_called()
+    assert "Network error" in result["error"]
 
 
 def test_complete_task_pr_creation_failure(
@@ -132,17 +120,9 @@ def test_complete_task_pr_creation_failure(
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
     
-    # Mock _has_uncommitted_changes (no changes)
-    mock_instance._has_uncommitted_changes.return_value = (False, [])
-
-    # Mock push_branch success
-    mock_instance.push_branch.return_value = {
-        "success": True,
-        "branch": "auto-claude/test-spec",
-    }
-
-    # Mock create_pull_request failure
-    mock_instance.create_pull_request.return_value = {
+    # No pre-existing PR; PR creation fails inside the dispatcher
+    mock_instance.find_existing_pr_url.return_value = None
+    mock_instance.push_and_create_pr.return_value = {
         "success": False,
         "error": "Authentication failed",
     }
@@ -158,11 +138,11 @@ def test_complete_task_pr_creation_failure(
         spec_id="test-spec",
         task_title="Test Task",
     )
-    
+
     # Assertions
     assert result["success"] is False
     assert result["pr_url"] is None
-    assert "Échec de la création de la PR" in result["error"]
+    assert "Authentication failed" in result["error"]
 
 
 def test_complete_task_with_custom_target_branch(
@@ -173,15 +153,13 @@ def test_complete_task_with_custom_target_branch(
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
     
-    # Mock _has_uncommitted_changes (no changes)
-    mock_instance._has_uncommitted_changes.return_value = (False, [])
-
-    # Mock success
-    mock_instance.push_branch.return_value = {"success": True, "branch": "test"}
-    mock_instance.create_pull_request.return_value = {
+    # No pre-existing PR; success via dispatcher
+    mock_instance.find_existing_pr_url.return_value = None
+    mock_instance.push_and_create_pr.return_value = {
         "success": True,
         "pr_url": "https://github.com/owner/repo/pull/123",
         "already_exists": False,
+        "branch": "test",
     }
 
     # Create service
@@ -196,32 +174,30 @@ def test_complete_task_with_custom_target_branch(
         task_title="Test Task",
         target_branch="main",
     )
-    
+
     # Assertions
     assert result["success"] is True
-    
-    # Vérifier que la branche cible est bien passée
-    call_args = mock_instance.create_pull_request.call_args
+
+    # Vérifier que la branche cible est bien passée au dispatcher
+    call_args = mock_instance.push_and_create_pr.call_args
     assert call_args[1]["target_branch"] == "main"
 
 
 def test_complete_task_pr_already_exists(
     temp_project_dir, mock_worktree_manager
 ):
-    """Test de complétion quand la PR existe déjà"""
+    """PR détectée par le dispatcher pendant la création (already_exists)."""
     # Setup mock
     mock_instance = MagicMock()
     mock_worktree_manager.return_value = mock_instance
-    
-    # Mock _has_uncommitted_changes (no changes)
-    mock_instance._has_uncommitted_changes.return_value = (False, [])
 
-    # Mock success with existing PR
-    mock_instance.push_branch.return_value = {"success": True, "branch": "test"}
-    mock_instance.create_pull_request.return_value = {
+    # No PR found by the pre-push lookup, but the dispatcher reports it exists
+    mock_instance.find_existing_pr_url.return_value = None
+    mock_instance.push_and_create_pr.return_value = {
         "success": True,
         "pr_url": "https://github.com/owner/repo/pull/123",
         "already_exists": True,
+        "branch": "test",
     }
 
     # Create service
@@ -235,11 +211,46 @@ def test_complete_task_pr_already_exists(
         spec_id="test-spec",
         task_title="Test Task",
     )
-    
+
     # Assertions
     assert result["success"] is True
     assert result["pr_already_exists"] is True
     assert result["pr_url"] == "https://github.com/owner/repo/pull/123"
+
+
+def test_complete_task_skips_push_when_pr_exists(
+    temp_project_dir, mock_worktree_manager
+):
+    """Une PR déjà ouverte est détectée AVANT le push : pas de push/création."""
+    # Setup mock
+    mock_instance = MagicMock()
+    mock_worktree_manager.return_value = mock_instance
+
+    # Pre-push lookup finds an existing PR (e.g. branch pushed earlier; the
+    # remote push would now fail with a disabled/read-only credential).
+    mock_instance.find_existing_pr_url.return_value = (
+        "https://dev.azure.com/org/proj/_git/repo/pullrequest/42"
+    )
+
+    # Create service
+    service = TaskCompletionService(
+        project_path=temp_project_dir, base_branch="develop"
+    )
+    service.worktree_manager = mock_instance
+
+    # Complete task
+    result = service.complete_task(
+        spec_id="test-spec",
+        task_title="Test Task",
+    )
+
+    # Assertions — finalized from the existing PR, no push attempted
+    assert result["success"] is True
+    assert result["pr_already_exists"] is True
+    assert result["pr_url"] == (
+        "https://dev.azure.com/org/proj/_git/repo/pullrequest/42"
+    )
+    mock_instance.push_and_create_pr.assert_not_called()
 
 
 def test_build_pr_body_en(monkeypatch):

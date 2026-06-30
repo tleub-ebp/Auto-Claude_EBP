@@ -20,6 +20,7 @@ import {
 import type {
 	ExecutionPhase,
 	ImplementationPlan,
+	KanbanBoardState,
 	KanbanPreferences,
 	PlanSubtask,
 	Project,
@@ -51,6 +52,7 @@ interface StoreData {
 	settings: Record<string, unknown>;
 	tabState?: TabState;
 	kanbanPreferences?: Record<string, KanbanPreferences>;
+	kanbanBoardState?: Record<string, KanbanBoardState>;
 }
 
 interface TasksCacheEntry {
@@ -254,6 +256,27 @@ export class ProjectStore {
 	): void {
 		this.data.kanbanPreferences ??= {};
 		this.data.kanbanPreferences[projectId] = preferences;
+		this.save();
+	}
+
+	/**
+	 * Get the board view-state (column order, filters, saved views) for a project.
+	 */
+	getKanbanBoardState(projectId: string): KanbanBoardState | null {
+		return this.data.kanbanBoardState?.[projectId] ?? null;
+	}
+
+	/**
+	 * Persist board view-state for a project. Partial writes are merged so the
+	 * settings store (columnOrder) and filter store (filters/sort/savedViews)
+	 * don't clobber each other's slice of the same per-project blob.
+	 */
+	saveKanbanBoardState(projectId: string, state: KanbanBoardState): void {
+		this.data.kanbanBoardState ??= {};
+		this.data.kanbanBoardState[projectId] = {
+			...this.data.kanbanBoardState[projectId],
+			...state,
+		};
 		this.save();
 	}
 

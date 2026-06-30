@@ -212,8 +212,60 @@
 		"unlockColumn": "Unlock column width",
 		"columnLocked": "Column width is locked",
 		"expandAll": "Expand all columns",
+		"showMore": "Show {{count}} more",
+		"showLess": "Show less",
 		"azureDevOpsNotConnected": "Azure DevOps not connected — click to configure",
 		"jiraNotConnected": "Jira not connected — click to configure",
+		"bulkRestoreSuccess": "{{count}} task(s) restored",
+		"sortActiveDragHint": "Manual reordering is disabled while a sort is active. Switch back to \"Manual order\" to drag and drop.",
+		"aging": {
+			"idleFor": "Idle for {{duration}}"
+		},
+		"stale": {
+			"chip": "{{count}} idle",
+			"title": "Idle tasks",
+			"subtitle": "No update in a while — click to open the task.",
+			"rowMeta": "{{column}} · for {{duration}}"
+		},
+		"cost": {
+			"forecastTooltipTitle": "Board cost forecast",
+			"tooltipActive": "Active: {{cost}}",
+			"tooltipPending": "Upcoming: {{cost}}",
+			"tooltipNoEstimate": "{{count}} ticket(s) without estimate"
+		},
+		"conflict": {
+			"badge": "Potential conflict: {{count}} shared file(s) with {{tasks}}",
+			"label": "Conflict",
+			"title": "Potential plan conflict",
+			"description": "This task's plan expects to edit files that other tasks also intend to touch. Running them in parallel may lead to merge conflicts.",
+			"files": "{{count}} file(s) in common",
+			"withTasks": "Conflicts with: {{tasks}}"
+		},
+		"views": {
+			"button": "Views",
+			"title": "Saved views",
+			"empty": "No saved views yet. Set your filters, then save them here.",
+			"namePlaceholder": "View name…",
+			"save": "Save current view",
+			"delete": "Delete view"
+		},
+		"wipLimit": {
+			"label": "WIP limit",
+			"description": "Visual alert when the column exceeds this number of tasks.",
+			"placeholder": "No limit",
+			"set": "Set WIP limit",
+			"clear": "Remove limit",
+			"exceeded": "WIP limit exceeded ({{count}}/{{limit}})"
+		},
+		"a11y": {
+			"pickedUp": "Picked up task: {{title}}. Use arrow keys to move, Enter to drop, Escape to cancel.",
+			"overColumn": "Over column {{column}}.",
+			"dropped": "Dropped task \"{{title}}\" into {{column}}.",
+			"droppedSimple": "Dropped task \"{{title}}\".",
+			"cancelled": "Move cancelled.",
+			"columnPickedUp": "Picked up column {{column}}. Use arrow keys to reorder.",
+			"columnReordered": "Column {{column}} moved."
+		},
 		"filter": {
 			"button": "Filter",
 			"title": "Filters",
@@ -260,7 +312,10 @@
 			"errorTitle": "Slash command failed",
 			"successTitle": "Slash command completed",
 			"successBody": "Output was logged to the console.",
-			"ariaListLabel": "Available slash commands"
+			"ariaListLabel": "Available slash commands",
+			"runAsTaskLabel": "Run as task",
+			"runAsTaskHint": "Run as an interactive Kanban task (planning, review, conversation) instead of a one-shot.",
+			"taskCreated": "Task created: {{name}}"
 		}
 	},
 	"queue": {
@@ -747,7 +802,24 @@
 			"selectAria": "Model for this phase",
 			"selectTooltip": "Change the model for this phase",
 			"updatedTitle": "Model updated",
-			"updatedDesc": "The model will be applied when this phase starts."
+			"updatedDesc": "The model will be applied when this phase starts.",
+			"installed": "✓ installed",
+			"downloadable": "to download",
+			"downloadStartedTitle": "Downloading model",
+			"downloadStartedDesc": "{{model}} is downloading in the background."
+		},
+		"modelGroup": {
+			"toggleAria": "Show or hide logs from model {{model}}",
+			"unknownModel": "Unknown model"
+		},
+		"compare": {
+			"button": "Compare",
+			"openAria": "Compare models",
+			"openTooltip": "Compare model plans side by side",
+			"title": "Plan comparison",
+			"close": "Close",
+			"swapAria": "Swap columns",
+			"selectAria": "Choose model to compare"
 		}
 	},
 	"modal": {

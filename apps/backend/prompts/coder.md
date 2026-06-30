@@ -264,7 +264,9 @@ Scan `implementation_plan.json` in order:
 ### 4.1: Run Setup
 
 ```bash
-chmod +x init.sh && ./init.sh
+# Cross-OS: runs the bash setup on macOS/Linux AND on Windows (Git Bash).
+# Windows without Git Bash: powershell -ExecutionPolicy Bypass -File ./init.ps1
+bash ./init.sh
 ```
 
 Or start manually using `project_index.json`:

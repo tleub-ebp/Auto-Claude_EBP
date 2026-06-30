@@ -10,6 +10,7 @@ import type {
 	InfrastructureStatus,
 	InitializationResult,
 	IPCResult,
+	KanbanBoardState,
 	KanbanPreferences,
 	Project,
 	ProjectEnvConfig,
@@ -72,6 +73,15 @@ export interface ProjectAPI {
 	saveKanbanPreferences: (
 		projectId: string,
 		preferences: KanbanPreferences,
+	) => Promise<IPCResult>;
+
+	// Kanban board view-state (per-project column order, filters, saved views)
+	getKanbanBoardState: (
+		projectId: string,
+	) => Promise<IPCResult<KanbanBoardState | null>>;
+	saveKanbanBoardState: (
+		projectId: string,
+		state: KanbanBoardState,
 	) => Promise<IPCResult>;
 
 	// Context Operations
@@ -199,6 +209,24 @@ export interface ProjectAPI {
 		}>
 	>;
 	installOllama: () => Promise<IPCResult<{ command: string }>>;
+	startOllamaServer: (
+		baseUrl?: string,
+	) => Promise<IPCResult<{ running: boolean; url: string }>>;
+	/**
+	 * Make Ollama ready end-to-end: download the portable binary if missing,
+	 * then start the server on the configured URL. No admin/terminal needed.
+	 */
+	ensureOllama: (
+		baseUrl?: string,
+	) => Promise<IPCResult<{ running: boolean; url: string; managed: boolean }>>;
+	/** Subscribe to portable-install progress (download/extract/start). */
+	onOllamaInstallProgress: (
+		callback: (data: {
+			phase: "resolving" | "downloading" | "extracting" | "starting" | "ready";
+			percentage: number;
+			message: string;
+		}) => void,
+	) => () => void;
 	listOllamaModels: (baseUrl?: string) => Promise<
 		IPCResult<{
 			models: Array<{
@@ -235,6 +263,11 @@ export interface ProjectAPI {
 			output: string[];
 		}>
 	>;
+	/** Delete a pulled model to free disk space. */
+	deleteOllamaModel: (
+		modelName: string,
+		baseUrl?: string,
+	) => Promise<IPCResult<{ deleted: string }>>;
 }
 
 export const createProjectAPI = (): ProjectAPI => ({
@@ -301,6 +334,17 @@ export const createProjectAPI = (): ProjectAPI => ({
 		preferences: KanbanPreferences,
 	): Promise<IPCResult> =>
 		ipcRenderer.invoke(IPC_CHANNELS.KANBAN_PREFS_SAVE, projectId, preferences),
+
+	getKanbanBoardState: (
+		projectId: string,
+	): Promise<IPCResult<KanbanBoardState | null>> =>
+		ipcRenderer.invoke(IPC_CHANNELS.KANBAN_STATE_GET, projectId),
+
+	saveKanbanBoardState: (
+		projectId: string,
+		state: KanbanBoardState,
+	): Promise<IPCResult> =>
+		ipcRenderer.invoke(IPC_CHANNELS.KANBAN_STATE_SAVE, projectId, state),
 
 	// Context Operations
 	getProjectContext: (projectId: string) =>
@@ -471,6 +515,25 @@ export const createProjectAPI = (): ProjectAPI => ({
 
 	installOllama: () => ipcRenderer.invoke(IPC_CHANNELS.OLLAMA_INSTALL),
 
+	startOllamaServer: (baseUrl?: string) =>
+		ipcRenderer.invoke(IPC_CHANNELS.OLLAMA_START_SERVER, baseUrl),
+
+	ensureOllama: (baseUrl?: string) =>
+		ipcRenderer.invoke(IPC_CHANNELS.OLLAMA_ENSURE, baseUrl),
+
+	onOllamaInstallProgress: (
+		callback: (data: {
+			phase: "resolving" | "downloading" | "extracting" | "starting" | "ready";
+			percentage: number;
+			message: string;
+		}) => void,
+	) => {
+		type Payload = Parameters<typeof callback>[0];
+		const listener = (_event: IpcRendererEvent, data: Payload) => callback(data);
+		ipcRenderer.on(IPC_CHANNELS.OLLAMA_INSTALL_PROGRESS, listener);
+		return () => ipcRenderer.off(IPC_CHANNELS.OLLAMA_INSTALL_PROGRESS, listener);
+	},
+
 	listOllamaModels: (baseUrl?: string) =>
 		ipcRenderer.invoke(IPC_CHANNELS.OLLAMA_LIST_MODELS, baseUrl),
 
@@ -479,4 +542,7 @@ export const createProjectAPI = (): ProjectAPI => ({
 
 	pullOllamaModel: (modelName: string, baseUrl?: string) =>
 		ipcRenderer.invoke(IPC_CHANNELS.OLLAMA_PULL_MODEL, modelName, baseUrl),
+
+	deleteOllamaModel: (modelName: string, baseUrl?: string) =>
+		ipcRenderer.invoke(IPC_CHANNELS.OLLAMA_DELETE_MODEL, modelName, baseUrl),
 });
