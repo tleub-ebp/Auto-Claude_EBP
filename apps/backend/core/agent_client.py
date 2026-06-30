@@ -2378,20 +2378,46 @@ def _normalize_local_base_url(raw: str | None) -> str:
     Works for any OpenAI-compatible local server — Ollama (11434), LM Studio
     (1234), llama.cpp, vLLM, LocalAI.
 
+    The loopback host is forced to the IPv4 literal ``127.0.0.1``: the
+    app-managed Ollama daemon binds to ``127.0.0.1`` (see the frontend's
+    ``ollamaHostFromUrl``), but ``localhost`` resolves to IPv6 ``::1`` first on
+    many systems (notably Windows). aiohttp then connects to ``::1`` and fails
+    with a spurious "connection refused / Ollama ne répond pas" even though the
+    server is up and answering on IPv4 (a browser hides this via Happy
+    Eyeballs). Pinning IPv4 keeps the client and the server on the same stack.
+
     Examples::
 
-        http://localhost:11434              -> http://localhost:11434/v1/chat/completions
-        http://localhost:1234/v1            -> http://localhost:1234/v1/chat/completions
-        http://localhost:1234/v1/chat/completions (idempotent)
+        http://localhost:11434              -> http://127.0.0.1:11434/v1/chat/completions
+        http://localhost:1234/v1            -> http://127.0.0.1:1234/v1/chat/completions
+        http://127.0.0.1:1234/v1/chat/completions (idempotent)
     """
     base = (raw or "").strip().rstrip("/")
     if not base:
-        base = "http://localhost:11434"
+        base = "http://127.0.0.1:11434"
+    base = _force_ipv4_loopback(base)
     if base.endswith("/chat/completions"):
         base = base[: -len("/chat/completions")].rstrip("/")
     if not base.endswith("/v1"):
         base = base + "/v1"
     return base + "/chat/completions"
+
+
+def _force_ipv4_loopback(url: str) -> str:
+    """Rewrite a ``localhost`` host in ``url`` to the IPv4 literal ``127.0.0.1``.
+
+    Only the loopback hostname is touched (scheme/port/path preserved); other
+    hosts pass through unchanged. See ``_normalize_local_base_url`` for why.
+    """
+    for scheme in ("http://", "https://"):
+        if url.lower().startswith(scheme + "localhost"):
+            rest = url[len(scheme) + len("localhost") :]
+            # Only a real host boundary — ':' (port), '/' (path) or end — so we
+            # never rewrite e.g. "localhostfoo".
+            if rest == "" or rest[0] in ":/":
+                return scheme + "127.0.0.1" + rest
+            break
+    return url
 
 
 def _resolve_local_base_url(explicit: str | None) -> str:
@@ -2417,6 +2443,255 @@ def _resolve_local_base_url(explicit: str | None) -> str:
         except Exception:  # noqa: BLE001 — never block client creation on this
             resolved = None
     return _normalize_local_base_url(resolved)
+
+
+def _balanced_json_objects(text: str) -> list[str]:
+    """Yield each top-level balanced ``{...}`` substring in ``text``.
+
+    Used to pull a JSON tool-call object out of a reply that wraps it in prose
+    or markdown. String contents (with escapes) are skipped so braces inside
+    strings don't break the matching.
+    """
+    out: list[str] = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                out.append(text[start : i + 1])
+    return out
+
+
+def _normalize_text_tool_call(obj: Any, known_tools: set[str]) -> dict[str, Any] | None:
+    """Turn a parsed JSON object into a native tool_call, or ``None``.
+
+    Accepts both ``{"name", "arguments"}`` and ``{"function": {...}}`` shapes.
+    Only objects whose tool name the agent actually offers are accepted, so
+    ordinary JSON data in a reply isn't mistaken for a tool call.
+    """
+    import json as _json
+
+    if not isinstance(obj, dict):
+        return None
+    fn = obj.get("function") if isinstance(obj.get("function"), dict) else obj
+    name = fn.get("name") or fn.get("tool") or fn.get("tool_name")
+    if not isinstance(name, str) or name not in known_tools:
+        return None
+    args = fn.get("arguments")
+    if args is None:
+        args = fn.get("parameters", fn.get("args", {}))
+    if isinstance(args, str):
+        try:
+            args = _json.loads(args)
+        except (ValueError, TypeError):
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+    return {"function": {"name": name, "arguments": args}}
+
+
+def _extract_text_tool_calls(
+    content: str, known_tools: set[str]
+) -> list[dict[str, Any]]:
+    """Recover tool calls a model emitted as JSON *text* instead of structured
+    ``tool_calls`` (common for GGUF/qwen models on Ollama).
+
+    Returns native-shaped tool_calls (deduplicated). Never raises.
+    """
+    import json as _json
+    import re as _re
+
+    known = {t for t in known_tools if t}
+    if not content or not known:
+        return []
+    has_json = "{" in content
+    has_xml = "<tool" in content.lower()
+    if not has_json and not has_xml:
+        return []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _add(tc: dict[str, Any] | None) -> None:
+        if not tc:
+            return
+        key = _json.dumps(tc, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            out.append(tc)
+
+    def _loads(text: str) -> Any:
+        """json.loads tolerant of the Python-dialect "JSON" local models emit.
+
+        Strict JSON rejects, and thus drops the whole tool call for, several
+        common local-model habits: Python literals (``False``/``True``/``None``),
+        single-quoted strings, and the invalid over-escaped apostrophe (``\\'``,
+        e.g. a French "d'avertissement"). We try strict JSON first (so valid JSON
+        is never altered), then ``ast.literal_eval`` (literals only — no code
+        execution — which natively handles ``False``/single quotes/``\\'``), then
+        a last-ditch ``\\'``→``'`` fix for blobs that mix JSON ``null`` with the
+        bad escape. Returns None on failure.
+        """
+        try:
+            return _json.loads(text)
+        except (ValueError, TypeError):
+            pass
+        try:
+            import ast as _ast
+
+            parsed = _ast.literal_eval(text)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            pass
+        try:
+            return _json.loads(text.replace("\\'", "'"))
+        except (ValueError, TypeError):
+            return None
+
+    # 1) JSON shapes: fenced blocks, bare reply, and JSON embedded in prose.
+    if has_json:
+        blobs: list[str] = []
+        blobs += _re.findall(
+            r"```(?:json|tool_call|tool|python)?\s*(\{.*?\}|\[.*?\])\s*```",
+            content,
+            _re.DOTALL,
+        )
+        blobs.append(content.strip())  # whole reply (bare-JSON case)
+        blobs += _balanced_json_objects(content)  # JSON embedded in prose
+        for blob in blobs:
+            parsed = _loads(blob)
+            if parsed is None:
+                continue
+            items = parsed if isinstance(parsed, list) else [parsed]
+            for item in items:
+                _add(_normalize_text_tool_call(item, known))
+
+    # 2) XML shapes some models emit instead of JSON tool_calls, e.g.
+    #    <tool_use name="Write">{"file_path": "x", "content": "..."}</tool_use>
+    #    or <tool_call name="run_command">{...}</tool_call>. The body is the JSON
+    #    arguments object (possibly wrapped in prose). Provider-agnostic: covers
+    #    Windsurf/Codeium-style <tool_call> and Qwen/Llama <tool_use> tags.
+    if has_xml:
+        for m in _re.finditer(
+            r"<tool[_-]?(?:use|call)\b[^>]*\bname\s*=\s*[\"']([^\"']+)[\"']"
+            r"[^>]*>(.*?)</tool[_-]?(?:use|call)>",
+            content,
+            _re.DOTALL | _re.IGNORECASE,
+        ):
+            name = m.group(1).strip()
+            if name not in known:
+                continue
+            body = m.group(2).strip()
+            args: dict[str, Any] = {}
+            for candidate in (body, *_balanced_json_objects(body)):
+                if not candidate:
+                    continue
+                parsed_args = _loads(candidate)
+                if isinstance(parsed_args, dict):
+                    args = parsed_args
+                    break
+            _add({"function": {"name": name, "arguments": args}})
+
+    return out
+
+
+# Sent to a local model that stalled instead of acting, before giving up. Many
+# tools-capable local models (e.g. qwen2.5-coder) either narrate the steps,
+# print a file's content as text, or — worse — ask the user to run commands and
+# paste the output, as if chatting with a human. A single explicit correction
+# usually gets them to emit a real tool call.
+_TOOL_USE_NUDGE = (
+    "You are an AUTONOMOUS agent. There is NO human in this conversation to run "
+    "commands, paste output, or answer questions — asking for input stalls the "
+    "task forever. Do NOT ask for anything and do NOT just describe the steps: "
+    "perform them YOURSELF by emitting an actual tool call now (e.g. "
+    "`run_command` to run a shell command, `list_files`/`read_file` to inspect, "
+    "`Write`/`write_file` with the path and full content to create a file). "
+    "Output a tool call, not prose and not raw JSON/file content."
+)
+
+# High-signal phrases that mean the model is deferring to a human (waiting for
+# someone to run a command / paste output) instead of acting on its own. Kept
+# tight to avoid mistaking a normal closing remark ("please review") for a stall.
+_WAITING_FOR_HUMAN_RE = re.compile(
+    r"please (execute|run|provide)\b"
+    r"|provide the (output|result|directory)"
+    r"|paste the (output|result)"
+    r"|let me know the (output|result)"
+    r"|can you (run|execute|provide)\b"
+    r"|could you (run|execute|provide)\b"
+    r"|waiting for (your|the) (input|output|response)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_waiting_for_human(content: str) -> bool:
+    """True when the reply asks a human to act (run a command, paste output).
+
+    In an autonomous loop there is no human to answer, so such a turn is a stall
+    even if the model called a tool earlier — it must be nudged to act itself.
+    """
+    return bool(content) and _WAITING_FOR_HUMAN_RE.search(content) is not None
+
+
+# How many times to retry a *connection* failure (server briefly unavailable,
+# e.g. just after auto-start or while reloading a model) before surfacing the
+# "Ollama ne répond pas" hint. Reset on any successful response.
+_LOCAL_MAX_CONNECT_RETRIES = 2
+
+
+def _next_no_tool_action(
+    *,
+    any_tool_called: bool,
+    tools_offered: bool,
+    has_content: bool,
+    waiting_for_human: bool,
+    nudge_sent: bool,
+    turn: int,
+    max_turns: int,
+) -> str:
+    """Decide what to do when a turn came back with no tool calls.
+
+    Returns one of:
+      - ``"end"``    — the model is legitimately finished (it already acted and
+                       isn't waiting on anyone, or no tools were offered), or it
+                       returned an empty reply: stop the loop.
+      - ``"nudge"``  — the model stalled (only narrated, or is asking a human to
+                       run commands / paste output) and hasn't been corrected
+                       yet: retry once with ``_TOOL_USE_NUDGE``.
+      - ``"give_up"`` — already nudged (or out of turns) and still stalling:
+                       treat the model as unable to drive tools for this task.
+    """
+    if not has_content:
+        return "end"  # empty reply — nothing to nudge against
+    if not tools_offered:
+        return "end"  # text-only session — a prose ending is normal
+    # Stalled when the model never acted at all, OR it acted but is now deferring
+    # to a human (run this command, paste the output) — nobody will answer.
+    stalled = (not any_tool_called) or waiting_for_human
+    if not stalled:
+        return "end"  # used tools and finished on its own
+    if not nudge_sent and turn < max_turns - 1:
+        return "nudge"
+    return "give_up"
 
 
 class LocalAgentClient(OpenAIAgentClient):
@@ -2468,6 +2743,13 @@ class LocalAgentClient(OpenAIAgentClient):
         # minutes to produce a full completion; the aiohttp default (5 min)
         # would cut healthy slow turns. Generous, env-overridable ceiling.
         self._request_timeout = _env_float("LOCAL_LLM_REQUEST_TIMEOUT", 600.0)
+        # Set True by receive_response() when the model is offered tools but
+        # emits none on the first turn (not even as recoverable inline JSON) —
+        # the tell-tale of a model without Ollama tool-calling support. Agentic
+        # phases (QA, coding, planning) read this to halt fast instead of
+        # retrying a model that can only ever hallucinate. See
+        # services.rate_limit_shield.handle_local_model_no_tools.
+        self.tool_calling_unsupported = False
 
     def _get_http_client(self):
         """Lazy-init an aiohttp ClientSession with a generous local timeout."""
@@ -2609,6 +2891,9 @@ class LocalAgentClient(OpenAIAgentClient):
 
         prompt = self._pending_query
         self._pending_query = None
+        # Fresh session: clear any stale "no tool calling" verdict from a prior
+        # receive_response() on a reused client.
+        self.tool_calling_unsupported = False
 
         messages: list[dict[str, Any]] = []
         if self.system_prompt:
@@ -2641,6 +2926,14 @@ class LocalAgentClient(OpenAIAgentClient):
         # it once (it may be a library name like "qwen2.5-coder" the user never
         # ran `ollama pull` on) and retry, instead of failing with a 404.
         model_pull_attempted = False
+        # Tool-use coaxing: a tools-capable local model that only narrates gets
+        # ONE explicit "call the tools" nudge before we declare it unable to act.
+        any_tool_called = False
+        tool_use_nudge_sent = False
+        # Transient-connection guard: a freshly auto-started or model-reloading
+        # server can briefly refuse a connection. Retry a few times (reset on any
+        # success) before declaring "Ollama ne répond pas".
+        connect_retries = 0
 
         logger.info(
             f"[LocalAgentClient] Starting session (model={self.model}, "
@@ -2722,6 +3015,27 @@ class LocalAgentClient(OpenAIAgentClient):
                         return
                     data = await resp.json()
             except Exception as e:
+                # A connection failure can be transient — the server may be cold-
+                # starting (just auto-launched) or reloading a model. Retry a few
+                # times with backoff before declaring it down, so a healthy but
+                # momentarily-unavailable Ollama doesn't surface "ne répond pas".
+                if (
+                    self._is_connection_error(e)
+                    and connect_retries < _LOCAL_MAX_CONNECT_RETRIES
+                ):
+                    import asyncio as _asyncio
+
+                    connect_retries += 1
+                    logger.warning(
+                        "[LocalAgentClient] Connection to %s failed (%s) — "
+                        "retry %d/%d after backoff.",
+                        url,
+                        e,
+                        connect_retries,
+                        _LOCAL_MAX_CONNECT_RETRIES,
+                    )
+                    await _asyncio.sleep(1.5 * connect_retries)
+                    continue
                 logger.error(f"[LocalAgentClient] Request failed: {e}")
                 yield AgentMessage(
                     role=MessageRole.SYSTEM,
@@ -2734,12 +3048,39 @@ class LocalAgentClient(OpenAIAgentClient):
                 )
                 return
 
+            # Reached the server this turn — clear the transient-failure counter.
+            connect_retries = 0
             _total_in += int(data.get("prompt_eval_count", 0) or 0)
             _total_out += int(data.get("eval_count", 0) or 0)
 
             message = data.get("message") or {}
             content = message.get("content") or ""
             tool_calls = message.get("tool_calls") or []
+
+            # Fallback for local models that emit tool calls as JSON inside the
+            # message *content* instead of the structured tool_calls field (very
+            # common for GGUF/qwen on Ollama). Recover them so the agent can act
+            # instead of looping with "the model called no tool".
+            if not tool_calls and content:
+                recovered = _extract_text_tool_calls(
+                    content, {td.get("name", "") for td in self._tool_definitions}
+                )
+                if recovered:
+                    logger.info(
+                        "[LocalAgentClient] Recovered %d tool call(s) from inline "
+                        "text content.",
+                        len(recovered),
+                    )
+                    tool_calls = recovered
+                    # Keep any narration that PRECEDED the tool-call payload so the
+                    # model's reasoning is still logged (activity feed +
+                    # conversation transcript) instead of being silently dropped.
+                    # Cut from the first JSON ('{'/'[') or XML ('<tool') marker on.
+                    _markers = [content.find("{"), content.find("[")]
+                    _markers.append(content.lower().find("<tool"))
+                    _cut = min((m for m in _markers if m >= 0), default=-1)
+                    _head = (content[:_cut] if _cut >= 0 else content).strip()
+                    content = _head if len(_head) >= 12 else ""
 
             logger.info(
                 f"[LocalAgentClient] Turn {turn + 1}: content_len={len(content)}, "
@@ -2763,18 +3104,43 @@ class LocalAgentClient(OpenAIAgentClient):
                             )
                         ],
                     )
-                # Tools were offered but the model never called one on the very
-                # first turn → it almost certainly lacks tool-calling support
-                # (common for raw GGUF imports like hf.co/* without a tools
-                # template). The agent can't act without tools, so surface an
-                # actionable hint instead of letting QA loop silently.
-                elif tools and turn == 0:
+
+                action = _next_no_tool_action(
+                    any_tool_called=any_tool_called,
+                    tools_offered=bool(tools),
+                    has_content=bool(content),
+                    waiting_for_human=_looks_like_waiting_for_human(content),
+                    nudge_sent=tool_use_nudge_sent,
+                    turn=turn,
+                    max_turns=self.max_turns,
+                )
+
+                # The model stalled — it narrated, printed file content, or asked
+                # the (non-existent) human to run commands — and hasn't been
+                # corrected yet → nudge once and retry. A tools-capable model
+                # (qwen2.5-coder, llama3.1, …) usually just needs to be told to
+                # act on its own rather than describe the work or wait for input.
+                if action == "nudge":
+                    tool_use_nudge_sent = True
                     logger.warning(
-                        "[LocalAgentClient] Model %s returned no tool calls though "
-                        "%d tools were offered — likely no tool-calling support.",
+                        "[LocalAgentClient] Model %s replied without a tool call — "
+                        "nudging once to use the tools instead of narrating.",
                         self.model,
-                        len(tools),
                     )
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": _TOOL_USE_NUDGE})
+                    continue  # retry — don't burn the turn as a failure
+
+                # Tools were offered, the model was nudged, and it STILL only
+                # narrated → it can't drive tools for this task. Flag it (agentic
+                # phases read this to halt fast) and surface an actionable hint.
+                if action == "give_up":
+                    logger.warning(
+                        "[LocalAgentClient] Model %s emitted no tool call even after "
+                        "a nudge — treating as unable to drive tools.",
+                        self.model,
+                    )
+                    self.tool_calling_unsupported = True
                     yield AgentMessage(
                         role=MessageRole.SYSTEM,
                         content=[
@@ -2782,16 +3148,17 @@ class LocalAgentClient(OpenAIAgentClient):
                                 type=ContentBlockType.TEXT,
                                 text=(
                                     f"⚠️ Le modèle local « {self.model} » n'a appelé "
-                                    "aucun outil alors que la tâche en exige. Ce modèle "
-                                    "ne supporte probablement pas le « tool calling » "
-                                    "d'Ollama (fréquent pour les GGUF importés via "
-                                    "hf.co). Choisissez un modèle compatible outils, "
-                                    "p. ex. « qwen2.5-coder » ou « llama3.1 », via "
-                                    "« Télécharger & démarrer »."
+                                    "aucun outil alors que la tâche en exige (même après "
+                                    "une relance). Il décrit le travail au lieu de "
+                                    "l'exécuter. Passez cette phase à un modèle plus "
+                                    "capable — un modèle local plus grand, ou un "
+                                    "fournisseur cloud (Claude) — puis relancez."
                                 ),
                             )
                         ],
                     )
+
+                # action == "end" (finished or empty) falls through here too.
                 self.last_usage = {
                     "input_tokens": _total_in,
                     "output_tokens": _total_out,
@@ -2799,7 +3166,9 @@ class LocalAgentClient(OpenAIAgentClient):
                 }
                 return
 
-            # Keep the assistant turn (native shape) in history for context.
+            # A real tool call arrived: the model is acting. Keep the assistant
+            # turn (native shape) in history for context.
+            any_tool_called = True
             messages.append(
                 {"role": "assistant", "content": content, "tool_calls": tool_calls}
             )
@@ -2908,7 +3277,7 @@ class LocalAgentClient(OpenAIAgentClient):
             return (
                 f"⚠️ Ollama ne répond pas sur {root} — le serveur local n'est pas "
                 "démarré. Ouvrez les réglages du fournisseur « Ollama (Local) » et "
-                "cliquez « Télécharger & démarrer » (installation et lancement "
+                "cliquez « Télécharger » (installation et lancement "
                 "automatiques), ou lancez « ollama serve » manuellement."
             )
         return f"Erreur API LLM local: {exc}"

@@ -6,6 +6,8 @@ Manages acceptance criteria validation and status tracking.
 """
 
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 from progress import is_build_complete
@@ -36,6 +38,57 @@ def save_implementation_plan(spec_dir: Path, plan: dict) -> bool:
         return True
     except OSError:
         return False
+
+
+def plan_snapshot_slug(provider: str, model: str) -> str:
+    """Filename-safe ``<provider>-<model>`` slug for a per-LLM plan snapshot."""
+    slug = re.sub(r"[^a-z0-9]+", "-", f"{provider}_{model}".lower()).strip("-")
+    return slug or "unknown"
+
+
+def snapshot_plan_for_model(
+    spec_dir: Path,
+    provider: str,
+    model: str,
+    *,
+    valid: bool,
+    dest_dir: Path | None = None,
+) -> Path | None:
+    """Archive the current ``implementation_plan.json`` under ``plans/<slug>.json``
+    so plans produced by different LLMs can be compared side by side.
+
+    Reads the plan from ``spec_dir`` (the live run dir) but writes the snapshot
+    under ``<dest_dir or spec_dir>/plans/``. In worktree mode pass
+    ``dest_dir=source_spec_dir`` so snapshots land in the MAIN project spec dir
+    and PERSIST across worktree removal and task reset (``plans/`` is not a reset
+    artifact) — otherwise they'd vanish with the worktree.
+
+    One file per (provider, model) — the latest planning run for that LLM wins.
+    Each snapshot wraps the plan with its provenance (provider, model, capture
+    time, whether it passed validation), so a UI can list/diff them.
+
+    Best-effort: returns the path written, or None when there is no parseable
+    plan to snapshot. Never raises.
+    """
+    plan = load_implementation_plan(spec_dir)
+    if plan is None:
+        return None
+    try:
+        plans_dir = (dest_dir or spec_dir) / "plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        out = plans_dir / f"{plan_snapshot_slug(provider, model)}.json"
+        snapshot = {
+            "provider": provider,
+            "model": model,
+            "captured_at": datetime.now().isoformat(),
+            "valid": valid,
+            "plan": plan,
+        }
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, indent=2)
+        return out
+    except OSError:
+        return None
 
 
 # =============================================================================

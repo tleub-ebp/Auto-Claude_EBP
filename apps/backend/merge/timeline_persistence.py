@@ -148,6 +148,10 @@ class TimelinePersistence:
         # Cap length so deeply-nested paths don't blow past MAX_PATH; keep a hash
         # suffix so distinct long paths never collide.
         if len(safe_name) > 200:
-            digest = hashlib.sha1(file_path.encode("utf-8")).hexdigest()[:12]
+            # Not a security hash — just a short collision-avoidance suffix for
+            # the filename, so flag usedforsecurity=False (clears Bandit B324).
+            digest = hashlib.sha1(
+                file_path.encode("utf-8"), usedforsecurity=False
+            ).hexdigest()[:12]
             safe_name = f"{safe_name[:150]}_{digest}"
         return self.timelines_dir / f"{safe_name}.json"

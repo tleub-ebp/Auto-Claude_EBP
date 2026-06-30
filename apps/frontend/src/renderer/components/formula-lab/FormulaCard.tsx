@@ -1,4 +1,4 @@
-import { Check, Loader2, Zap } from "lucide-react";
+import { Check, Download, HardDriveDownload, Loader2, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Formula } from "../../stores/formula-matrix-store";
 import { Badge } from "../ui/badge";
@@ -83,8 +83,30 @@ export function FormulaCard({
 							{shortModel(formula.model)}
 						</span>
 					</div>
-					<div className="mt-0.5 text-[11px] capitalize text-muted-foreground">
-						{formula.provider} · {effortLabel(formula.effort)}
+					<div className="mt-0.5 flex items-center gap-1.5 text-[11px] capitalize text-muted-foreground">
+						<span>
+							{formula.provider} · {effortLabel(formula.effort)}
+						</span>
+						{formula.provider === "ollama" &&
+							(formula.installed ? (
+								<Badge
+									variant="outline"
+									className="gap-1 border-emerald-500/40 text-[9px] normal-case text-emerald-600 dark:text-emerald-400"
+									title={t("formulaLab:local.installedTooltip")}
+								>
+									<HardDriveDownload className="h-2.5 w-2.5" />
+									{t("formulaLab:local.installed")}
+								</Badge>
+							) : (
+								<Badge
+									variant="outline"
+									className="gap-1 text-[9px] normal-case text-muted-foreground"
+									title={t("formulaLab:local.notInstalledTooltip")}
+								>
+									<Download className="h-2.5 w-2.5" />
+									{t("formulaLab:local.notInstalled")}
+								</Badge>
+							))}
 					</div>
 				</div>
 				<SuccessRing value={formula.success_probability} size={42} />
