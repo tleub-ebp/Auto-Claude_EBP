@@ -2,7 +2,7 @@
 # SDK 0.1.25+ required for improved tool use concurrency handling
 # Earlier versions had 400 errors when tool_use blocks had partial failures
 # Utiliser le nom correct du package (tiret) pour l'installation via pip
-claude-agent-sdk>=0.2.94
+claude-agent-sdk>=0.2.110
 python-dotenv>=1.2.2
 
 # WebSocket support for streaming development mode
