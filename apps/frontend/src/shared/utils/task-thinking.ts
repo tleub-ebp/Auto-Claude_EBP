@@ -48,6 +48,7 @@ type PhaseDefaultsSettings = Pick<
 	| "providerPhaseThinking"
 	| "customPhaseModels"
 	| "customPhaseThinking"
+	| "globalOllamaModel"
 >;
 
 /**
@@ -73,11 +74,29 @@ export function resolvePhaseDefaults(
 			(p) => p.id === (settings?.selectedAgentProfile || "auto"),
 		) || DEFAULT_AGENT_PROFILES[0];
 
-	const phaseModels =
+	let phaseModels =
 		settings?.providerPhaseModels?.[effectiveProvider] ||
 		settings?.customPhaseModels ||
 		profile?.phaseModels ||
 		DEFAULT_PHASE_MODELS;
+
+	// For local providers (Ollama / LM Studio …) the user configures a single
+	// default model in the provider page (`globalOllamaModel`). Use it for every
+	// phase so tasks default to the model actually installed/configured, instead
+	// of a generic catalog name (e.g. "qwen2.5-coder") the user never picked —
+	// unless they've set an explicit per-provider phase config.
+	const isLocalProvider =
+		effectiveProvider === "ollama" ||
+		effectiveProvider === "local" ||
+		effectiveProvider === "lmstudio";
+	if (
+		isLocalProvider &&
+		!settings?.providerPhaseModels?.[effectiveProvider] &&
+		settings?.globalOllamaModel?.trim()
+	) {
+		const m = settings.globalOllamaModel.trim();
+		phaseModels = { spec: m, planning: m, coding: m, qa: m };
+	}
 
 	const phaseThinking =
 		settings?.providerPhaseThinking?.[effectiveProvider] ||
@@ -200,12 +219,38 @@ export function buildProviderMetadataUpdate(
 ): Partial<TaskMetadata> {
 	const base = basePhaseProviders(metadata, defaults);
 	const configPhase = LOG_PHASE_TO_CONFIG_PHASE[logPhase];
-	return { phaseProviders: { ...base, [configPhase]: provider } };
+	const update: Partial<TaskMetadata> = {
+		phaseProviders: { ...base, [configPhase]: provider },
+	};
+
+	// Changing a phase's provider invalidates its persisted model: a model from
+	// the previous provider (e.g. "opus" left over from Anthropic) can't run on
+	// the new one — Ollama silently falls back to its own default, surfaced
+	// confusingly as `ollama:opus`. Reset this phase's model to the NEW provider's
+	// default so model and provider always agree (the other phases keep theirs).
+	// `defaults` MUST be resolved for `provider`; callers that omit it (e.g. unit
+	// tests asserting only the provider) get the legacy provider-only update.
+	const newDefaultModel = defaults?.phaseModels?.[configPhase];
+	if (newDefaultModel) {
+		const baseModels = basePhaseConfig(metadata, defaults);
+		update.isAutoProfile = true;
+		update.phaseModels = {
+			...baseModels.phaseModels,
+			[configPhase]: newDefaultModel,
+		};
+	}
+
+	return update;
 }
 
 interface ModelSelectOption {
 	value: string;
 	label: string;
+	/** Local providers only: model is pulled on the server (vs catalog-only). */
+	installed?: boolean;
+	/** Local providers only: parameter count in billions, to warn that a small
+	 * model is weak for planning. null/undefined = unknown. */
+	param_b?: number | null;
 }
 
 /**
@@ -234,6 +279,8 @@ export function buildModelSelectOptions(
 	const options: ModelSelectOption[] = catalog.map((m) => ({
 		value: m.value,
 		label: m.label,
+		installed: m.installed,
+		param_b: m.param_b,
 	}));
 	const current = currentValue ?? "";
 	if (!current) return { options, value: current };

@@ -1923,6 +1923,10 @@ class OpenAIAgentClient(AgentClient):
         self._http_client: Any = None
         self._tool_executor: Any = None
         self._tool_definitions: list[dict[str, Any]] = []
+        # Optional MCP bridge: configured MCP servers (CUSTOM_MCP_SERVERS) are
+        # surfaced as extra OpenAI tools so OpenAI/Google/local agents can use
+        # them just like the Claude SDK path. Initialised in __aenter__.
+        self._mcp_manager: Any = None
         # Usage accumulated across the session's turns
         self.last_usage: dict | None = None
 
@@ -1963,9 +1967,33 @@ class OpenAIAgentClient(AgentClient):
                 logger.warning(
                     f"[OpenAIAgentClient] Tool executor init failed (text-only mode): {e}"
                 )
+        # Bridge configured MCP servers (best-effort) so their tools are exposed
+        # alongside the built-in toolset. Never fail client setup on MCP errors.
+        try:
+            from core.mcp_tools import MCPToolManager, load_mcp_server_configs
+
+            servers = load_mcp_server_configs(self._project_dir)
+            if servers:
+                manager = MCPToolManager(self._project_dir, servers)
+                await manager.connect()
+                mcp_defs = manager.tool_definitions()
+                if mcp_defs:
+                    self._mcp_manager = manager
+                    self._tool_definitions = list(self._tool_definitions) + mcp_defs
+                    logger.info(
+                        f"[OpenAIAgentClient] MCP enabled: {len(mcp_defs)} tool(s) "
+                        f"from {len(servers)} server(s)"
+                    )
+                else:
+                    await manager.aclose()
+        except Exception as e:  # noqa: BLE001 — MCP must never block client setup
+            logger.warning(f"[OpenAIAgentClient] MCP bridge unavailable: {e}")
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._mcp_manager is not None:
+            await self._mcp_manager.aclose()
+            self._mcp_manager = None
         if self._http_client is not None:
             await self._http_client.close()
             self._http_client = None
@@ -2087,7 +2115,8 @@ class OpenAIAgentClient(AgentClient):
                     role=MessageRole.SYSTEM,
                     content=[
                         ContentBlock(
-                            type=ContentBlockType.TEXT, text=f"OpenAI API error: {e}"
+                            type=ContentBlockType.TEXT,
+                            text=self._describe_request_error(e),
                         )
                     ],
                 )
@@ -2184,7 +2213,19 @@ class OpenAIAgentClient(AgentClient):
 
                 result_text = ""
                 is_error = False
-                if self._tool_executor:
+                if self._mcp_manager is not None and self._mcp_manager.has_tool(
+                    tool_name
+                ):
+                    try:
+                        result = await self._mcp_manager.call(tool_name, args)
+                        result_text = str(result) if result is not None else ""
+                    except Exception as e:
+                        result_text = f"MCP tool error: {e}"
+                        is_error = True
+                        logger.warning(
+                            f"[OpenAIAgentClient] MCP tool {tool_name} failed: {e}"
+                        )
+                elif self._tool_executor:
                     try:
                         result = await self._tool_executor.execute(tool_name, args)
                         result_text = str(result) if result is not None else ""
@@ -2241,6 +2282,29 @@ class OpenAIAgentClient(AgentClient):
     def provider_name(self) -> str:
         return "openai"
 
+    @staticmethod
+    def _is_connection_error(exc: Exception) -> bool:
+        """True when the request failed to even reach the server (vs an API error).
+
+        Covers aiohttp's ClientConnectorError, raw ConnectionRefusedError, and the
+        textual forms seen on Windows ("Cannot connect to host", "refused").
+        """
+        if isinstance(exc, (ConnectionRefusedError, OSError)):
+            return True
+        try:
+            import aiohttp
+
+            if isinstance(exc, aiohttp.ClientConnectorError):
+                return True
+        except ImportError:
+            pass
+        text = str(exc).lower()
+        return "cannot connect to host" in text or "refused" in text
+
+    def _describe_request_error(self, exc: Exception) -> str:
+        """Human-friendly text for a failed chat request. Overridable per provider."""
+        return f"OpenAI API error: {exc}"
+
     def supports_subagents(self) -> bool:
         return False
 
@@ -2251,6 +2315,972 @@ class OpenAIAgentClient(AgentClient):
     ) -> dict[str, str]:
         """Not implemented for OpenAI client; returns empty dict."""
         return {}
+
+
+# =============================================================================
+# Google Gemini Agent Client — OpenAI-compatible endpoint
+# =============================================================================
+
+
+class GoogleAgentClient(OpenAIAgentClient):
+    """Agent client for Google Gemini via its OpenAI-compatible API.
+
+    Gemini exposes an OpenAI-compatible Chat Completions endpoint
+    (https://generativelanguage.googleapis.com/v1beta/openai/), so we reuse the
+    proven OpenAI tool-use loop verbatim and only swap three things:
+      - the base URL,
+      - the API key (GEMINI_API_KEY, falling back to GOOGLE_API_KEY),
+      - the default model.
+
+    The OpenAI-only `reasoning_effort` / `prompt_cache_key` payload params are
+    not part of Gemini's compatibility layer, so they are forced off here.
+    """
+
+    def __init__(
+        self,
+        model: str = "gemini-2.5-pro",
+        system_prompt: str | None = None,
+        max_turns: int = 50,
+        project_dir: str | None = None,
+        agent_type: str = "coder",
+        reasoning_effort: str | None = None,  # accepted for parity; unused on Gemini
+        prompt_cache_key: str | None = None,  # accepted for parity; unused on Gemini
+    ):
+        import os as _os
+
+        super().__init__(
+            model=model,
+            system_prompt=system_prompt,
+            max_turns=max_turns,
+            project_dir=project_dir,
+            agent_type=agent_type,
+            reasoning_effort=None,
+            prompt_cache_key=None,
+        )
+        self._api_key = _os.environ.get("GEMINI_API_KEY") or _os.environ.get(
+            "GOOGLE_API_KEY", ""
+        )
+        self._api_base = (
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        )
+
+
+# =============================================================================
+# Local LLM Agent Client — any OpenAI-compatible local server
+# =============================================================================
+
+
+def _normalize_local_base_url(raw: str | None) -> str:
+    """Normalize a local LLM base URL into a full chat-completions endpoint.
+
+    Accepts whatever the user typed (root, ``/v1``, or the full path, with or
+    without a trailing slash) and returns ``{root}/v1/chat/completions``.
+    Works for any OpenAI-compatible local server — Ollama (11434), LM Studio
+    (1234), llama.cpp, vLLM, LocalAI.
+
+    The loopback host is forced to the IPv4 literal ``127.0.0.1``: the
+    app-managed Ollama daemon binds to ``127.0.0.1`` (see the frontend's
+    ``ollamaHostFromUrl``), but ``localhost`` resolves to IPv6 ``::1`` first on
+    many systems (notably Windows). aiohttp then connects to ``::1`` and fails
+    with a spurious "connection refused / Ollama ne répond pas" even though the
+    server is up and answering on IPv4 (a browser hides this via Happy
+    Eyeballs). Pinning IPv4 keeps the client and the server on the same stack.
+
+    Examples::
+
+        http://localhost:11434              -> http://127.0.0.1:11434/v1/chat/completions
+        http://localhost:1234/v1            -> http://127.0.0.1:1234/v1/chat/completions
+        http://127.0.0.1:1234/v1/chat/completions (idempotent)
+    """
+    base = (raw or "").strip().rstrip("/")
+    if not base:
+        base = "http://127.0.0.1:11434"
+    base = _force_ipv4_loopback(base)
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")].rstrip("/")
+    if not base.endswith("/v1"):
+        base = base + "/v1"
+    return base + "/chat/completions"
+
+
+def _force_ipv4_loopback(url: str) -> str:
+    """Rewrite a ``localhost`` host in ``url`` to the IPv4 literal ``127.0.0.1``.
+
+    Only the loopback hostname is touched (scheme/port/path preserved); other
+    hosts pass through unchanged. See ``_normalize_local_base_url`` for why.
+    """
+    for scheme in ("http://", "https://"):
+        if url.lower().startswith(scheme + "localhost"):
+            rest = url[len(scheme) + len("localhost") :]
+            # Only a real host boundary — ':' (port), '/' (path) or end — so we
+            # never rewrite e.g. "localhostfoo".
+            if rest == "" or rest[0] in ":/":
+                return scheme + "127.0.0.1" + rest
+            break
+    return url
+
+
+def _resolve_local_base_url(explicit: str | None) -> str:
+    """Resolve the local LLM base URL by priority: explicit arg → env →
+    saved provider config → default Ollama localhost. Returns the full
+    chat-completions endpoint (already normalized)."""
+    import os as _os
+
+    resolved = (
+        explicit
+        or _os.environ.get("OLLAMA_BASE_URL")
+        or _os.environ.get("LOCAL_LLM_BASE_URL")
+        or _os.environ.get("LMSTUDIO_BASE_URL")
+    )
+    if not resolved:
+        # Fall back to the saved provider config (~/.work_pilot_ai_llm_providers.json).
+        # Lazy import — src.connectors may not be on sys.path in every caller.
+        try:
+            from src.connectors.llm_config import load_provider_config
+
+            cfg = load_provider_config("ollama") or load_provider_config("local") or {}
+            resolved = cfg.get("base_url")
+        except Exception:  # noqa: BLE001 — never block client creation on this
+            resolved = None
+    return _normalize_local_base_url(resolved)
+
+
+def _balanced_json_objects(text: str) -> list[str]:
+    """Yield each top-level balanced ``{...}`` substring in ``text``.
+
+    Used to pull a JSON tool-call object out of a reply that wraps it in prose
+    or markdown. String contents (with escapes) are skipped so braces inside
+    strings don't break the matching.
+    """
+    out: list[str] = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                out.append(text[start : i + 1])
+    return out
+
+
+def _normalize_text_tool_call(obj: Any, known_tools: set[str]) -> dict[str, Any] | None:
+    """Turn a parsed JSON object into a native tool_call, or ``None``.
+
+    Accepts both ``{"name", "arguments"}`` and ``{"function": {...}}`` shapes.
+    Only objects whose tool name the agent actually offers are accepted, so
+    ordinary JSON data in a reply isn't mistaken for a tool call.
+    """
+    import json as _json
+
+    if not isinstance(obj, dict):
+        return None
+    fn = obj.get("function") if isinstance(obj.get("function"), dict) else obj
+    name = fn.get("name") or fn.get("tool") or fn.get("tool_name")
+    if not isinstance(name, str) or name not in known_tools:
+        return None
+    args = fn.get("arguments")
+    if args is None:
+        args = fn.get("parameters", fn.get("args", {}))
+    if isinstance(args, str):
+        try:
+            args = _json.loads(args)
+        except (ValueError, TypeError):
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+    return {"function": {"name": name, "arguments": args}}
+
+
+def _extract_text_tool_calls(
+    content: str, known_tools: set[str]
+) -> list[dict[str, Any]]:
+    """Recover tool calls a model emitted as JSON *text* instead of structured
+    ``tool_calls`` (common for GGUF/qwen models on Ollama).
+
+    Returns native-shaped tool_calls (deduplicated). Never raises.
+    """
+    import json as _json
+    import re as _re
+
+    known = {t for t in known_tools if t}
+    if not content or not known:
+        return []
+    has_json = "{" in content
+    has_xml = "<tool" in content.lower()
+    if not has_json and not has_xml:
+        return []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _add(tc: dict[str, Any] | None) -> None:
+        if not tc:
+            return
+        key = _json.dumps(tc, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            out.append(tc)
+
+    def _loads(text: str) -> Any:
+        """json.loads tolerant of the Python-dialect "JSON" local models emit.
+
+        Strict JSON rejects, and thus drops the whole tool call for, several
+        common local-model habits: Python literals (``False``/``True``/``None``),
+        single-quoted strings, and the invalid over-escaped apostrophe (``\\'``,
+        e.g. a French "d'avertissement"). We try strict JSON first (so valid JSON
+        is never altered), then ``ast.literal_eval`` (literals only — no code
+        execution — which natively handles ``False``/single quotes/``\\'``), then
+        a last-ditch ``\\'``→``'`` fix for blobs that mix JSON ``null`` with the
+        bad escape. Returns None on failure.
+        """
+        try:
+            return _json.loads(text)
+        except (ValueError, TypeError):
+            pass
+        try:
+            import ast as _ast
+
+            parsed = _ast.literal_eval(text)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            pass
+        try:
+            return _json.loads(text.replace("\\'", "'"))
+        except (ValueError, TypeError):
+            return None
+
+    # 1) JSON shapes: fenced blocks, bare reply, and JSON embedded in prose.
+    if has_json:
+        blobs: list[str] = []
+        blobs += _re.findall(
+            r"```(?:json|tool_call|tool|python)?\s*(\{.*?\}|\[.*?\])\s*```",
+            content,
+            _re.DOTALL,
+        )
+        blobs.append(content.strip())  # whole reply (bare-JSON case)
+        blobs += _balanced_json_objects(content)  # JSON embedded in prose
+        for blob in blobs:
+            parsed = _loads(blob)
+            if parsed is None:
+                continue
+            items = parsed if isinstance(parsed, list) else [parsed]
+            for item in items:
+                _add(_normalize_text_tool_call(item, known))
+
+    # 2) XML shapes some models emit instead of JSON tool_calls, e.g.
+    #    <tool_use name="Write">{"file_path": "x", "content": "..."}</tool_use>
+    #    or <tool_call name="run_command">{...}</tool_call>. The body is the JSON
+    #    arguments object (possibly wrapped in prose). Provider-agnostic: covers
+    #    Windsurf/Codeium-style <tool_call> and Qwen/Llama <tool_use> tags.
+    if has_xml:
+        for m in _re.finditer(
+            r"<tool[_-]?(?:use|call)\b[^>]*\bname\s*=\s*[\"']([^\"']+)[\"']"
+            r"[^>]*>(.*?)</tool[_-]?(?:use|call)>",
+            content,
+            _re.DOTALL | _re.IGNORECASE,
+        ):
+            name = m.group(1).strip()
+            if name not in known:
+                continue
+            body = m.group(2).strip()
+            args: dict[str, Any] = {}
+            for candidate in (body, *_balanced_json_objects(body)):
+                if not candidate:
+                    continue
+                parsed_args = _loads(candidate)
+                if isinstance(parsed_args, dict):
+                    args = parsed_args
+                    break
+            _add({"function": {"name": name, "arguments": args}})
+
+    return out
+
+
+# Sent to a local model that stalled instead of acting, before giving up. Many
+# tools-capable local models (e.g. qwen2.5-coder) either narrate the steps,
+# print a file's content as text, or — worse — ask the user to run commands and
+# paste the output, as if chatting with a human. A single explicit correction
+# usually gets them to emit a real tool call.
+_TOOL_USE_NUDGE = (
+    "You are an AUTONOMOUS agent. There is NO human in this conversation to run "
+    "commands, paste output, or answer questions — asking for input stalls the "
+    "task forever. Do NOT ask for anything and do NOT just describe the steps: "
+    "perform them YOURSELF by emitting an actual tool call now (e.g. "
+    "`run_command` to run a shell command, `list_files`/`read_file` to inspect, "
+    "`Write`/`write_file` with the path and full content to create a file). "
+    "Output a tool call, not prose and not raw JSON/file content."
+)
+
+# High-signal phrases that mean the model is deferring to a human (waiting for
+# someone to run a command / paste output) instead of acting on its own. Kept
+# tight to avoid mistaking a normal closing remark ("please review") for a stall.
+_WAITING_FOR_HUMAN_RE = re.compile(
+    r"please (execute|run|provide)\b"
+    r"|provide the (output|result|directory)"
+    r"|paste the (output|result)"
+    r"|let me know the (output|result)"
+    r"|can you (run|execute|provide)\b"
+    r"|could you (run|execute|provide)\b"
+    r"|waiting for (your|the) (input|output|response)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_waiting_for_human(content: str) -> bool:
+    """True when the reply asks a human to act (run a command, paste output).
+
+    In an autonomous loop there is no human to answer, so such a turn is a stall
+    even if the model called a tool earlier — it must be nudged to act itself.
+    """
+    return bool(content) and _WAITING_FOR_HUMAN_RE.search(content) is not None
+
+
+# How many times to retry a *connection* failure (server briefly unavailable,
+# e.g. just after auto-start or while reloading a model) before surfacing the
+# "Ollama ne répond pas" hint. Reset on any successful response.
+_LOCAL_MAX_CONNECT_RETRIES = 2
+
+
+def _next_no_tool_action(
+    *,
+    any_tool_called: bool,
+    tools_offered: bool,
+    has_content: bool,
+    waiting_for_human: bool,
+    nudge_sent: bool,
+    turn: int,
+    max_turns: int,
+) -> str:
+    """Decide what to do when a turn came back with no tool calls.
+
+    Returns one of:
+      - ``"end"``    — the model is legitimately finished (it already acted and
+                       isn't waiting on anyone, or no tools were offered), or it
+                       returned an empty reply: stop the loop.
+      - ``"nudge"``  — the model stalled (only narrated, or is asking a human to
+                       run commands / paste output) and hasn't been corrected
+                       yet: retry once with ``_TOOL_USE_NUDGE``.
+      - ``"give_up"`` — already nudged (or out of turns) and still stalling:
+                       treat the model as unable to drive tools for this task.
+    """
+    if not has_content:
+        return "end"  # empty reply — nothing to nudge against
+    if not tools_offered:
+        return "end"  # text-only session — a prose ending is normal
+    # Stalled when the model never acted at all, OR it acted but is now deferring
+    # to a human (run this command, paste the output) — nobody will answer.
+    stalled = (not any_tool_called) or waiting_for_human
+    if not stalled:
+        return "end"  # used tools and finished on its own
+    if not nudge_sent and turn < max_turns - 1:
+        return "nudge"
+    return "give_up"
+
+
+class LocalAgentClient(OpenAIAgentClient):
+    """Agent client for any OpenAI-compatible **local** LLM server.
+
+    Reuses the proven OpenAI tool-use loop verbatim and only swaps:
+      - the base URL (Ollama / LM Studio / llama.cpp / vLLM / LocalAI),
+      - the API key (optional — local servers usually accept any value; a
+        placeholder is used so the inherited ``if not self._api_key`` guard
+        passes),
+      - the default model.
+
+    The OpenAI-only ``reasoning_effort`` / ``prompt_cache_key`` payload params
+    are not part of these servers' compatibility layer, so they are forced off.
+    """
+
+    def __init__(
+        self,
+        model: str = "llama3.3",
+        system_prompt: str | None = None,
+        max_turns: int = 50,
+        project_dir: str | None = None,
+        agent_type: str = "coder",
+        base_url: str | None = None,
+        reasoning_effort: str | None = None,  # accepted for parity; unused locally
+        prompt_cache_key: str | None = None,  # accepted for parity; unused locally
+    ):
+        import os as _os
+
+        super().__init__(
+            model=model or "llama3.3",
+            system_prompt=system_prompt,
+            max_turns=max_turns,
+            project_dir=project_dir,
+            agent_type=agent_type,
+            reasoning_effort=None,
+            prompt_cache_key=None,
+        )
+        # Optional key — local servers don't need one. Placeholder keeps the
+        # inherited missing-key guard from aborting; "Bearer local" is harmless.
+        self._api_key = (
+            _os.environ.get("OLLAMA_API_KEY")
+            or _os.environ.get("LOCAL_LLM_API_KEY")
+            or _os.environ.get("LMSTUDIO_API_KEY")
+            or "local"
+        )
+        self._api_base = _resolve_local_base_url(base_url)
+        # A large local model in non-streaming mode can legitimately take
+        # minutes to produce a full completion; the aiohttp default (5 min)
+        # would cut healthy slow turns. Generous, env-overridable ceiling.
+        self._request_timeout = _env_float("LOCAL_LLM_REQUEST_TIMEOUT", 600.0)
+        # Set True by receive_response() when the model is offered tools but
+        # emits none on the first turn (not even as recoverable inline JSON) —
+        # the tell-tale of a model without Ollama tool-calling support. Agentic
+        # phases (QA, coding, planning) read this to halt fast instead of
+        # retrying a model that can only ever hallucinate. See
+        # services.rate_limit_shield.handle_local_model_no_tools.
+        self.tool_calling_unsupported = False
+
+    def _get_http_client(self):
+        """Lazy-init an aiohttp ClientSession with a generous local timeout."""
+        if self._http_client is None:
+            try:
+                import aiohttp
+
+                timeout = aiohttp.ClientTimeout(
+                    total=self._request_timeout, sock_connect=20.0
+                )
+                self._http_client = aiohttp.ClientSession(
+                    headers={
+                        "Content-Type": CONTENT_TYPE_JSON,
+                        "Accept": CONTENT_TYPE_JSON,
+                    },
+                    timeout=timeout,
+                )
+            except ImportError:
+                raise ImportError(
+                    "aiohttp is required for LocalAgentClient. "
+                    "Install it with: pip install aiohttp"
+                )
+        return self._http_client
+
+    def provider_name(self) -> str:
+        return "ollama"
+
+    async def resume(self, history: list[AgentMessage]) -> None:
+        """Truncate a replayed transcript to fit the local context window.
+
+        Local servers load models with a modest context (``num_ctx``; the managed
+        launcher raises the floor to 8192). Replaying a long transcript — e.g.
+        150+ messages after switching from Claude mid-task — overflows it and the
+        request fails with ``exceeds the available context size``. Drop the oldest
+        messages until the rendered preamble fits a conservative budget derived
+        from ``OLLAMA_CONTEXT_LENGTH``. Mirrors ``CopilotAgentClient.resume``.
+        """
+        if not history:
+            await super().resume(history)
+            return
+
+        import os as _os
+
+        try:
+            ctx_tokens = int(_os.environ.get("OLLAMA_CONTEXT_LENGTH", "8192"))
+        except (TypeError, ValueError):
+            ctx_tokens = 8192
+        # Spend ~55 % of the window on replayed history; reserve the rest for the
+        # system prompt, tool definitions, the current turn and the reply.
+        # ~3 chars/token is a safe average for mixed code + prose.
+        char_limit = max(512, int(ctx_tokens * 0.55)) * 3
+
+        truncated = list(history)
+        while len(truncated) > 1:
+            if len(self._format_history_as_preamble(truncated)) <= char_limit:
+                break
+            truncated = truncated[1:]  # drop oldest
+
+        dropped = len(history) - len(truncated)
+        if dropped:
+            logger.warning(
+                "[LocalAgentClient] History truncated on provider switch: dropped "
+                "%d oldest message(s) to fit the local context window "
+                "(~%d tokens, %d → %d messages).",
+                dropped,
+                ctx_tokens,
+                len(history),
+                len(truncated),
+            )
+            print(
+                f"[LocalAgentClient] ⚠️  Historique tronqué : {dropped} ancien(s) "
+                f"message(s) retiré(s) pour tenir dans le contexte local "
+                f"(~{ctx_tokens} tokens).",
+                flush=True,
+            )
+
+        await super().resume(truncated)
+
+    def _native_chat_url(self) -> str:
+        """Ollama's native chat endpoint (root of the OpenAI-compatible base)."""
+        root = self._api_base.split("/v1/")[0] or self._api_base
+        return f"{root.rstrip('/')}/api/chat"
+
+    def _num_ctx(self) -> int:
+        """Context window to request, raised well above Ollama's 4096 default."""
+        import os as _os
+
+        try:
+            return max(2048, int(_os.environ.get("OLLAMA_CONTEXT_LENGTH", "8192")))
+        except (TypeError, ValueError):
+            return 8192
+
+    async def _pull_ollama_model(self) -> tuple[bool, str]:
+        """Pull ``self.model`` into the server (Ollama API: POST /api/pull).
+
+        Returns ``(ok, error)``. Uses a long per-request timeout since a model
+        can be several GB. Never raises.
+        """
+        import json as _json
+
+        import aiohttp
+
+        root = self._api_base.split("/v1/")[0] or self._api_base
+        url = f"{root.rstrip('/')}/api/pull"
+        try:
+            async with self._get_http_client().post(
+                url,
+                json={"name": self.model, "stream": False},
+                timeout=aiohttp.ClientTimeout(total=1800, sock_connect=20),
+            ) as resp:
+                text = await resp.text()
+                if resp.status == 200 and '"error"' not in text:
+                    return True, ""
+                try:
+                    return False, _json.loads(text).get("error", text)
+                except (_json.JSONDecodeError, AttributeError, TypeError):
+                    return False, text
+        except Exception as e:  # noqa: BLE001 — surface as a soft failure
+            return False, str(e)
+
+    async def receive_response(self) -> AsyncIterator[AgentMessage]:
+        """Run the tool-use loop against Ollama's NATIVE ``/api/chat`` endpoint.
+
+        Why not the inherited OpenAI loop: Ollama's OpenAI-compatible endpoint
+        ignores ``num_ctx``, so models load with a 4096-token window and large
+        agent prompts fail with "exceeds the available context size". The native
+        API accepts ``options.num_ctx`` per request — the only way to set context
+        that works for ANY server (system or app-managed) and any model name
+        (including ``hf.co/org/model``), with no model re-creation or restart.
+
+        Message/tool shapes stay native throughout (tool-call arguments are
+        objects, tool results use ``role: "tool"``), so multi-turn tool calling
+        round-trips correctly.
+        """
+        import json as _json
+
+        if not self._pending_query:
+            return
+
+        prompt = self._pending_query
+        self._pending_query = None
+        # Fresh session: clear any stale "no tool calling" verdict from a prior
+        # receive_response() on a reused client.
+        self.tool_calling_unsupported = False
+
+        messages: list[dict[str, Any]] = []
+        if self.system_prompt:
+            messages.append({"role": "system", "content": self.system_prompt})
+        self._consume_resumed_history_as_system_message(messages)
+        messages.append({"role": "user", "content": prompt})
+
+        # Tool definitions use the same {type:function, function:{…}} shape the
+        # native API accepts.
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": td["name"],
+                    "description": td.get("description", ""),
+                    "parameters": td.get(
+                        "parameters", {"type": "object", "properties": {}}
+                    ),
+                },
+            }
+            for td in self._tool_definitions
+        ]
+
+        url = self._native_chat_url()
+        num_ctx = self._num_ctx()
+        session = self._get_http_client()
+        _total_in = 0
+        _total_out = 0
+        # Pull-on-demand guard: if the requested model isn't installed, we pull
+        # it once (it may be a library name like "qwen2.5-coder" the user never
+        # ran `ollama pull` on) and retry, instead of failing with a 404.
+        model_pull_attempted = False
+        # Tool-use coaxing: a tools-capable local model that only narrates gets
+        # ONE explicit "call the tools" nudge before we declare it unable to act.
+        any_tool_called = False
+        tool_use_nudge_sent = False
+        # Transient-connection guard: a freshly auto-started or model-reloading
+        # server can briefly refuse a connection. Retry a few times (reset on any
+        # success) before declaring "Ollama ne répond pas".
+        connect_retries = 0
+
+        logger.info(
+            f"[LocalAgentClient] Starting session (model={self.model}, "
+            f"tools={len(tools)}, num_ctx={num_ctx})"
+        )
+        print(
+            f"[LocalAgentClient] 🤖 Starting Ollama session "
+            f"(model={self.model}, {len(tools)} tools, num_ctx={num_ctx})",
+            flush=True,
+        )
+
+        for turn in range(self.max_turns):
+            payload: dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "stream": False,
+                "options": {"num_ctx": num_ctx},
+            }
+            if tools:
+                payload["tools"] = tools
+
+            try:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        # Model not installed → pull it once, then retry the turn.
+                        if (
+                            "not found" in error_text.lower()
+                            and not model_pull_attempted
+                        ):
+                            model_pull_attempted = True
+                            logger.warning(
+                                "[LocalAgentClient] Model %s not installed — "
+                                "pulling on demand.",
+                                self.model,
+                            )
+                            yield AgentMessage(
+                                role=MessageRole.SYSTEM,
+                                content=[
+                                    ContentBlock(
+                                        type=ContentBlockType.TEXT,
+                                        text=(
+                                            f"📥 Modèle « {self.model} » non installé "
+                                            "— téléchargement automatique en cours "
+                                            "(cela peut prendre plusieurs minutes)…"
+                                        ),
+                                    )
+                                ],
+                            )
+                            pulled, pull_err = await self._pull_ollama_model()
+                            if pulled:
+                                continue  # retry the same turn now that it exists
+                            yield AgentMessage(
+                                role=MessageRole.SYSTEM,
+                                content=[
+                                    ContentBlock(
+                                        type=ContentBlockType.TEXT,
+                                        text=(
+                                            f"Échec du téléchargement du modèle "
+                                            f"« {self.model} » : {pull_err}"
+                                        ),
+                                    )
+                                ],
+                            )
+                            return
+                        logger.error(
+                            f"[LocalAgentClient] API error ({resp.status}): "
+                            f"{error_text[:500]}"
+                        )
+                        yield AgentMessage(
+                            role=MessageRole.SYSTEM,
+                            content=[
+                                ContentBlock(
+                                    type=ContentBlockType.TEXT,
+                                    text=f"Ollama API error ({resp.status}): {error_text}",
+                                )
+                            ],
+                        )
+                        return
+                    data = await resp.json()
+            except Exception as e:
+                # A connection failure can be transient — the server may be cold-
+                # starting (just auto-launched) or reloading a model. Retry a few
+                # times with backoff before declaring it down, so a healthy but
+                # momentarily-unavailable Ollama doesn't surface "ne répond pas".
+                if (
+                    self._is_connection_error(e)
+                    and connect_retries < _LOCAL_MAX_CONNECT_RETRIES
+                ):
+                    import asyncio as _asyncio
+
+                    connect_retries += 1
+                    logger.warning(
+                        "[LocalAgentClient] Connection to %s failed (%s) — "
+                        "retry %d/%d after backoff.",
+                        url,
+                        e,
+                        connect_retries,
+                        _LOCAL_MAX_CONNECT_RETRIES,
+                    )
+                    await _asyncio.sleep(1.5 * connect_retries)
+                    continue
+                logger.error(f"[LocalAgentClient] Request failed: {e}")
+                yield AgentMessage(
+                    role=MessageRole.SYSTEM,
+                    content=[
+                        ContentBlock(
+                            type=ContentBlockType.TEXT,
+                            text=self._describe_request_error(e),
+                        )
+                    ],
+                )
+                return
+
+            # Reached the server this turn — clear the transient-failure counter.
+            connect_retries = 0
+            _total_in += int(data.get("prompt_eval_count", 0) or 0)
+            _total_out += int(data.get("eval_count", 0) or 0)
+
+            message = data.get("message") or {}
+            content = message.get("content") or ""
+            tool_calls = message.get("tool_calls") or []
+
+            # Fallback for local models that emit tool calls as JSON inside the
+            # message *content* instead of the structured tool_calls field (very
+            # common for GGUF/qwen on Ollama). Recover them so the agent can act
+            # instead of looping with "the model called no tool".
+            if not tool_calls and content:
+                recovered = _extract_text_tool_calls(
+                    content, {td.get("name", "") for td in self._tool_definitions}
+                )
+                if recovered:
+                    logger.info(
+                        "[LocalAgentClient] Recovered %d tool call(s) from inline "
+                        "text content.",
+                        len(recovered),
+                    )
+                    tool_calls = recovered
+                    # Keep any narration that PRECEDED the tool-call payload so the
+                    # model's reasoning is still logged (activity feed +
+                    # conversation transcript) instead of being silently dropped.
+                    # Cut from the first JSON ('{'/'[') or XML ('<tool') marker on.
+                    _markers = [content.find("{"), content.find("[")]
+                    _markers.append(content.lower().find("<tool"))
+                    _cut = min((m for m in _markers if m >= 0), default=-1)
+                    _head = (content[:_cut] if _cut >= 0 else content).strip()
+                    content = _head if len(_head) >= 12 else ""
+
+            logger.info(
+                f"[LocalAgentClient] Turn {turn + 1}: content_len={len(content)}, "
+                f"tool_calls={len(tool_calls)}"
+            )
+
+            if content:
+                yield AgentMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=[ContentBlock(type=ContentBlockType.TEXT, text=content)],
+                )
+
+            if not tool_calls:
+                if not content:
+                    yield AgentMessage(
+                        role=MessageRole.ASSISTANT,
+                        content=[
+                            ContentBlock(
+                                type=ContentBlockType.TEXT,
+                                text="(No response from Ollama)",
+                            )
+                        ],
+                    )
+
+                action = _next_no_tool_action(
+                    any_tool_called=any_tool_called,
+                    tools_offered=bool(tools),
+                    has_content=bool(content),
+                    waiting_for_human=_looks_like_waiting_for_human(content),
+                    nudge_sent=tool_use_nudge_sent,
+                    turn=turn,
+                    max_turns=self.max_turns,
+                )
+
+                # The model stalled — it narrated, printed file content, or asked
+                # the (non-existent) human to run commands — and hasn't been
+                # corrected yet → nudge once and retry. A tools-capable model
+                # (qwen2.5-coder, llama3.1, …) usually just needs to be told to
+                # act on its own rather than describe the work or wait for input.
+                if action == "nudge":
+                    tool_use_nudge_sent = True
+                    logger.warning(
+                        "[LocalAgentClient] Model %s replied without a tool call — "
+                        "nudging once to use the tools instead of narrating.",
+                        self.model,
+                    )
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": _TOOL_USE_NUDGE})
+                    continue  # retry — don't burn the turn as a failure
+
+                # Tools were offered, the model was nudged, and it STILL only
+                # narrated → it can't drive tools for this task. Flag it (agentic
+                # phases read this to halt fast) and surface an actionable hint.
+                if action == "give_up":
+                    logger.warning(
+                        "[LocalAgentClient] Model %s emitted no tool call even after "
+                        "a nudge — treating as unable to drive tools.",
+                        self.model,
+                    )
+                    self.tool_calling_unsupported = True
+                    yield AgentMessage(
+                        role=MessageRole.SYSTEM,
+                        content=[
+                            ContentBlock(
+                                type=ContentBlockType.TEXT,
+                                text=(
+                                    f"⚠️ Le modèle local « {self.model} » n'a appelé "
+                                    "aucun outil alors que la tâche en exige (même après "
+                                    "une relance). Il décrit le travail au lieu de "
+                                    "l'exécuter. Passez cette phase à un modèle plus "
+                                    "capable — un modèle local plus grand, ou un "
+                                    "fournisseur cloud (Claude) — puis relancez."
+                                ),
+                            )
+                        ],
+                    )
+
+                # action == "end" (finished or empty) falls through here too.
+                self.last_usage = {
+                    "input_tokens": _total_in,
+                    "output_tokens": _total_out,
+                    "cost_usd": 0.0,
+                }
+                return
+
+            # A real tool call arrived: the model is acting. Keep the assistant
+            # turn (native shape) in history for context.
+            any_tool_called = True
+            messages.append(
+                {"role": "assistant", "content": content, "tool_calls": tool_calls}
+            )
+
+            for i, tc in enumerate(tool_calls):
+                func = tc.get("function", {}) or {}
+                tool_name = func.get("name", "")
+                # Native arguments are already an object; tolerate a string too.
+                raw_args = func.get("arguments", {})
+                if isinstance(raw_args, str):
+                    try:
+                        args = _json.loads(raw_args or "{}")
+                    except (_json.JSONDecodeError, TypeError):
+                        args = {}
+                else:
+                    args = raw_args or {}
+                tool_id = tc.get("id") or f"call_{turn}_{i}_{tool_name}"
+
+                logger.info(
+                    f"[LocalAgentClient] Turn {turn + 1}: "
+                    f"tool_call {tool_name}({list(args.keys())})"
+                )
+                print(f"[LocalAgentClient] 🔧 Tool: {tool_name}", flush=True)
+
+                yield AgentMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=[
+                        ContentBlock(
+                            type=ContentBlockType.TOOL_USE,
+                            tool_name=tool_name,
+                            tool_id=tool_id,
+                            tool_input=args,
+                        )
+                    ],
+                )
+
+                result_text = ""
+                is_error = False
+                if self._mcp_manager is not None and self._mcp_manager.has_tool(
+                    tool_name
+                ):
+                    try:
+                        result = await self._mcp_manager.call(tool_name, args)
+                        result_text = str(result) if result is not None else ""
+                    except Exception as e:
+                        result_text = f"MCP tool error: {e}"
+                        is_error = True
+                elif self._tool_executor:
+                    try:
+                        result = await self._tool_executor.execute(tool_name, args)
+                        result_text = str(result) if result is not None else ""
+                    except Exception as e:
+                        result_text = f"Tool error: {e}"
+                        is_error = True
+                else:
+                    result_text = "Tool executor not available"
+                    is_error = True
+
+                yield AgentMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=[
+                        ContentBlock(
+                            type=ContentBlockType.TOOL_RESULT,
+                            tool_use_id=tool_id,
+                            is_error=is_error,
+                            result_content=result_text,
+                        )
+                    ],
+                )
+
+                # Native tool result message.
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_name": tool_name,
+                        "content": truncate_tool_result(result_text),
+                    }
+                )
+
+            compacted = compact_messages(messages)
+            if compacted:
+                logger.info(
+                    f"[LocalAgentClient] History compaction: elided {compacted} "
+                    "stale tool result(s)"
+                )
+
+        logger.warning(
+            f"[LocalAgentClient] Reached max_turns ({self.max_turns}) — stopping"
+        )
+        self.last_usage = {
+            "input_tokens": _total_in,
+            "output_tokens": _total_out,
+            "cost_usd": 0.0,
+        }
+
+    def _describe_request_error(self, exc: Exception) -> str:
+        """Turn a raw connection failure into an actionable, localized hint.
+
+        A local server that isn't running surfaces as a cryptic aiohttp
+        "Cannot connect to host …" line. For a local LLM that almost always
+        means the daemon isn't started, so we say exactly that and how to fix it.
+        """
+        if self._is_connection_error(exc):
+            # Show the server root (strip the /v1/chat/completions suffix).
+            root = self._api_base.split("/v1/")[0] or self._api_base
+            return (
+                f"⚠️ Ollama ne répond pas sur {root} — le serveur local n'est pas "
+                "démarré. Ouvrez les réglages du fournisseur « Ollama (Local) » et "
+                "cliquez « Télécharger » (installation et lancement "
+                "automatiques), ou lancez « ollama serve » manuellement."
+            )
+        return f"Erreur API LLM local: {exc}"
 
 
 # =============================================================================

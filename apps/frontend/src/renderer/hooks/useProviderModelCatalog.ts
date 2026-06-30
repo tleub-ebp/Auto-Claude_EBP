@@ -35,6 +35,21 @@ export interface CatalogModel {
 	label: string;
 	tier?: "flagship" | "standard" | "fast" | "local";
 	supportsThinking?: boolean;
+	/**
+	 * For local providers (Ollama/LM Studio) only: whether this model is
+	 * actually pulled on the server (came from the live /api/tags listing) vs
+	 * merely a catalog suggestion the user could download.
+	 */
+	installed?: boolean;
+	/**
+	 * For local providers only: whether the model supports native tool-calling.
+	 * `false` means the backend confirmed it CANNOT drive agentic phases, so the
+	 * picker hides it. `undefined` = unknown (kept).
+	 */
+	supports_tools?: boolean;
+	/** For local providers only: parameter count in billions (e.g. 8, 70). Used
+	 * to warn that a small model is weak for planning. null/undefined = unknown. */
+	param_b?: number | null;
 }
 
 export interface ProviderModelCatalog {
@@ -162,10 +177,27 @@ export function useProviderModelCatalog(
 	// version (short alias / dotted-vs-dashed / dated snapshot) into a single
 	// entry, keeping the explicit versioned id so the dropdown never shows the
 	// same model twice for one provider.
-	const models = useMemo(
-		() => dedupeModelCatalog(mergeCatalogs(liveModels, staticEntries)),
-		[liveModels, staticEntries],
-	);
+	const models = useMemo(() => {
+		const merged = dedupeModelCatalog(mergeCatalogs(liveModels, staticEntries));
+		// For local providers the live list IS the set of installed models, so we
+		// can flag which dropdown entries are actually on disk vs. catalog-only
+		// suggestions (downloaded on demand). For cloud providers "live" means
+		// "listed by the API", not "installed", so we don't tag those.
+		const isLocal =
+			provider === "ollama" ||
+			provider === "local" ||
+			provider === "lmstudio";
+		if (!isLocal || liveModels.length === 0) return merged;
+		const installedValues = new Set(liveModels.map((m) => m.value));
+		return (
+			merged
+				// Hide local models the backend confirmed have NO native tool-calling
+				// — they can't drive WorkPilot's agentic phases. Unknown (undefined)
+				// stays, so this never over-filters.
+				.filter((m) => m.supports_tools !== false)
+				.map((m) => ({ ...m, installed: installedValues.has(m.value) }))
+		);
+	}, [liveModels, staticEntries, provider]);
 
 	return { models, source, fetchedAt, error, loading, refresh };
 }

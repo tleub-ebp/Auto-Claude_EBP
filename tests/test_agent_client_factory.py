@@ -35,7 +35,12 @@ if "claude_agent_sdk" not in sys.modules:
     sys.modules["claude_agent_sdk"] = _mock_sdk
     sys.modules["claude_agent_sdk.types"] = _mock_sdk.types
 
-from core.agent_client import AgentClient, ClaudeAgentClient, CopilotAgentClient
+from core.agent_client import (
+    AgentClient,
+    ClaudeAgentClient,
+    CopilotAgentClient,
+    LocalAgentClient,
+)
 from core.client import _get_active_provider
 
 # =============================================================================
@@ -227,6 +232,57 @@ class TestCreateAgentClient:
 
         # Should return a ClaudeAgentClient due to fallback
         assert isinstance(client, ClaudeAgentClient)
+
+    @patch("core.client.create_client")
+    def test_ollama_provider_creates_local_client(
+        self, mock_create_client, tmp_path, monkeypatch
+    ):
+        """provider='ollama' should create a LocalAgentClient (not fall back to Claude)."""
+        from core.client import create_agent_client
+
+        # If the local branch were missing, the factory would call create_client
+        # (Claude fallback). Mock it so an accidental fallback is detectable.
+        mock_create_client.return_value = MagicMock()
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:1234")
+
+        client = create_agent_client(
+            project_dir=tmp_path,
+            spec_dir=tmp_path,
+            model="qwen2.5-coder",
+            agent_type="coder",
+            provider="ollama",
+        )
+
+        assert isinstance(client, LocalAgentClient)
+        assert isinstance(client, AgentClient)
+        assert client.provider_name() == "ollama"
+        assert client.model == "qwen2.5-coder"
+        # The loopback host is pinned to IPv4 (localhost → 127.0.0.1) so the
+        # client reaches the IPv4-bound Ollama daemon.
+        assert client._api_base == "http://127.0.0.1:1234/v1/chat/completions"
+        mock_create_client.assert_not_called()
+
+    @patch("core.client.create_client")
+    def test_lmstudio_alias_creates_local_client(
+        self, mock_create_client, tmp_path, monkeypatch
+    ):
+        """The 'lmstudio'/'local' aliases also route to LocalAgentClient."""
+        from core.client import create_agent_client
+
+        mock_create_client.return_value = MagicMock()
+        monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+        monkeypatch.setenv("LMSTUDIO_BASE_URL", "http://localhost:1234")
+
+        client = create_agent_client(
+            project_dir=tmp_path,
+            spec_dir=tmp_path,
+            model="local-model",
+            agent_type="coder",
+            provider="lmstudio",
+        )
+
+        assert isinstance(client, LocalAgentClient)
+        mock_create_client.assert_not_called()
 
     @patch("core.client._get_active_provider")
     @patch("core.client.create_client")

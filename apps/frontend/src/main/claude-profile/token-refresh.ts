@@ -432,6 +432,44 @@ export interface EnsureValidTokenOptions {
 }
 
 /**
+ * Cross-process recovery after a refresh `invalid_grant` / `invalid_client`.
+ *
+ * ROOT CAUSE: the OAuth refresh token is single-use. When several actors share
+ * the same credential store — WorkPilot's UsageMonitor, each agent subprocess
+ * (the Claude Code SDK refreshes on its own), a second WorkPilot window, or an
+ * external `claude` CLI — whoever refreshes first rotates the token and writes a
+ * fresh access token to disk. Every other actor's refresh token is then revoked,
+ * so its next refresh fails with `invalid_grant` even though a perfectly valid
+ * token is already sitting on disk.
+ *
+ * In that situation the correct action is NOT to force the user to
+ * re-authenticate: it is to re-read the credential store and adopt the fresh
+ * token the winning process just wrote. This makes the whole system self-healing
+ * under refresh-token contention.
+ *
+ * @param expandedConfigDir - resolved config directory of the profile
+ * @param previousAccessToken - the (now stale) access token we tried to refresh from
+ * @returns a newer, still-valid access token written by another process, or null
+ */
+function recoverTokenAfterInvalidGrant(
+	expandedConfigDir: string | undefined,
+	previousAccessToken: string | null,
+): string | null {
+	// Bypass the in-memory cache so we observe what another process just wrote.
+	clearKeychainCache(expandedConfigDir);
+	const diskCreds = getFullCredentialsFromKeychain(expandedConfigDir);
+	if (
+		diskCreds.token &&
+		diskCreds.token !== previousAccessToken &&
+		// threshold 0: accept any token that is not already expired
+		!isTokenExpiredOrNearExpiry(diskCreds.expiresAt, 0)
+	) {
+		return diskCreds.token;
+	}
+	return null;
+}
+
+/**
  * Ensure a valid token is available, refreshing if necessary.
  *
  * This function:
@@ -623,6 +661,21 @@ export async function ensureValidToken(
 				refreshResult.errorCode === "invalid_client";
 
 			if (isPermanentError) {
+				// Before declaring the account unusable, check whether another process
+				// (agent SDK, second window, external CLI) already rotated the token and
+				// wrote a fresh one to disk. If so, adopt it instead of forcing re-auth.
+				const recovered = recoverTokenAfterInvalidGrant(
+					expandedConfigDir,
+					creds.token,
+				);
+				if (recovered) {
+					console.warn(
+						"[TokenRefresh:ensureValidToken] invalid_grant, but a newer valid token was found on disk (rotated by another process) — adopting it instead of requiring re-authentication",
+					);
+					lastRefreshTimestamps.set(lockKey, Date.now());
+					return { token: recovered, wasRefreshed: true };
+				}
+
 				// Return null for permanent errors to prevent infinite 401 loops
 				console.error(
 					"[TokenRefresh:ensureValidToken] Permanent error detected, returning null token",
@@ -795,6 +848,26 @@ export async function reactiveTokenRefresh(
 		!refreshResult.refreshToken ||
 		!refreshResult.expiresAt
 	) {
+		// Cross-process recovery: a concurrent actor may have rotated the token and
+		// written a fresh one to disk, revoking ours. Adopt the disk token rather
+		// than reporting a permanent auth failure.
+		if (
+			refreshResult.errorCode === "invalid_grant" ||
+			refreshResult.errorCode === "invalid_client"
+		) {
+			const recovered = recoverTokenAfterInvalidGrant(
+				expandedConfigDir,
+				creds.token,
+			);
+			if (recovered) {
+				console.warn(
+					"[TokenRefresh:reactive] invalid_grant, but a newer valid token was found on disk (rotated by another process) — adopting it instead of requiring re-authentication",
+				);
+				lastRefreshTimestamps.set(lockKey, Date.now());
+				return { token: recovered, wasRefreshed: true };
+			}
+		}
+
 		return {
 			token: null,
 			wasRefreshed: false,

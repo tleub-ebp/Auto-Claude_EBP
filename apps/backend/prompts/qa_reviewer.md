@@ -63,8 +63,9 @@ echo "In Progress: $(grep -c '"status": "in_progress"' {{SPEC_DIR}}/implementati
 ## PHASE 2: START DEVELOPMENT ENVIRONMENT
 
 ```bash
-# Start all services
-chmod +x init.sh && ./init.sh
+# Start all services — cross-OS (bash works on macOS/Linux and Windows Git Bash;
+# on Windows without Git Bash use: powershell -ExecutionPolicy Bypass -File ./init.ps1)
+bash ./init.sh
 
 # Verify services are running
 lsof -iTCP -sTCP:LISTEN | grep -E "node|python|next|vite"

@@ -298,6 +298,9 @@ export interface AppSettings {
 	globalGoogleDeepMindApiKey?: string;
 	globalMetaApiKey?: string;
 	globalAWSApiKey?: string;
+	// Ollama / local LLM provider config (set in the provider page).
+	globalOllamaApiUrl?: string;
+	globalOllamaModel?: string;
 	// Graphiti LLM provider settings (legacy)
 	graphitiLlmProvider?: "openai" | "anthropic" | "google" | "groq" | "ollama";
 	ollamaBaseUrl?: string;

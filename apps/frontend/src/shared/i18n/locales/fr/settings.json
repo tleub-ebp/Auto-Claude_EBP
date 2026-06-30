@@ -137,6 +137,95 @@
 				"error": "Erreur",
 				"errorDescription": "Échec de {{action}} du fournisseur {{providerId}}"
 			},
+			"localModels": {
+				"title": "Modèles installés localement",
+				"summary": "{{count}} modèle(s) · {{size}} sur le disque",
+				"empty": "Aucun modèle pour l'instant.",
+				"refresh": "Rafraîchir la liste",
+				"setDefaultHint": "Double-cliquez un modèle pour le définir par défaut.",
+				"selectTooltip": "Double-cliquez pour définir {{name}} comme modèle par défaut",
+				"deleteTooltip": "Supprimer {{name}} du disque",
+				"deleteConfirm": "Supprimer le modèle « {{name}} » du disque ? Cette action est irréversible (il faudra le retélécharger pour le réutiliser).",
+				"deleteError": "Échec de la suppression de {{name}}.",
+				"unexpectedError": "Erreur inattendue.",
+				"unitMb": "Mo",
+				"unitGb": "Go"
+			},
+			"modelDiscovery": {
+				"title": "Découvrir des modèles (Hugging Face)",
+				"description": "Liste en direct du Hub via le MCP Hugging Face. Cliquez une ligne pour la définir par défaut ; « Télécharger » lance Ollama et récupère le modèle localement.",
+				"searchPlaceholder": "Rechercher (ex. qwen2.5-coder, llama 3.1, mistral)…",
+				"search": "Rechercher",
+				"downloadStart": "Télécharger",
+				"copyTooltip": "Copier : ollama pull hf.co/{{id}}",
+				"setDefaultTooltip": "Définir {{name}} comme modèle par défaut",
+				"default": "(par défaut)",
+				"noResults": "Aucun modèle trouvé pour ces critères.",
+				"searchFailed": "La recherche Hugging Face a échoué.",
+				"unexpectedError": "Erreur inattendue.",
+				"apiUnavailable": "Indisponible : API Ollama non chargée.",
+				"preparing": "Préparation d'Ollama…",
+				"startingServer": "Démarrage du serveur Ollama…",
+				"downloadingModel": "Téléchargement de {{model}}…",
+				"ready": "{{model}} est prêt et servi localement.",
+				"pullFailed": "Échec du téléchargement de {{model}}.",
+				"ensureFailed": "Impossible de préparer Ollama automatiquement. Vous pouvez aussi l'installer manuellement depuis ollama.com.",
+				"installOllama": "Installer Ollama",
+				"installLaunched": "Installation lancée dans un terminal. Une fois terminée, relancez « Télécharger ».",
+				"installFailed": "Impossible de lancer l'installation d'Ollama.",
+				"foreignServer": "L'URL configurée ({{url}}) vise {{server}}, pas Ollama. Le téléchargement automatique n'est disponible que pour Ollama. Démarrez votre serveur et chargez-y « {{model}} » manuellement (le modèle a bien été défini par défaut).",
+				"foreignServerGeneric": "un serveur local non-Ollama",
+				"filters": {
+					"taskAria": "Tâche",
+					"libAria": "Bibliothèque",
+					"langAria": "Langue",
+					"licenseAria": "Licence",
+					"sortAria": "Trier les modèles",
+					"task": {
+						"textGeneration": "Génération de texte",
+						"vision": "Vision (image→texte)",
+						"text2text": "Text2Text",
+						"textToImage": "Texte→image",
+						"asr": "Reconnaissance vocale",
+						"embeddings": "Embeddings",
+						"all": "Toutes les tâches"
+					},
+					"lib": {
+						"all": "Toutes les libs",
+						"gguf": "GGUF (Ollama)",
+						"transformers": "Transformers",
+						"safetensors": "Safetensors",
+						"gptq": "GPTQ",
+						"awq": "AWQ",
+						"mlx": "MLX"
+					},
+					"lang": {
+						"all": "Toutes langues",
+						"en": "Anglais",
+						"fr": "Français",
+						"zh": "Chinois",
+						"es": "Espagnol",
+						"de": "Allemand",
+						"multilingual": "Multilingue"
+					},
+					"license": {
+						"all": "Toutes licences",
+						"apache": "Apache 2.0",
+						"mit": "MIT",
+						"llama31": "Llama 3.1",
+						"llama3": "Llama 3",
+						"gemma": "Gemma",
+						"ccByNc": "CC BY-NC 4.0"
+					},
+					"sort": {
+						"trending": "Tendances",
+						"downloads": "Téléchargements",
+						"likes": "Likes",
+						"created": "Récents",
+						"modified": "Modifiés"
+					}
+				}
+			},
 			"providers": {
 				"anthropic": "Modèles Anthropic Claude",
 				"aws": "AWS Bedrock et services Amazon",

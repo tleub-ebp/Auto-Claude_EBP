@@ -77,7 +77,16 @@ _AWS_ENTRY = get_default("aws")
 AWS_BEDROCK_MODEL = _AWS_ENTRY.model_id if _AWS_ENTRY else "anthropic.claude-opus-4-7"
 
 _OLLAMA_ENTRY = get_default("ollama")
-OLLAMA_MODEL = _OLLAMA_ENTRY.model_id if _OLLAMA_ENTRY else "llama3.3"
+# Honour the model the user actually picked for their local server (Ollama /
+# LM Studio / llama.cpp …). The frontend injects it as OLLAMA_MODEL (mirrored as
+# LOCAL_LLM_MODEL) from the provider config. Without this, every local run was
+# forced onto the registry default ("llama3.3") and the user's selected model —
+# e.g. an HF-discovered "hf.co/org/model" — was silently ignored.
+OLLAMA_MODEL = (
+    os.getenv("OLLAMA_MODEL")
+    or os.getenv("LOCAL_LLM_MODEL")
+    or (_OLLAMA_ENTRY.model_id if _OLLAMA_ENTRY else "llama3.3")
+)
 
 _WINDSURF_ENTRY = get_default("windsurf")
 WINDSURF_MODEL = _WINDSURF_ENTRY.model_id if _WINDSURF_ENTRY else "swe-1.6"
@@ -573,21 +582,28 @@ def get_phase_model(
     Returns:
         Resolved full model ID
     """
-    # 1. CLI argument takes precedence
-    cli_result = _resolve_cli_model(cli_model)
-    if cli_result:
-        return cli_result
-
-    # 2. Load task metadata
+    # Load task metadata up front so the per-phase config can be consulted
+    # before the CLI default.
     metadata = load_task_metadata(spec_dir)
 
-    # 3. Auto profile with phase-specific config
+    # 1. Auto-profile (per-phase) config is AUTHORITATIVE — it must win over the
+    # CLI --model. The frontend passes the SPEC phase model as the global
+    # --model, so honoring the CLI arg first forced EVERY phase onto the spec
+    # model and silently ignored the user's per-phase Planning/Coding/QA
+    # selections (changing one phase's model then had no effect). Guarded
+    # internally by isAutoProfile, so this is a no-op for single-model tasks.
     if metadata:
         auto_profile_result = _resolve_auto_profile_model(metadata, phase, cli_provider)
         if auto_profile_result:
             return auto_profile_result
 
-        # 4. Non-auto profile: use single model
+    # 2. CLI argument (the override for non-auto-profile tasks).
+    cli_result = _resolve_cli_model(cli_model)
+    if cli_result:
+        return cli_result
+
+    # 3. Non-auto profile: single model from metadata.
+    if metadata:
         single_model_result = _resolve_single_model(metadata, cli_provider)
         if single_model_result:
             return single_model_result

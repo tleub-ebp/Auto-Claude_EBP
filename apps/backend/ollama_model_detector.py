@@ -135,6 +135,81 @@ EMBEDDING_PATTERNS = [
     "mxbai-embed",
 ]
 
+# Model families that support native tool/function calling in Ollama. Used as a
+# fallback ONLY when /api/show doesn't expose `capabilities` (older Ollama).
+# WorkPilot's agentic phases require tools, so non-tool models are filtered out
+# of the picker. (Note: supporting tools ≠ being good at planning — a small 8B
+# may call tools yet still fail to produce a valid plan.)
+TOOL_CALLING_MODEL_PATTERNS = [
+    "llama3.1",
+    "llama3.2",
+    "llama3.3",
+    "llama4",
+    "qwen2.5",
+    "qwen3",
+    "qwq",
+    "mistral-nemo",
+    "mistral-small",
+    "mistral-large",
+    "mixtral",
+    "command-r",
+    "firefunction",
+    "hermes",
+    "nemotron",
+    "granite3",
+    "cogito",
+    "devstral",
+    "magistral",
+]
+
+
+def _parse_param_billions(text: str | None) -> float | None:
+    """Parse a parameter-size string into billions, e.g. '8.0B' → 8.0,
+    '70.6B' → 70.6, or 'qwen2.5-coder:7b' → 7.0. None if no '<n>b' token."""
+    if not text:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)\s*[bB]\b", text)
+    return float(match.group(1)) if match else None
+
+
+def model_meta(base_url: str, model_name: str) -> dict[str, Any]:
+    """Tool-calling support + parameter size for a local model, in ONE /api/show.
+
+    Prefers Ollama's authoritative ``capabilities`` and ``details.parameter_size``;
+    falls back to a name allowlist / name size token when those are absent (older
+    Ollama, or LM Studio which has no /api/show).
+
+    Returns ``{"supports_tools": bool, "param_b": float | None}``.
+    """
+    supports: bool | None = None
+    param_b: float | None = None
+    try:
+        url = f"{base_url.rstrip('/')}/api/show"
+        data = json.dumps({"name": model_name}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            info = json.loads(response.read().decode())
+        capabilities = info.get("capabilities")
+        if isinstance(capabilities, list):
+            supports = "tools" in capabilities
+        param_b = _parse_param_billions(
+            (info.get("details") or {}).get("parameter_size")
+        )
+    except Exception:
+        pass
+    name_lower = model_name.lower()
+    if supports is None:
+        supports = any(pattern in name_lower for pattern in TOOL_CALLING_MODEL_PATTERNS)
+    if param_b is None:
+        param_b = _parse_param_billions(name_lower)
+    return {"supports_tools": supports, "param_b": param_b}
+
+
+def model_supports_tools(base_url: str, model_name: str) -> bool:
+    """Whether a model supports native tool/function calling. See model_meta."""
+    return bool(model_meta(base_url, model_name)["supports_tools"])
+
 
 def parse_version(version_str: str | None) -> tuple[int, ...]:
     """Parse a version string like '0.10.0' into a tuple for comparison."""
@@ -327,6 +402,9 @@ def cmd_list_models(args) -> None:
         if model_info["is_embedding"]:
             model_info["embedding_dim"] = get_embedding_dim(name)
             model_info["description"] = get_embedding_description(name)
+        else:
+            # Whether the model can drive WorkPilot's agentic phases (tools).
+            model_info["supports_tools"] = model_supports_tools(base_url, name)
 
         model_list.append(model_info)
 
@@ -480,11 +558,26 @@ def cmd_pull_model(args) -> None:
                         # Clean up the error message (remove extra whitespace/newlines)
                         error_msg = " ".join(error_msg.split())
                         # Check if it's a version-related error
-                        if "newer version" in error_msg.lower():
+                        lowered = error_msg.lower()
+                        if "newer version" in lowered:
                             error_msg = (
                                 f"Model '{model_name}' requires a newer version of Ollama. "
                                 f"Your version: {ollama_version or 'unknown'}. "
                                 f"Please upgrade: https://ollama.com/download"
+                            )
+                        # Most common failure when picking a Hugging Face repo:
+                        # it has no GGUF build, so Ollama can't pull it.
+                        elif (
+                            "gguf" in lowered
+                            or "no such" in lowered
+                            or "manifest" in lowered
+                            or "not found" in lowered
+                        ):
+                            error_msg = (
+                                f"Impossible de récupérer « {model_name} » : ce dépôt "
+                                "Hugging Face ne fournit pas de version GGUF (requise "
+                                "par Ollama). Choisissez un dépôt « -GGUF » (filtre "
+                                f"« GGUF (Ollama) »). Détail : {error_msg}"
                             )
                         output_error(error_msg)
                         return
@@ -567,6 +660,9 @@ def main():
         "pull-model", help="Pull (download) an Ollama model"
     )
     pull_parser.add_argument("model", help="Model name to pull (e.g., embeddinggemma)")
+    pull_parser.add_argument(
+        "--base-url", help=f"Ollama server URL (default: {DEFAULT_OLLAMA_URL})"
+    )
 
     args = parser.parse_args()
 

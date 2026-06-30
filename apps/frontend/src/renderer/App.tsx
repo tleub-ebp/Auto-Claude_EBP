@@ -355,6 +355,7 @@ import { VoiceControlDialog } from "./components/voice-control";
 import { ViewStateProvider } from "./contexts/ViewStateContext";
 import { useGlobalTerminalListeners } from "./hooks/useGlobalTerminalListeners";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useReauthNotifications } from "./hooks/use-reauth-notifications";
 import { useTaskNotifications } from "./hooks/useTaskNotifications";
 import {
 	loadClaudeProfiles,
@@ -465,6 +466,10 @@ export function App() {
 
 	// Background scan of active project's API routes (for API Explorer)
 	useProjectRouteScan();
+
+	// Surface a toast (any provider) when an account's token can no longer be
+	// auto-refreshed and the user must sign in again.
+	useReauthNotifications();
 
 	// Stores
 	const projects = useProjectStore((state) => state.projects);
