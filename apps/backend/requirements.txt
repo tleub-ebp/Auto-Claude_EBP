@@ -2,7 +2,7 @@
 # SDK 0.1.25+ required for improved tool use concurrency handling
 # Earlier versions had 400 errors when tool_use blocks had partial failures
 # Utiliser le nom correct du package (tiret) pour l'installation via pip
-claude-agent-sdk>=0.2.94
+claude-agent-sdk>=0.2.110
 python-dotenv>=1.2.2
 
 # WebSocket support for streaming development mode
@@ -55,10 +55,10 @@ uvicorn[standard]>=0.49.0
 slowapi>=0.1.10
 
 # Multi-user server mode (central deployment)
-alembic>=1.13.0          # DB schema migrations
+alembic>=1.18.5          # DB schema migrations
 asyncpg>=0.29.0          # PostgreSQL async driver (server mode)
 aiosqlite>=0.20.0        # SQLite async driver (dev/tests fallback)
-argon2-cffi>=23.1.0      # Password hashing for local accounts
+argon2-cffi>=25.1.0      # Password hashing for local accounts
 PyJWT[crypto]>=2.13.0     # JWT access/refresh tokens + Entra ID JWKS validation
 cryptography>=49.0.0     # Fernet encryption for per-user integration secrets
 email-validator>=2.0.0   # pydantic EmailStr support (auth schemas)
@@ -71,7 +71,7 @@ azure-devops>=7.1.0b4  # Azure DevOps SDK for src/connectors/azure_devops
 msrest>=0.7.1           # Required by azure-devops SDK
 
 # Anthropic SDK for Claude API integration
-anthropic>=0.34.0
+anthropic>=0.113.0
 
 # Ajout d'une note pour l'installation automatique de uvicorn si absent
 # Pour garantir l'automatisation, il est recommandé d'ajouter uvicorn dans requirements.txt racine ou de documenter l'installation automatique.
