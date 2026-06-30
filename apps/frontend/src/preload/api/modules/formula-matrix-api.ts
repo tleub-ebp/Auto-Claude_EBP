@@ -35,6 +35,11 @@ export interface Formula {
 	cost_basis?: "measured" | "calibrated" | "heuristic" | string;
 	/** 0-1 confidence in the cost figure (rises with measured history). */
 	cost_confidence?: number;
+	/**
+	 * True when this is a local (Ollama) model actually pulled into the running
+	 * server — vs a generic catalog entry the user hasn't downloaded yet.
+	 */
+	installed?: boolean;
 	rationale: string[];
 	/** True once an AI refine pass has sharpened this formula's probability. */
 	ai_refined?: boolean;

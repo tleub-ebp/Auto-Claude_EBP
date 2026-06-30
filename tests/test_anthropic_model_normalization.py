@@ -102,6 +102,40 @@ def test_resolve_provider_model_preserves_dotted_for_copilot(tmp_path: Path) -> 
     assert get_phase_model(tmp_path, "qa") == "claude-opus-4.8"
 
 
+def test_auto_profile_phase_model_wins_over_cli_model(tmp_path: Path) -> None:
+    """In auto-profile mode the per-phase model MUST win over the CLI --model.
+
+    Regression: the frontend launches the backend with --model = phaseModels.spec
+    (the Spec phase model) as the global default. If the CLI arg took precedence,
+    every phase ran on the spec model and the user's per-phase Planning/Coding/QA
+    selections were silently ignored — changing one phase's model had no effect.
+    """
+    _write_metadata(
+        tmp_path,
+        {
+            "provider": "anthropic",
+            "isAutoProfile": True,
+            "phaseModels": {
+                "spec": "claude-opus-4-8",
+                "planning": "claude-sonnet-4-6",
+                "coding": "claude-opus-4-8",
+                "qa": "claude-opus-4-8",
+            },
+        },
+    )
+
+    # Frontend passes --model = the spec model; Planning must still use its own.
+    assert (
+        get_phase_model(tmp_path, "planning", cli_model="claude-opus-4-8")
+        == "claude-sonnet-4-6"
+    )
+    # A phase whose configured model equals the spec model still resolves (sanity).
+    assert (
+        get_phase_model(tmp_path, "qa", cli_model="claude-opus-4-8")
+        == "claude-opus-4-8"
+    )
+
+
 def test_resolve_provider_model_falls_back_fable_on_non_anthropic() -> None:
     """A « Mythos-class » Anthropic id (claude-fable-5) left in metadata after a
     switch to a non-Anthropic provider must fall back to that provider's default,

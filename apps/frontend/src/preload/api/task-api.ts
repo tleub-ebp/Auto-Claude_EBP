@@ -246,6 +246,13 @@ export interface TaskAPI {
 		projectId: string,
 		specId: string,
 	) => Promise<IPCResult<TaskLogs | null>>;
+	/** Physical per-LLM log files (one per provider/model) for per-model viewing. */
+	getTaskLogsPerLlm: (
+		projectId: string,
+		specId: string,
+	) => Promise<
+		IPCResult<{ provider: string; model: string; logs: TaskLogs }[]>
+	>;
 	watchTaskLogs: (projectId: string, specId: string) => Promise<IPCResult>;
 	unwatchTaskLogs: (specId: string) => Promise<IPCResult>;
 	onTaskLogsChanged: (
@@ -720,6 +727,14 @@ export const createTaskAPI = (): TaskAPI => ({
 		specId: string,
 	): Promise<IPCResult<TaskLogs | null>> =>
 		ipcRenderer.invoke(IPC_CHANNELS.TASK_LOGS_GET, projectId, specId),
+
+	getTaskLogsPerLlm: (
+		projectId: string,
+		specId: string,
+	): Promise<
+		IPCResult<{ provider: string; model: string; logs: TaskLogs }[]>
+	> =>
+		ipcRenderer.invoke(IPC_CHANNELS.TASK_LOGS_GET_PER_LLM, projectId, specId),
 
 	watchTaskLogs: (projectId: string, specId: string): Promise<IPCResult> =>
 		ipcRenderer.invoke(IPC_CHANNELS.TASK_LOGS_WATCH, projectId, specId),

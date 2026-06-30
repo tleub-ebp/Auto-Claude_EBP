@@ -9,7 +9,7 @@ import type {
 } from "../../../shared/types";
 import { debugLog, debugWarn } from "../../../shared/utils/debug-logger";
 import { projectStore } from "../../project-store";
-import { taskLogService } from "../../task-log-service";
+import { type PerLlmLog, taskLogService } from "../../task-log-service";
 import { ensureAbsolutePath } from "../../utils/path-helpers";
 import { isValidTaskId } from "../../utils/spec-path-helpers";
 
@@ -86,6 +86,49 @@ export function registerTaskLogsHandlers(
 					success: false,
 					error:
 						error instanceof Error ? error.message : "Failed to get task logs",
+				};
+			}
+		},
+	);
+
+	/**
+	 * Get the physical per-LLM log files for a spec (one per provider/model), so
+	 * the UI can load ONLY the selected model's logs for a phase.
+	 */
+	ipcMain.handle(
+		IPC_CHANNELS.TASK_LOGS_GET_PER_LLM,
+		async (
+			_,
+			projectId: string,
+			specId: string,
+		): Promise<IPCResult<PerLlmLog[]>> => {
+			try {
+				if (!isValidTaskId(specId)) {
+					return { success: false, error: "Invalid spec ID" };
+				}
+				const project = projectStore.getProject(projectId);
+				if (!project) {
+					return { success: false, error: "Project not found" };
+				}
+				const absoluteProjectPath = ensureAbsolutePath(project.path);
+				const specsRelPath = getSpecsDir(project.autoBuildPath);
+				const specDir = path.join(absoluteProjectPath, specsRelPath, specId);
+				if (!existsSync(specDir)) {
+					return { success: true, data: [] };
+				}
+				const perLlm = taskLogService.getPerLlmLogs(
+					specDir,
+					absoluteProjectPath,
+					specsRelPath,
+					specId,
+				);
+				return { success: true, data: perLlm };
+			} catch (error) {
+				console.error("[TASK_LOGS_GET_PER_LLM] Failed:", error);
+				return {
+					success: false,
+					error:
+						error instanceof Error ? error.message : "Failed to get per-LLM logs",
 				};
 			}
 		},

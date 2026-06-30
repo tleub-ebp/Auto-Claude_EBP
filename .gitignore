@@ -203,3 +203,7 @@ nul
 /test_analytics.db
 /apps/frontend/lint_output.txt
 tmp/ipc-handlers-test/userData/store/projects.json
+
+# Generated security-scan reports (bandit) — must never be committed.
+bandit-report.json
+apps/backend/bandit-report.json

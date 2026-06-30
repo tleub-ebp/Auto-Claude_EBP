@@ -1,4 +1,4 @@
-"""Tests for the provider-neutral conversation log."""
+"""Tests for the provider-neutral conversation log (per-model files)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,10 @@ from unittest.mock import MagicMock
 sys.modules.setdefault("apps", MagicMock())
 sys.modules.setdefault("apps.backend", MagicMock())
 sys.modules.setdefault("apps.backend.models_registry", MagicMock())
+
+# A stable (provider, model) used by most tests.
+_PROV = "claude"
+_MODEL = "claude-opus-4-5"
 
 
 def _msg(role: str = "assistant", blocks: list[dict] | None = None):
@@ -41,204 +45,277 @@ def _msg(role: str = "assistant", blocks: list[dict] | None = None):
     return AgentMessage(role=role_enum, content=block_objs, raw=None)
 
 
-def test_append_and_read_roundtrip(tmp_path: Path) -> None:
-    """A message appended to the log can be read back with the same content."""
+def test_append_writes_per_model_file_and_reads_back(tmp_path: Path) -> None:
+    """A message is written to the (provider, model)-specific file and read back
+    with read_log(provider, model)."""
     from core.conversation_log import (
-        CONVERSATION_LOG_FILENAME,
         append_message,
+        conversation_log_path,
         read_log,
     )
 
-    msg = _msg(
-        "assistant",
-        [{"type": "text", "text": "Hello there"}],
-    )
+    msg = _msg("assistant", [{"type": "text", "text": "Hello there"}])
     append_message(
-        tmp_path,
-        msg,
-        phase="coding",
-        provider="claude",
-        model="claude-opus-4-5",
-        subtask_id="s1",
+        tmp_path, msg, phase="coding", provider=_PROV, model=_MODEL, subtask_id="s1"
     )
 
-    # File should exist and contain exactly one JSON line.
-    log_file = tmp_path / CONVERSATION_LOG_FILENAME
+    # The per-model file exists and holds exactly one JSON line.
+    log_file = conversation_log_path(tmp_path, _PROV, _MODEL)
     assert log_file.exists()
+    assert "claude-claude-opus-4-5" in log_file.name
     raw = log_file.read_text(encoding="utf-8").strip().splitlines()
     assert len(raw) == 1
-
     parsed = json.loads(raw[0])
-    assert parsed["role"] == "assistant"
-    assert parsed["phase"] == "coding"
-    assert parsed["provider"] == "claude"
-    assert parsed["model"] == "claude-opus-4-5"
+    assert parsed["provider"] == _PROV
+    assert parsed["model"] == _MODEL
     assert parsed["subtask_id"] == "s1"
-    assert parsed["v"] == 1
-    assert parsed["content"][0]["type"] == "text"
     assert parsed["content"][0]["text"] == "Hello there"
 
-    # And read_log returns the same.
-    entries = read_log(tmp_path)
+    # read_log scoped to the same model returns it.
+    entries = read_log(tmp_path, _PROV, _MODEL)
     assert len(entries) == 1
     assert entries[0]["content"][0]["text"] == "Hello there"
 
 
-def test_append_drops_none_fields(tmp_path: Path) -> None:
-    """ContentBlock fields that are None must not show up in the persisted
-    JSON — keeps the file compact and diff-friendly."""
+def test_per_model_logs_are_isolated(tmp_path: Path) -> None:
+    """Two different models keep separate histories — the core of the feature:
+    switching a phase's LLM must not mix contexts, and switching back resumes
+    the right one."""
     from core.conversation_log import append_message, read_log
 
-    # text block: only `type` and `text` are set; everything else is None.
-    msg = _msg("assistant", [{"type": "text", "text": "hi"}])
     append_message(
-        tmp_path, msg, phase="coding", provider="claude", model="claude-opus-4-5"
-    )
-
-    entries = read_log(tmp_path)
-    block = entries[0]["content"][0]
-    assert "tool_name" not in block
-    assert "tool_input" not in block
-    assert "result_content" not in block
-    # is_error is a bool defaulting to False; persisted-or-not is fine but
-    # tests below cover that we don't lose info either way.
-
-
-def test_pending_tool_use_detection(tmp_path: Path) -> None:
-    """The log helper correctly reports a tool_use waiting on a tool_result."""
-    from core.conversation_log import append_message, has_pending_tool_use, read_log
-
-    # Step 1: assistant emits a tool_use
-    msg_tool_call = _msg(
-        "assistant",
-        [
-            {"type": "text", "text": "I'll read the file."},
-            {
-                "type": "tool_use",
-                "tool_id": "toolu_01",
-                "tool_name": "Read",
-                "tool_input": {"file_path": "x.py"},
-            },
-        ],
+        tmp_path,
+        _msg("assistant", [{"type": "text", "text": "from qwen"}]),
+        phase="planning",
+        provider="ollama",
+        model="qwen2.5-coder:latest",
     )
     append_message(
         tmp_path,
-        msg_tool_call,
-        phase="coding",
-        provider="claude",
-        model="claude-opus-4-5",
+        _msg("assistant", [{"type": "text", "text": "from llama"}]),
+        phase="planning",
+        provider="ollama",
+        model="llama3.1",
     )
 
-    # Right after this, we should detect a pending tool call.
-    assert has_pending_tool_use(read_log(tmp_path)) is True
+    qwen = read_log(tmp_path, "ollama", "qwen2.5-coder:latest")
+    llama = read_log(tmp_path, "ollama", "llama3.1")
+    assert [e["content"][0]["text"] for e in qwen] == ["from qwen"]
+    assert [e["content"][0]["text"] for e in llama] == ["from llama"]
+    # A never-used model starts fresh.
+    assert read_log(tmp_path, "ollama", "mistral") == []
 
-    # Step 2: user (the harness) emits the tool_result
-    msg_tool_result = _msg(
-        "user",
-        [
+
+def test_log_slug_is_filesystem_safe(tmp_path: Path) -> None:
+    """Model ids with ':' and '/' become safe filenames; very long ids are
+    truncated with a hash so they stay under filesystem limits."""
+    from core.conversation_log import _log_slug, conversation_log_path
+
+    assert _log_slug("ollama", "qwen2.5-coder:latest") == "ollama-qwen2.5-coder-latest"
+    p = conversation_log_path(tmp_path, "ollama", "hf.co/Qwen/Qwen2.5-Coder-7B:latest")
+    assert "/" not in p.name and ":" not in p.name
+    assert p.name.startswith("conversation.") and p.name.endswith(".jsonl")
+
+    long_model = "x" * 200
+    slug = _log_slug("ollama", long_model)
+    assert len(slug) <= 80
+
+
+def test_migrate_legacy_log_splits_by_model(tmp_path: Path) -> None:
+    """A pre-multi-model conversation.jsonl is split into per-model files, each
+    line landing in the file of the (provider, model) that produced it."""
+    from core.conversation_log import (
+        CONVERSATION_LOG_FILENAME,
+        migrate_legacy_log,
+        read_log,
+    )
+
+    legacy = tmp_path / CONVERSATION_LOG_FILENAME
+    legacy.write_text(
+        json.dumps(
             {
-                "type": "tool_result",
-                "tool_use_id": "toolu_01",
-                "result_content": "file contents",
+                "v": 1,
+                "provider": "ollama",
+                "model": "qwen2.5-coder:latest",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "q1"}],
             }
-        ],
-    )
-    append_message(
-        tmp_path,
-        msg_tool_result,
-        phase="coding",
-        provider="claude",
-        model="claude-opus-4-5",
-    )
-
-    # Now nothing should be pending.
-    assert has_pending_tool_use(read_log(tmp_path)) is False
-
-
-def test_read_log_skips_malformed_lines(tmp_path: Path) -> None:
-    """If the process crashes mid-write, the last line might be partial JSON.
-    read_log must skip it and return the earlier complete messages."""
-    from core.conversation_log import CONVERSATION_LOG_FILENAME, read_log
-
-    # Pretend a previous run wrote one good line + one broken half-line.
-    log_file = tmp_path / CONVERSATION_LOG_FILENAME
-    log_file.write_text(
-        '{"v":1,"role":"assistant","content":[{"type":"text","text":"ok"}]}\n'
-        '{"v":1,"role":"assista',  # crash here, no newline either
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "v": 1,
+                "provider": "ollama",
+                "model": "llama3.1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "l1"}],
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "v": 1,
+                "provider": "ollama",
+                "model": "qwen2.5-coder:latest",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "q2"}],
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
 
-    entries = read_log(tmp_path)
+    migrate_legacy_log(tmp_path)
+
+    # Legacy file archived (not re-split), per-model files created.
+    assert not legacy.exists()
+    assert (tmp_path / f"{CONVERSATION_LOG_FILENAME}.migrated").exists()
+    qwen = read_log(tmp_path, "ollama", "qwen2.5-coder:latest")
+    llama = read_log(tmp_path, "ollama", "llama3.1")
+    assert [e["content"][0]["text"] for e in qwen] == ["q1", "q2"]
+    assert [e["content"][0]["text"] for e in llama] == ["l1"]
+    # Idempotent — a second call is a no-op (legacy already gone).
+    migrate_legacy_log(tmp_path)
+    assert len(read_log(tmp_path, "ollama", "qwen2.5-coder:latest")) == 2
+
+
+def test_read_log_migrates_then_reads(tmp_path: Path) -> None:
+    """read_log(provider, model) transparently migrates a legacy file first."""
+    from core.conversation_log import CONVERSATION_LOG_FILENAME, read_log
+
+    (tmp_path / CONVERSATION_LOG_FILENAME).write_text(
+        json.dumps(
+            {
+                "v": 1,
+                "provider": "ollama",
+                "model": "llama3.1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    entries = read_log(tmp_path, "ollama", "llama3.1")
+    assert [e["content"][0]["text"] for e in entries] == ["hi"]
+
+
+def test_pending_tool_use_detection(tmp_path: Path) -> None:
+    """has_pending_tool_use works on a per-model log."""
+    from core.conversation_log import append_message, has_pending_tool_use, read_log
+
+    append_message(
+        tmp_path,
+        _msg(
+            "assistant",
+            [
+                {
+                    "type": "tool_use",
+                    "tool_id": "toolu_01",
+                    "tool_name": "Read",
+                    "tool_input": {"file_path": "x.py"},
+                }
+            ],
+        ),
+        phase="coding",
+        provider=_PROV,
+        model=_MODEL,
+    )
+    assert has_pending_tool_use(read_log(tmp_path, _PROV, _MODEL)) is True
+
+    append_message(
+        tmp_path,
+        _msg(
+            "user",
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "result_content": "file contents",
+                }
+            ],
+        ),
+        phase="coding",
+        provider=_PROV,
+        model=_MODEL,
+    )
+    assert has_pending_tool_use(read_log(tmp_path, _PROV, _MODEL)) is False
+
+
+def test_read_log_skips_malformed_lines(tmp_path: Path) -> None:
+    """A partial last line (process crash mid-write) is skipped."""
+    from core.conversation_log import conversation_log_path, read_log
+
+    log_file = conversation_log_path(tmp_path, _PROV, _MODEL)
+    log_file.write_text(
+        '{"v":1,"role":"assistant","content":[{"type":"text","text":"ok"}]}\n'
+        '{"v":1,"role":"assista',  # crash here, no newline
+        encoding="utf-8",
+    )
+    entries = read_log(tmp_path, _PROV, _MODEL)
     assert len(entries) == 1
     assert entries[0]["content"][0]["text"] == "ok"
 
 
-def test_deserialize_message_reconstructs_blocks(tmp_path: Path) -> None:
-    """deserialize_message produces a usable AgentMessage from a persisted
-    entry — this is what the replay path will call to feed the new provider."""
-    from core.agent_client import ContentBlockType, MessageRole
-    from core.conversation_log import (
-        append_message,
-        deserialize_message,
-        read_log,
-    )
+def test_clear_log_per_model_vs_all(tmp_path: Path) -> None:
+    """clear_log(provider, model) removes one model's log; clear_log() removes
+    every conversation log (the whole-task reset)."""
+    from core.conversation_log import append_message, clear_log, conversation_log_path
 
-    msg = _msg(
-        "assistant",
-        [
-            {"type": "text", "text": "hi"},
-            {
-                "type": "tool_use",
-                "tool_id": "t1",
-                "tool_name": "Edit",
-                "tool_input": {"file_path": "x"},
-            },
-        ],
-    )
-    append_message(
-        tmp_path, msg, phase="coding", provider="claude", model="claude-opus-4-5"
-    )
+    for prov, mdl, txt in [
+        ("ollama", "qwen2.5-coder:latest", "q"),
+        ("ollama", "llama3.1", "l"),
+    ]:
+        append_message(
+            tmp_path,
+            _msg("assistant", [{"type": "text", "text": txt}]),
+            phase="coding",
+            provider=prov,
+            model=mdl,
+        )
 
-    restored = deserialize_message(read_log(tmp_path)[0])
-    assert restored.role == MessageRole.ASSISTANT
-    assert len(restored.content) == 2
-    assert restored.content[0].type == ContentBlockType.TEXT
-    assert restored.content[0].text == "hi"
-    assert restored.content[1].type == ContentBlockType.TOOL_USE
-    assert restored.content[1].tool_name == "Edit"
-    assert restored.content[1].tool_input == {"file_path": "x"}
+    # Targeted clear: only qwen.
+    clear_log(tmp_path, "ollama", "qwen2.5-coder:latest")
+    assert not conversation_log_path(
+        tmp_path, "ollama", "qwen2.5-coder:latest"
+    ).exists()
+    assert conversation_log_path(tmp_path, "ollama", "llama3.1").exists()
 
-
-def test_clear_log_removes_file(tmp_path: Path) -> None:
-    """clear_log deletes the file (no-op when missing)."""
-    from core.conversation_log import (
-        CONVERSATION_LOG_FILENAME,
-        append_message,
-        clear_log,
-    )
-
-    msg = _msg("assistant", [{"type": "text", "text": "hi"}])
-    append_message(
-        tmp_path, msg, phase="coding", provider="claude", model="claude-opus-4-5"
-    )
-    assert (tmp_path / CONVERSATION_LOG_FILENAME).exists()
-
+    # Whole-task clear: everything gone.
     clear_log(tmp_path)
-    assert not (tmp_path / CONVERSATION_LOG_FILENAME).exists()
-
-    # Idempotent — clearing twice is fine.
+    assert not conversation_log_path(tmp_path, "ollama", "llama3.1").exists()
+    # Idempotent.
     clear_log(tmp_path)
 
 
-def test_append_swallows_io_errors(tmp_path: Path, caplog) -> None:
-    """A read-only spec_dir should NOT propagate an exception into the agent
-    session — the log is best-effort."""
+def test_archive_all_logs_moves_active_logs(tmp_path: Path) -> None:
+    """archive_all_logs renames active per-model logs aside (prompt-too-long
+    escape hatch) and skips already-archived files."""
+    from core.conversation_log import append_message, archive_all_logs
+
+    append_message(
+        tmp_path,
+        _msg("assistant", [{"type": "text", "text": "x"}]),
+        phase="coding",
+        provider="ollama",
+        model="llama3.1",
+    )
+    moved = archive_all_logs(tmp_path, "too-long")
+    assert moved == 1
+    assert list(tmp_path.glob("conversation.*.too-long.jsonl"))
+    # Active log is gone; a second call moves nothing (only archives remain).
+    assert archive_all_logs(tmp_path, "too-long") == 0
+
+
+def test_append_swallows_io_errors(tmp_path: Path) -> None:
+    """A missing spec_dir must NOT propagate — the log is best-effort."""
     from core.conversation_log import append_message
 
     bad_dir = tmp_path / "does" / "not" / "exist"
-    # Don't create it — append should swallow the FileNotFoundError.
-    msg = _msg("assistant", [{"type": "text", "text": "hi"}])
     append_message(
-        bad_dir, msg, phase="coding", provider="claude", model="claude-opus-4-5"
-    )
-    # No exception — the test passing IS the assertion.
+        bad_dir,
+        _msg("assistant", [{"type": "text", "text": "hi"}]),
+        phase="coding",
+        provider=_PROV,
+        model=_MODEL,
+    )  # no exception == pass

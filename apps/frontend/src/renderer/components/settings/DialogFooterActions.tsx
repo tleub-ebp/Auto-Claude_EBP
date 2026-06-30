@@ -24,6 +24,19 @@ export function DialogFooterActions({
 	onDelete,
 	onOpenChange,
 }: DialogFooterActionsProps) {
+	// Local servers (Ollama / LM Studio / …) run on a default URL (e.g.
+	// localhost:11434) and need NO API key, so the "Test" button must stay
+	// enabled even when both fields are empty — otherwise it's permanently greyed.
+	const isLocalProvider =
+		provider?.id === "ollama" ||
+		provider?.id === "lmstudio" ||
+		provider?.id === "local";
+	const testDisabled =
+		isTesting ||
+		(activeTab !== "oauth" &&
+			!isLocalProvider &&
+			!formData.apiKey &&
+			!formData.apiUrl);
 	return (
 		<>
 			{provider?.isConfigured && (
@@ -39,15 +52,7 @@ export function DialogFooterActions({
 					activeTab === "oauth"
 				) && (
 					<>
-						<Button
-							variant="outline"
-							onClick={onTest}
-							disabled={
-								(activeTab === "oauth"
-									? false
-									: !formData.apiKey && !formData.apiUrl) || isTesting
-							}
-						>
+						<Button variant="outline" onClick={onTest} disabled={testDisabled}>
 							{isTesting ? "Test..." : "Tester"}
 						</Button>
 						<Button onClick={onSave}>Enregistrer</Button>
