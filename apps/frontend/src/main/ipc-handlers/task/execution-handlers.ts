@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	renameSync,
 	unlinkSync,
@@ -2141,11 +2142,32 @@ print(json.dumps(result))
 			try {
 				const conversationLog = path.join(specDir, "conversation.jsonl");
 				const haltMarker = path.join(specDir, "PROMPT_TOO_LONG_HALT");
+				const localNoToolsMarker = path.join(
+					specDir,
+					"LOCAL_MODEL_NO_TOOLS_HALT",
+				);
 				let removed = 0;
-				for (const target of [conversationLog, haltMarker]) {
+				for (const target of [conversationLog, haltMarker, localNoToolsMarker]) {
 					if (existsSync(target)) {
 						unlinkSync(target);
 						removed++;
+					}
+				}
+				// Per-model conversation logs (conversation.<model>.jsonl) + the
+				// .migrated marker — the model is in the filename, so glob them.
+				if (existsSync(specDir)) {
+					for (const name of readdirSync(specDir)) {
+						if (
+							/^conversation\..+\.jsonl$/.test(name) ||
+							name === "conversation.jsonl.migrated"
+						) {
+							try {
+								unlinkSync(path.join(specDir, name));
+								removed++;
+							} catch {
+								/* best-effort */
+							}
+						}
 					}
 				}
 				appLog.info(

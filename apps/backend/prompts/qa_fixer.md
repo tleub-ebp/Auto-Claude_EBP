@@ -87,8 +87,9 @@ Create a mental checklist. You must address EVERY issue.
 ## PHASE 2: START DEVELOPMENT ENVIRONMENT
 
 ```bash
-# Start services if needed
-chmod +x init.sh && ./init.sh
+# Start services if needed — cross-OS (bash works on macOS/Linux and Windows Git
+# Bash; on Windows without Git Bash use: powershell -ExecutionPolicy Bypass -File ./init.ps1)
+bash ./init.sh
 
 # Verify running
 lsof -iTCP -sTCP:LISTEN | grep -E "node|python|next|vite"

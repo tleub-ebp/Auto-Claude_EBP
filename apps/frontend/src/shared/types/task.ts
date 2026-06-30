@@ -149,6 +149,11 @@ export interface TaskLogEntry {
 	tool_input?: string;
 	subtask_id?: string;
 	session?: number;
+	// LLM attribution: which provider/model produced this entry. Lets the UI
+	// group a phase's log by model so plans from different LLMs (e.g. after a
+	// mid-phase switch) can be compared side by side.
+	provider?: string; // e.g. "claude", "ollama", "copilot"
+	model?: string; // exact model id, e.g. "claude-opus-4-8", "llama3.1:latest"
 	// Fields for expandable detail view
 	detail?: string; // Full content that can be expanded (e.g., file contents, command output)
 	subphase?: string; // Subphase grouping (e.g., "PROJECT DISCOVERY", "CONTEXT GATHERING")

@@ -28,6 +28,12 @@
 		"measuredTag": "mesuré",
 		"measuredTooltip": "Coût basé sur l'usage réel mesuré de ce modèle dans ce projet"
 	},
+	"local": {
+		"installed": "Téléchargé",
+		"installedTooltip": "Modèle local déjà téléchargé dans Ollama — utilisable immédiatement.",
+		"notInstalled": "Non téléchargé",
+		"notInstalledTooltip": "Modèle de la bibliothèque Ollama, pas encore téléchargé localement. À récupérer (ollama pull) avant utilisation."
+	},
 	"picks": {
 		"bestValue": "Meilleur rapport",
 		"safest": "Plus sûr",

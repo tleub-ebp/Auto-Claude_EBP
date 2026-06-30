@@ -807,6 +807,19 @@
 			"downloadable": "to download",
 			"downloadStartedTitle": "Downloading model",
 			"downloadStartedDesc": "{{model}} is downloading in the background."
+		},
+		"modelGroup": {
+			"toggleAria": "Show or hide logs from model {{model}}",
+			"unknownModel": "Unknown model"
+		},
+		"compare": {
+			"button": "Compare",
+			"openAria": "Compare models",
+			"openTooltip": "Compare model plans side by side",
+			"title": "Plan comparison",
+			"close": "Close",
+			"swapAria": "Swap columns",
+			"selectAria": "Choose model to compare"
 		}
 	},
 	"modal": {
