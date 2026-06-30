@@ -45,7 +45,7 @@ jobs:
     outputs:
       version: ${{ github.event.inputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
           fetch-depth: 0
@@ -80,7 +80,7 @@ jobs:
       notarization_id: ${{ steps.notarize.outputs.notarization-id }}
       dmg_file: ${{ steps.notarize.outputs.dmg-file }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Use develop branch for both dry runs and testing to ensure latest fixes
           ref: develop
@@ -109,7 +109,7 @@ jobs:
         run: echo "dir=$(pnpm store path)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ steps.pnpm-cache-dir.outputs.dir }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -139,7 +139,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache pip wheel cache (for compiled packages like real_ladybug)
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/Library/Caches/pip
           key: pip-wheel-${{ runner.os }}-x64-${{ hashFiles('apps/backend/requirements.txt', 'pnpm-lock.yaml') }}
@@ -147,7 +147,7 @@ jobs:
             pip-wheel-${{ runner.os }}-x64-
 
       - name: Cache bundled Python
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: apps/frontend/python-runtime
           key: python-bundle-${{ runner.os }}-x64-3.12.8-rust-${{ hashFiles('apps/backend/requirements.txt', 'pnpm-lock.yaml') }}
@@ -210,7 +210,7 @@ jobs:
       notarization_id: ${{ steps.notarize.outputs.notarization-id }}
       dmg_file: ${{ steps.notarize.outputs.dmg-file }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Use develop branch for both dry runs and testing to ensure latest fixes
           ref: develop
@@ -239,7 +239,7 @@ jobs:
         run: echo "dir=$(pnpm store path)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ steps.pnpm-cache-dir.outputs.dir }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -266,7 +266,7 @@ jobs:
         run: cd apps/frontend && pnpm add node-pty@1.1.0 --ignore-scripts --save-exact
 
       - name: Cache pip wheel cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/Library/Caches/pip
           key: pip-wheel-${{ runner.os }}-arm64-${{ hashFiles('apps/backend/requirements.txt', 'pnpm-lock.yaml') }}
@@ -274,7 +274,7 @@ jobs:
             pip-wheel-${{ runner.os }}-arm64-
 
       - name: Cache bundled Python
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: apps/frontend/python-runtime
           key: python-bundle-${{ runner.os }}-arm64-3.12.8-${{ hashFiles('apps/backend/requirements.txt', 'pnpm-lock.yaml') }}
@@ -339,7 +339,7 @@ jobs:
       # Job-level env so AZURE_CLIENT_ID is available for step-level if conditions
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Use develop branch for both dry runs and testing to ensure latest fixes
           ref: develop
@@ -368,7 +368,7 @@ jobs:
         run: echo "dir=$(pnpm store path)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ steps.pnpm-cache-dir.outputs.dir }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -395,7 +395,7 @@ jobs:
         run: cd apps/frontend && pnpm add node-pty@1.1.0 --ignore-scripts --save-exact
 
       - name: Cache pip wheel cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~\AppData\Local\pip\Cache
           key: pip-wheel-${{ runner.os }}-x64-${{ hashFiles('apps/backend/requirements.txt', 'pnpm-lock.yaml') }}
@@ -403,7 +403,7 @@ jobs:
             pip-wheel-${{ runner.os }}-x64-
 
       - name: Cache bundled Python
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: apps/frontend/python-runtime
           key: python-bundle-${{ runner.os }}-x64-3.12.8-${{ hashFiles('apps/backend/requirements.txt', 'pnpm-lock.yaml') }}
@@ -556,7 +556,7 @@ jobs:
     needs: create-tag
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Use develop branch for both dry runs and testing to ensure latest fixes
           ref: develop
@@ -585,7 +585,7 @@ jobs:
         run: echo "dir=$(pnpm store path)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ steps.pnpm-cache-dir.outputs.dir }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -621,7 +621,7 @@ jobs:
           flatpak install -y --user flathub org.electronjs.Electron2.BaseApp//25.08
 
       - name: Cache pip wheel cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: pip-wheel-${{ runner.os }}-x64-${{ hashFiles('apps/backend/requirements.txt', 'pnpm-lock.yaml') }}
@@ -629,7 +629,7 @@ jobs:
             pip-wheel-${{ runner.os }}-x64-
 
       - name: Cache bundled Python
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: apps/frontend/python-runtime
           key: python-bundle-${{ runner.os }}-x64-3.12.8-${{ hashFiles('apps/backend/requirements.txt', 'pnpm-lock.yaml') }}
@@ -674,7 +674,7 @@ jobs:
     needs: [build-macos-intel, build-macos-arm64]
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download Intel DMG
         uses: actions/download-artifact@v8
@@ -718,7 +718,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: v${{ needs.create-tag.outputs.version }}
           fetch-depth: 0
@@ -873,7 +873,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -905,7 +905,7 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event.inputs.dry_run == 'true' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8

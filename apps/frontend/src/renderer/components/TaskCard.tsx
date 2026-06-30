@@ -79,6 +79,8 @@ import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
 import { FormulaBadge } from "./formula-lab/FormulaBadge";
 import { Checkbox } from "./ui/checkbox";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useKanbanConflictStore } from "../stores/kanban-conflict-store";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -293,6 +295,11 @@ const MetadataBadges: React.FC<MetadataBadgesProps> = ({
 	reviewReasonInfo,
 	t,
 }) => {
+	// Plan-overlap conflict for this card (computed by the kanban conflict store).
+	// Shown inline among the other badges so it stays readable and never gets
+	// clipped by the column scroll area or overlapped by the delete button.
+	const conflict = useKanbanConflictStore((s) => s.conflicts[task.id]);
+
 	// Extract status badge variant and label for non-done tasks
 	let statusBadgeVariant:
 		| "default"
@@ -322,13 +329,47 @@ const MetadataBadges: React.FC<MetadataBadgesProps> = ({
 		!isStuck &&
 		!isIncomplete &&
 		!hasActiveExecution &&
-		!reviewReasonInfo
+		!reviewReasonInfo &&
+		!conflict
 	) {
 		return null;
 	}
 
 	return (
 		<div className="mt-2 flex flex-wrap gap-1">
+			{/* Plan conflict - flags tasks whose plan touches the same files as
+			    others; the tooltip explains the risk and lists the rival tasks. */}
+			{conflict && (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Badge
+							variant="outline"
+							className="text-[10px] px-1.5 py-0.5 flex items-center gap-1 bg-destructive/10 text-destructive border-destructive/30 cursor-help"
+						>
+							<GitMerge className="h-2.5 w-2.5" />
+							{t("kanban.conflict.label")} {conflict.titles.length}
+						</Badge>
+					</TooltipTrigger>
+					<TooltipContent side="top" className="max-w-xs space-y-1.5">
+						<p className="flex items-center gap-1.5 font-semibold text-destructive">
+							<GitMerge className="h-3.5 w-3.5" />
+							{t("kanban.conflict.title")}
+						</p>
+						<p className="text-xs text-muted-foreground">
+							{t("kanban.conflict.description")}
+						</p>
+						<p className="text-xs">
+							{t("kanban.conflict.files", { count: conflict.files })}
+						</p>
+						<p className="text-xs">
+							{t("kanban.conflict.withTasks", {
+								tasks: conflict.titles.join(", "),
+							})}
+						</p>
+					</TooltipContent>
+				</Tooltip>
+			)}
+
 			{/* Stuck indicator - highest priority */}
 			{isStuck && (
 				<Badge

@@ -212,8 +212,60 @@
 		"unlockColumn": "Déverrouiller la largeur de la colonne",
 		"columnLocked": "La largeur de la colonne est verrouillée",
 		"expandAll": "Développer toutes les colonnes",
+		"showMore": "Afficher les {{count}} restantes",
+		"showLess": "Réduire la liste",
 		"azureDevOpsNotConnected": "Azure DevOps non connecté — cliquez pour configurer",
 		"jiraNotConnected": "Jira non connecté — cliquez pour configurer",
+		"bulkRestoreSuccess": "{{count}} tâche(s) restaurée(s)",
+		"sortActiveDragHint": "Réorganisation manuelle désactivée tant qu'un tri est actif. Repassez en « Ordre manuel » pour glisser-déposer.",
+		"aging": {
+			"idleFor": "Inactive depuis {{duration}}"
+		},
+		"stale": {
+			"chip": "{{count}} inactive(s)",
+			"title": "Tâches inactives",
+			"subtitle": "Sans mise à jour depuis un moment — cliquez pour ouvrir la tâche.",
+			"rowMeta": "{{column}} · depuis {{duration}}"
+		},
+		"cost": {
+			"forecastTooltipTitle": "Prévision de coût du board",
+			"tooltipActive": "En cours : {{cost}}",
+			"tooltipPending": "À venir : {{cost}}",
+			"tooltipNoEstimate": "{{count}} ticket(s) sans estimation"
+		},
+		"conflict": {
+			"badge": "Conflit potentiel : {{count}} fichier(s) partagé(s) avec {{tasks}}",
+			"label": "Conflit",
+			"title": "Conflit de plan potentiel",
+			"description": "Le plan de cette tâche prévoit de modifier des fichiers que d'autres tâches comptent aussi toucher. Les lancer en parallèle risque de provoquer des conflits de fusion.",
+			"files": "{{count}} fichier(s) en commun",
+			"withTasks": "En conflit avec : {{tasks}}"
+		},
+		"views": {
+			"button": "Vues",
+			"title": "Vues sauvegardées",
+			"empty": "Aucune vue sauvegardée. Configure tes filtres puis enregistre-les ici.",
+			"namePlaceholder": "Nom de la vue…",
+			"save": "Enregistrer la vue actuelle",
+			"delete": "Supprimer la vue"
+		},
+		"wipLimit": {
+			"label": "Limite WIP",
+			"description": "Alerte visuelle quand la colonne dépasse ce nombre de tâches.",
+			"placeholder": "Aucune limite",
+			"set": "Définir la limite WIP",
+			"clear": "Retirer la limite",
+			"exceeded": "Limite WIP dépassée ({{count}}/{{limit}})"
+		},
+		"a11y": {
+			"pickedUp": "Tâche saisie : {{title}}. Utilisez les flèches pour déplacer, Entrée pour déposer, Échap pour annuler.",
+			"overColumn": "Au-dessus de la colonne {{column}}.",
+			"dropped": "Tâche « {{title}} » déposée dans {{column}}.",
+			"droppedSimple": "Tâche « {{title}} » déposée.",
+			"cancelled": "Déplacement annulé.",
+			"columnPickedUp": "Colonne {{column}} saisie. Utilisez les flèches pour réordonner.",
+			"columnReordered": "Colonne {{column}} déplacée."
+		},
 		"filter": {
 			"button": "Filtrer",
 			"title": "Filtres",
@@ -260,7 +312,10 @@
 			"errorTitle": "Échec de la commande",
 			"successTitle": "Commande terminée",
 			"successBody": "La sortie a été écrite dans la console.",
-			"ariaListLabel": "Commandes slash disponibles"
+			"ariaListLabel": "Commandes slash disponibles",
+			"runAsTaskLabel": "Lancer en tâche",
+			"runAsTaskHint": "Lancer comme une tâche Kanban interactive (planification, revue, conversation) plutôt qu'un tir unique.",
+			"taskCreated": "Tâche créée : {{name}}"
 		}
 	},
 	"queue": {
@@ -747,7 +802,24 @@
 			"selectAria": "Modèle pour cette phase",
 			"selectTooltip": "Changer le modèle pour cette phase",
 			"updatedTitle": "Modèle mis à jour",
-			"updatedDesc": "Le modèle sera appliqué au démarrage de cette phase."
+			"updatedDesc": "Le modèle sera appliqué au démarrage de cette phase.",
+			"installed": "✓ installé",
+			"downloadable": "à télécharger",
+			"downloadStartedTitle": "Téléchargement du modèle",
+			"downloadStartedDesc": "{{model}} se télécharge en arrière-plan."
+		},
+		"modelGroup": {
+			"toggleAria": "Afficher ou masquer les logs du modèle {{model}}",
+			"unknownModel": "Modèle inconnu"
+		},
+		"compare": {
+			"button": "Comparer",
+			"openAria": "Comparer les modèles",
+			"openTooltip": "Comparer les plans des modèles côte à côte",
+			"title": "Comparaison des plans",
+			"close": "Fermer",
+			"swapAria": "Inverser les colonnes",
+			"selectAria": "Choisir le modèle à comparer"
 		}
 	},
 	"modal": {

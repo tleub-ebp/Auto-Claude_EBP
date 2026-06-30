@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	renameSync,
 	unlinkSync,
@@ -63,6 +64,8 @@ import {
 	addChangeRequestSubtaskToPlan,
 } from "./plan-file-utils";
 import { findTaskAndProject } from "./shared";
+import { extractPrCreationError } from "./pr-error-utils";
+import { stripHtml } from "../shared/sanitize";
 
 /**
  * Returns true if the currently active provider requires Claude OAuth authentication.
@@ -1352,20 +1355,30 @@ export function registerTaskExecutionHandlers(
 							"backend",
 						);
 
-						// Prepare the script to call the task completion service
+						// Prepare the script to call the task completion service.
+						// Parameters are read from stdin (JSON), NOT argv: a task
+						// description imported from Azure DevOps can embed a large
+						// base64 inline image, and passing that on the command line
+						// blows past the OS argument-length limit (~32 KB on Windows),
+						// which made execFileSync fail before Python even started.
 						const scriptContent = `
 import json
 import sys
-from pathlib import Path
 
 from services.task_completion_service import create_task_completion_service
 
-# Get project path and task info from command line
-project_path = sys.argv[1]
-spec_id = sys.argv[2]
-task_title = sys.argv[3]
-task_description = sys.argv[4] if len(sys.argv) > 4 else None
-base_branch = sys.argv[5] if len(sys.argv) > 5 else "develop"
+# Read parameters as JSON from stdin (see note in execution-handlers.ts).
+# Decode the raw stdin bytes as UTF-8 explicitly: on Windows, sys.stdin's
+# text wrapper defaults to the locale codepage (cp1252), which corrupts
+# accented characters in spec ids / titles (e.g. "à" -> "\\ufffd\\xa0") and
+# later trips the spec-name validation regex.
+params = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+
+project_path = params["project_path"]
+spec_id = params["spec_id"]
+task_title = params["task_title"]
+task_description = params.get("task_description") or None
+base_branch = params.get("base_branch") or "develop"
 
 # Create service and complete task
 service = create_task_completion_service(project_path, base_branch)
@@ -1393,30 +1406,39 @@ print(json.dumps(result))
 							project.settings?.mainBranch ||
 							"develop";
 
-						// Execute Python script to create PR
-						// Run from backendPath so Python resolves all
-						// internal imports (core.*, debug, services.*) correctly.
-						const result = execFileSync(
-							pythonExecutable,
-							[
-								tmpScriptPath,
-								project.path,
-								task.specId,
-								task.title,
-								task.description || "",
-								baseBranch,
-							],
-							{
-								cwd: backendPath,
-								encoding: "utf-8",
-								timeout: 60000, // 60 seconds timeout for PR creation
-								env: {
-									...process.env,
-									APP_LANGUAGE: getAppLanguage(),
-									PYTHONPATH: backendPath,
-								},
+						// Build the parameters payload. The description is stripped of
+						// HTML so the PR body stays clean (no raw tags) and small
+						// (no inline base64 image), keeping it well under GitHub's
+						// PR-body size limit.
+						const prParams = JSON.stringify({
+							project_path: project.path,
+							spec_id: task.specId,
+							task_title: stripHtml(task.title) || task.title,
+							task_description: stripHtml(task.description || ""),
+							base_branch: baseBranch,
+						});
+
+						// Execute Python script to create PR.
+						// Run from backendPath so Python resolves all internal imports
+						// (core.*, debug, services.*) correctly. Parameters are passed
+						// on stdin via `input` to avoid command-line length limits.
+						// `input` is an explicit UTF-8 Buffer (not a string) so accented
+						// characters survive the hand-off intact; PYTHONUTF8/IOENCODING
+						// keep Python's own stdio on UTF-8 regardless of the OS locale.
+						const result = execFileSync(pythonExecutable, [tmpScriptPath], {
+							cwd: backendPath,
+							encoding: "utf-8",
+							timeout: 60000, // 60 seconds timeout for PR creation
+							input: Buffer.from(prParams, "utf-8"),
+							maxBuffer: 10 * 1024 * 1024, // PR output can be sizable
+							env: {
+								...process.env,
+								APP_LANGUAGE: getAppLanguage(),
+								PYTHONPATH: backendPath,
+								PYTHONUTF8: "1",
+								PYTHONIOENCODING: "utf-8",
 							},
-						);
+						});
 
 						// Clean up temporary script
 						try {
@@ -1494,7 +1516,7 @@ print(json.dumps(result))
 						appLog.error(`[TASK_UPDATE_STATUS] Error creating PR:`, prError);
 						return {
 							success: false,
-							error: `Error creating PR: ${prError instanceof Error ? prError.message : String(prError)}`,
+							error: extractPrCreationError(prError),
 						};
 					}
 				} else if (!existingPrUrl) {
@@ -2120,11 +2142,32 @@ print(json.dumps(result))
 			try {
 				const conversationLog = path.join(specDir, "conversation.jsonl");
 				const haltMarker = path.join(specDir, "PROMPT_TOO_LONG_HALT");
+				const localNoToolsMarker = path.join(
+					specDir,
+					"LOCAL_MODEL_NO_TOOLS_HALT",
+				);
 				let removed = 0;
-				for (const target of [conversationLog, haltMarker]) {
+				for (const target of [conversationLog, haltMarker, localNoToolsMarker]) {
 					if (existsSync(target)) {
 						unlinkSync(target);
 						removed++;
+					}
+				}
+				// Per-model conversation logs (conversation.<model>.jsonl) + the
+				// .migrated marker — the model is in the filename, so glob them.
+				if (existsSync(specDir)) {
+					for (const name of readdirSync(specDir)) {
+						if (
+							/^conversation\..+\.jsonl$/.test(name) ||
+							name === "conversation.jsonl.migrated"
+						) {
+							try {
+								unlinkSync(path.join(specDir, name));
+								removed++;
+							} catch {
+								/* best-effort */
+							}
+						}
 					}
 				}
 				appLog.info(

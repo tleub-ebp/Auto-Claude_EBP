@@ -14,7 +14,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Body
 
-from .channels import build_text_payload, post_json
+from .channels import build_text_payload, post_json, validate_webhook_url
 from .models import NotificationChannel
 
 router = APIRouter()
@@ -34,8 +34,10 @@ def test_notification_webhook(body: Annotated[dict[str, Any], Body(...)]):
         return {"success": False, "error": f"Unknown channel: {body.get('channel')}"}
 
     url = str(body.get("url", "")).strip()
-    if not url.lower().startswith(("https://", "http://")):
-        return {"success": False, "error": "A valid webhook URL is required"}
+    try:
+        validate_webhook_url(url)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
 
     lang = os.environ.get("APP_LANGUAGE", "en")
     message = _TEST_MESSAGES.get(lang, _TEST_MESSAGES["en"])

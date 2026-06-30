@@ -16,7 +16,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from .estimator import estimate_build_cost
-from .formula_matrix import compute_formula_matrix
+from .formula_matrix import compute_formula_matrix, discover_local_models
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,9 @@ class FormulaMatrixRequest(BaseModel):
 def formula_matrix(req: FormulaMatrixRequest):
     """Compute every Provider × LLM × Effort formula for a ticket. Always 200."""
     try:
+        # Discover the user's actually-installed local models (best-effort, never
+        # blocks) so the Formula Lab compares their real local LLMs too.
+        local_models = discover_local_models()
         matrix = compute_formula_matrix(
             ticket_id=req.ticket_id,
             description=req.description,
@@ -82,6 +85,7 @@ def formula_matrix(req: FormulaMatrixRequest):
             ),
             providers=req.providers,
             complexity_score=req.complexity_score,
+            local_models=local_models,
         )
         return {"success": True, "matrix": matrix.to_dict()}
     except Exception as e:  # noqa: BLE001

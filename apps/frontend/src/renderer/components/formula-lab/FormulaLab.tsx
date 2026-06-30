@@ -3,6 +3,8 @@ import {
 	ChevronsUpDown,
 	ChevronUp,
 	Database,
+	Download,
+	HardDriveDownload,
 	Info,
 	Loader2,
 	RotateCw,
@@ -463,6 +465,26 @@ export function FormulaLab() {
 															<span className="text-muted-foreground">
 																{f.provider}
 															</span>
+															{f.provider === "ollama" &&
+																(f.installed ? (
+																	<Badge
+																		variant="outline"
+																		className="gap-1 border-emerald-500/40 text-[9px] text-emerald-600 dark:text-emerald-400"
+																		title={t("formulaLab:local.installedTooltip")}
+																	>
+																		<HardDriveDownload className="h-2.5 w-2.5" />
+																		{t("formulaLab:local.installed")}
+																	</Badge>
+																) : (
+																	<Badge
+																		variant="outline"
+																		className="gap-1 text-[9px] text-muted-foreground"
+																		title={t("formulaLab:local.notInstalledTooltip")}
+																	>
+																		<Download className="h-2.5 w-2.5" />
+																		{t("formulaLab:local.notInstalled")}
+																	</Badge>
+																))}
 														</div>
 													</td>
 													<td className="p-2">

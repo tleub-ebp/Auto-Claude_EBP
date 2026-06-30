@@ -68,6 +68,8 @@ export const projectMock = {
 	// Kanban Preferences
 	getKanbanPreferences: async () => ({ success: true, data: null }),
 	saveKanbanPreferences: async () => ({ success: true }),
+	getKanbanBoardState: async () => ({ success: true, data: null }),
+	saveKanbanBoardState: async () => ({ success: true }),
 
 	// Dialog operations
 	selectDirectory: async () => {

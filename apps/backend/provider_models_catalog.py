@@ -443,21 +443,79 @@ def _fetch_grok() -> list[dict[str, Any]]:
     return _fetch_openai_compatible("grok", "https://api.x.ai", _GROK_KEEP, _GROK_DROP)
 
 
+def _local_llm_root() -> str:
+    """Resolve the local LLM server root (no path), honouring env + saved config.
+
+    Covers any OpenAI-compatible local server: Ollama (11434), LM Studio (1234),
+    llama.cpp, vLLM, LocalAI. Falls back to the Ollama default.
+    """
+    root = (
+        os.environ.get("OLLAMA_BASE_URL")
+        or os.environ.get("LOCAL_LLM_BASE_URL")
+        or os.environ.get("LMSTUDIO_BASE_URL")
+    )
+    if not root:
+        try:
+            from src.connectors.llm_config import load_provider_config
+
+            cfg = load_provider_config("ollama") or load_provider_config("local") or {}
+            root = cfg.get("base_url")
+        except Exception:  # noqa: BLE001
+            root = None
+    root = (root or "http://localhost:11434").strip().rstrip("/")
+    # Strip an OpenAI-style suffix so we have the bare server root.
+    if root.endswith("/chat/completions"):
+        root = root[: -len("/chat/completions")].rstrip("/")
+    if root.endswith("/v1"):
+        root = root[: -len("/v1")].rstrip("/")
+    return root
+
+
 def _fetch_ollama() -> list[dict[str, Any]]:
+    """List models from any OpenAI-compatible local server.
+
+    Tries the OpenAI-compatible ``/v1/models`` endpoint first (works for LM
+    Studio *and* Ollama), then falls back to Ollama's native ``/api/tags``.
+    """
+    root = _local_llm_root()
+
+    # Tag each model with tool-calling support (hide non-tool models) and its
+    # parameter size (warn that a small model is weak for planning).
+    from ollama_model_detector import model_meta
+
+    def _entry(name: str) -> dict[str, Any]:
+        meta = model_meta(root, name)
+        return {
+            "value": name,
+            "label": name,
+            "tier": "local",
+            "supports_tools": meta["supports_tools"],
+            "param_b": meta["param_b"],
+        }
+
+    # 1) OpenAI-compatible endpoint (LM Studio, vLLM, llama.cpp, Ollama ≥ /v1)
     try:
         with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            resp = client.get("http://localhost:11434/api/tags")
+            resp = client.get(f"{root}/v1/models")
+        resp.raise_for_status()
+        items = resp.json().get("data", [])
+        out: list[dict[str, Any]] = [
+            _entry(it.get("id", "")) for it in items if it.get("id")
+        ]
+        if out:
+            return out
+    except (httpx.HTTPError, OSError, ValueError, KeyError):
+        pass
+
+    # 2) Ollama-native endpoint
+    try:
+        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
+            resp = client.get(f"{root}/api/tags")
         resp.raise_for_status()
     except (httpx.HTTPError, OSError):
         return []
     items = resp.json().get("models", [])
-    out: list[dict[str, Any]] = []
-    for it in items:
-        name = it.get("name", "")
-        if not name:
-            continue
-        out.append({"value": name, "label": name, "tier": "local"})
-    return out
+    return [_entry(it.get("name", "")) for it in items if it.get("name")]
 
 
 def _fetch_windsurf() -> list[dict[str, Any]]:
@@ -502,6 +560,14 @@ def list_models(provider: str, *, force_refresh: bool = False) -> dict[str, Any]
     """
     provider = (provider or "").lower()
 
+    # Local servers (Ollama / LM Studio / …) change their installed-model list
+    # frequently and answer instantly, so a 24h-cached list goes stale and shows
+    # the wrong "installed" set. Always fetch them live and never fall back to a
+    # stale cache for them.
+    is_local = provider in {"ollama", "local", "lmstudio"}
+    if is_local:
+        force_refresh = True
+
     # 1) Cache hit, unless force_refresh
     if not force_refresh:
         cached = _cached_entry(provider)
@@ -536,8 +602,9 @@ def list_models(provider: str, *, force_refresh: bool = False) -> dict[str, Any]
             error = type(e).__name__
             logger.warning("Live model fetch failed for %s: %s", provider, e)
 
-    # 3) Stale cache (better than nothing)
-    cache = _read_cache().get(provider)
+    # 3) Stale cache (better than nothing) — but never for local providers, where
+    # a stale list would falsely mark uninstalled models as installed.
+    cache = None if is_local else _read_cache().get(provider)
     if cache and cache.get("models"):
         return {
             "provider": provider,
