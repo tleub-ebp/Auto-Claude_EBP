@@ -1,0 +1,133 @@
+{
+	"progress": "Step {{current}}/{{total}}",
+	"actions": {
+		"next": "Next",
+		"back": "Back",
+		"skip": "Skip",
+		"skipSection": "Skip this section",
+		"finish": "Finish",
+		"close": "Close tour"
+	},
+	"gate": {
+		"hint": "Fill in this field to continue."
+	},
+	"fallback": {
+		"openManually": "Couldn't show this element automatically. Open the matching section in Settings, then continue to the next step."
+	},
+	"steps": {
+		"providers": {
+			"configure": {
+				"title": "Add an AI provider",
+				"desc": "Click \"Configure\" to connect a provider (Claude, OpenAI, Ollama…). At least one is required to enable agents."
+			}
+		},
+		"github": {
+			"enable": {
+				"title": "Enable GitHub",
+				"desc": "Turn on GitHub sync for this project. The configuration fields will then appear."
+			},
+			"token": {
+				"title": "GitHub token",
+				"desc": "Paste a Personal Access Token with the \"repo\" scope (GitHub ▸ Settings ▸ Developer settings ▸ Tokens)."
+			},
+			"repo": {
+				"title": "Repository",
+				"desc": "Enter the repository as owner/repository. Optional at this step."
+			}
+		},
+		"gitlab": {
+			"enable": {
+				"title": "Enable GitLab",
+				"desc": "Turn on GitLab sync to reveal the configuration fields."
+			},
+			"token": {
+				"title": "GitLab token",
+				"desc": "Paste a GitLab personal access token with the \"api\" scope."
+			},
+			"instanceUrl": {
+				"title": "Instance URL",
+				"desc": "If you use self-hosted GitLab, enter its URL (otherwise https://gitlab.com). Optional."
+			},
+			"project": {
+				"title": "Project",
+				"desc": "Enter the project as group/project. Optional."
+			}
+		},
+		"azureDevOps": {
+			"enable": {
+				"title": "Enable Azure DevOps",
+				"desc": "Turn on Azure DevOps sync to reveal the fields."
+			},
+			"orgUrl": {
+				"title": "Organization URL",
+				"desc": "Enter your organization URL, e.g. https://dev.azure.com/your-org."
+			},
+			"pat": {
+				"title": "Personal Access Token",
+				"desc": "Paste an Azure DevOps PAT with Work Items (read/write) and Code permissions."
+			},
+			"repository": {
+				"title": "Repository",
+				"desc": "Pick the repository to use. Optional at this step."
+			}
+		},
+		"jira": {
+			"enable": {
+				"title": "Enable Jira",
+				"desc": "Turn on the Jira integration to reveal the connection fields."
+			},
+			"instanceUrl": {
+				"title": "Instance URL",
+				"desc": "Enter your instance URL, e.g. https://your-domain.atlassian.net."
+			},
+			"email": {
+				"title": "Email",
+				"desc": "Enter the Atlassian account email tied to the API token."
+			},
+			"token": {
+				"title": "API token",
+				"desc": "Paste an Atlassian API token (id.atlassian.com ▸ Security ▸ API tokens)."
+			},
+			"projectKey": {
+				"title": "Project key",
+				"desc": "Enter the Jira project key (e.g. PROJ). Optional."
+			}
+		},
+		"linear": {
+			"enable": {
+				"title": "Enable Linear",
+				"desc": "Turn on Linear sync to reveal the API key field."
+			},
+			"apiKey": {
+				"title": "Linear API key",
+				"desc": "Paste a Linear API key (linear.app ▸ Settings ▸ API)."
+			}
+		},
+		"memory": {
+			"enable": {
+				"title": "Enable memory",
+				"desc": "Turn on persistent memory (Graphiti) so agents keep context across sessions."
+			},
+			"embeddingProvider": {
+				"title": "Embedding provider",
+				"desc": "Choose the embedding provider (local Ollama, OpenAI, Voyage…), then add its key if needed. Optional."
+			}
+		},
+		"cicd": {
+			"provider": {
+				"title": "CI/CD provider",
+				"desc": "Choose your pipeline provider (GitHub Actions, GitLab CI, Azure, Jenkins) to watch builds."
+			}
+		},
+		"notifications": {
+			"enable": {
+				"title": "Enable a notification",
+				"desc": "Turn on a channel (Slack here) to get notified when a PR is ready or a task is done."
+			},
+			"webhook": {
+				"title": "Webhook URL",
+				"desc": "Paste the Slack incoming webhook URL to receive notifications."
+			}
+		}
+	}
+}

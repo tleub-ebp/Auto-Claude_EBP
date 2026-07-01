@@ -1,0 +1,76 @@
+{
+	"title": "Centre de configuration",
+	"description": "Configurez vos outils pour débloquer un maximum de fonctionnalités de WorkPilot AI.",
+	"navLabel": "Prise en main",
+	"navDescription": "Centre de configuration guidé",
+	"guideMe": "Me guider pas à pas",
+	"nothingToGuide": "Tout est déjà configuré — rien à guider. 🎉",
+	"progress": "{{completed}} sur {{total}} configuré(s)",
+	"allDone": {
+		"title": "Tout est configuré 🎉",
+		"description": "Vos outils sont prêts. Vous pouvez créer votre première tâche."
+	},
+	"actions": {
+		"configure": "Configurer",
+		"edit": "Modifier",
+		"review": "Vérifier"
+	},
+	"state": {
+		"done": "Configuré",
+		"todo": "À faire",
+		"error": "À corriger"
+	},
+	"noProject": {
+		"title": "Aucun projet sélectionné",
+		"description": "Sélectionnez ou créez un projet pour configurer ses intégrations (GitHub, Jira, CI/CD, notifications…)."
+	},
+	"providersCount": "{{configured}}/{{total}} fournisseurs configurés",
+	"categories": {
+		"ai": "Comptes IA",
+		"integrations": "Intégrations du projet"
+	},
+	"items": {
+		"providers": {
+			"label": "Fournisseurs IA",
+			"desc": "Connectez au moins un fournisseur (Claude, OpenAI, Ollama…) pour activer les agents. Ajoutez-en plusieurs pour basculer automatiquement aux limites."
+		},
+		"github": {
+			"label": "GitHub",
+			"desc": "Importez vos issues comme tâches, ouvrez des pull requests et synchronisez l'avancement automatiquement."
+		},
+		"gitlab": {
+			"label": "GitLab",
+			"desc": "Importez vos issues, créez des merge requests et gardez l'état synchronisé avec votre projet GitLab."
+		},
+		"azureDevOps": {
+			"label": "Azure DevOps",
+			"desc": "Importez vos work items (RSD, bugs…) comme tâches et synchronisez les boards Azure Boards."
+		},
+		"jira": {
+			"label": "Jira",
+			"desc": "Importez vos tickets comme tâches et synchronisez l'avancement avec votre projet Jira."
+		},
+		"linear": {
+			"label": "Linear",
+			"desc": "Importez vos issues Linear comme tâches et synchronisez l'état en temps réel."
+		},
+		"memory": {
+			"label": "Mémoire (Graphiti)",
+			"desc": "Activez la mémoire persistante pour que les agents conservent le contexte entre les sessions."
+		},
+		"cicd": {
+			"label": "Pipeline CI/CD",
+			"desc": "Surveillez vos pipelines et laissez WorkPilot corriger automatiquement les builds en échec."
+		},
+		"notifications": {
+			"label": "Notifications",
+			"desc": "Soyez prévenu sur Teams, Slack, Discord ou Google Chat quand une PR est prête ou une tâche terminée."
+		}
+	},
+	"banner": {
+		"title": "Terminez votre configuration",
+		"description": "{{completed}}/{{total}} outils configurés — débloquez plus de fonctionnalités.",
+		"cta": "Continuer la configuration",
+		"dismiss": "Ignorer"
+	}
+}

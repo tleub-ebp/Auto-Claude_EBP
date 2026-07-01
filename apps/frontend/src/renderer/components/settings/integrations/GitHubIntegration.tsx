@@ -19,6 +19,7 @@ import type {
 	ProjectSettings,
 } from "../../../../shared/types";
 import { buildBranchOptions } from "../../../lib/branch-utils";
+import { GUIDE_ANCHORS } from "../../guided-tour/anchors";
 import { GitHubOAuthFlow } from "../../project-settings/GitHubOAuthFlow";
 import { PasswordInput } from "../../project-settings/PasswordInput";
 import { Button } from "../../ui/button";
@@ -28,18 +29,8 @@ import { Label } from "../../ui/label";
 import { Separator } from "../../ui/separator";
 import { Switch } from "../../ui/switch";
 
-// Debug logging
-const DEBUG =
-	process.env.NODE_ENV === "development" || process.env.DEBUG === "true";
-function debugLog(message: string, data?: unknown) {
-	if (DEBUG) {
-		if (data === undefined) {
-			console.warn(`[GitHubIntegration] ${message}`);
-		} else {
-			console.warn(`[GitHubIntegration] ${message}`, data);
-		}
-	}
-}
+// Debug logging — disabled (kept as a no-op so call sites stay valid).
+function debugLog(_message: string, _data?: unknown) {}
 
 interface GitHubRepo {
 	fullName: string;
@@ -287,6 +278,7 @@ export function GitHubIntegration({
 					</p>
 				</div>
 				<Switch
+					data-guide={GUIDE_ANCHORS.github.enable}
 					checked={envConfig.githubEnabled}
 					onCheckedChange={(checked) =>
 						updateEnvConfig({ githubEnabled: checked })
@@ -400,6 +392,7 @@ export function GitHubIntegration({
 									</a>
 								</p>
 								<PasswordInput
+									data-guide={GUIDE_ANCHORS.github.token}
 									value={envConfig.githubToken || ""}
 									onChange={(value) => updateEnvConfig({ githubToken: value })}
 									placeholder="ghp_xxxxxxxx or github_pat_xxxxxxxx"
@@ -702,6 +695,7 @@ function RepositoryInput({ value, onChange }: RepositoryInputProps) {
 				{t("projectSections.github.repositoryFormatExample")}
 			</p>
 			<Input
+				data-guide={GUIDE_ANCHORS.github.repo}
 				placeholder={t("projectSections.github.repositoryPlaceholder")}
 				value={value}
 				onChange={(e) => onChange(e.target.value)}

@@ -320,6 +320,8 @@ export interface AppSettings {
 	graphitiMcpUrl?: string;
 	// Onboarding wizard completion state
 	onboardingCompleted?: boolean;
+	// Setup Hub home-screen banner dismissed by the user
+	setupBannerDismissed?: boolean;
 	// Selected agent profile for preset model/thinking configurations
 	selectedAgentProfile?: string;
 	// Active LLM provider (e.g. 'anthropic', 'openai', 'google', 'ollama', ...)

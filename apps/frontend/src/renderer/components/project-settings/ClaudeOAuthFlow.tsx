@@ -41,14 +41,10 @@ export function ClaudeOAuthFlow({ onSuccess, onCancel }: ClaudeOAuthFlowProps) {
 
 	const handleStartAuth = async () => {
 		if (hasStartedRef.current) {
-			console.warn(
-				"[ClaudeOAuth] Auth already started, ignoring duplicate call",
-			);
 			return;
 		}
 		hasStartedRef.current = true;
 
-		console.warn("[ClaudeOAuth] Starting Claude authentication");
 		setStatus("authenticating");
 		setError(null);
 
@@ -61,7 +57,6 @@ export function ClaudeOAuthFlow({ onSuccess, onCancel }: ClaudeOAuthFlowProps) {
 			}
 
 			const activeProfileId = profilesResult.data.activeProfileId;
-			console.warn("[ClaudeOAuth] Authenticating profile:", activeProfileId);
 
 			// Open visible terminal for authentication
 			const result =
@@ -74,9 +69,6 @@ export function ClaudeOAuthFlow({ onSuccess, onCancel }: ClaudeOAuthFlowProps) {
 			}
 
 			setAuthenticatingProfileId(activeProfileId);
-			console.warn(
-				"[ClaudeOAuth] Terminal opened, waiting for user to complete /login...",
-			);
 		} catch (err) {
 			console.error("[ClaudeOAuth] Authentication failed:", err);
 			setError(err instanceof Error ? err.message : "Authentication failed");
@@ -98,10 +90,8 @@ export function ClaudeOAuthFlow({ onSuccess, onCancel }: ClaudeOAuthFlowProps) {
 			const result = await globalThis.electronAPI.verifyClaudeProfileAuth(
 				authenticatingProfileId,
 			);
-			console.warn("[ClaudeOAuth] Verification result:", result);
 
 			if (result.success && result.data?.authenticated) {
-				console.warn("[ClaudeOAuth] Auth verified! Email:", result.data.email);
 				setEmail(result.data.email);
 				setStatus("success");
 

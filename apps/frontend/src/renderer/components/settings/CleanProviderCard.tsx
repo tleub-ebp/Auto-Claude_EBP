@@ -12,6 +12,7 @@ import type React from "react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
+import { GUIDE_ANCHORS } from "../guided-tour/anchors";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 
@@ -630,6 +631,7 @@ export function CleanProviderCard({
 						</>
 					) : (
 						<Button
+							data-guide={GUIDE_ANCHORS.providers.configure}
 							onClick={handleConfigure}
 							variant="outline"
 							size="sm"

@@ -12,6 +12,7 @@ import type {
 	LinearSyncStatus,
 	ProjectEnvConfig,
 } from "../../../../shared/types";
+import { GUIDE_ANCHORS } from "../../guided-tour/anchors";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -57,6 +58,7 @@ export function LinearIntegration({
 					</p>
 				</div>
 				<Switch
+					data-guide={GUIDE_ANCHORS.linear.enable}
 					checked={envConfig.linearEnabled}
 					onCheckedChange={(checked) =>
 						updateEnvConfig({ linearEnabled: checked })
@@ -83,6 +85,7 @@ export function LinearIntegration({
 						</p>
 						<div className="relative">
 							<Input
+								data-guide={GUIDE_ANCHORS.linear.apiKey}
 								type={showLinearKey ? "text" : "password"}
 								placeholder="lin_api_xxxxxxxx"
 								value={envConfig.linearApiKey || ""}

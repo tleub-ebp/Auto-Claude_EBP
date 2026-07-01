@@ -50,6 +50,7 @@ import enDialogs from "./locales/en/dialogs.json";
 import enDocumentation from "./locales/en/documentation.json";
 import enErrors from "./locales/en/errors.json";
 import enGitlab from "./locales/en/gitlab.json";
+import enGuidedTour from "./locales/en/guidedTour.json";
 import enIdeation from "./locales/en/ideation.json";
 import enInitDialog from "./locales/en/initDialog.json";
 import enInsights from "./locales/en/insights.json";
@@ -72,6 +73,7 @@ import enRoadmap from "./locales/en/roadmap.json";
 import enSelfHealing from "./locales/en/selfHealing.json";
 import enSessionHistory from "./locales/en/sessionHistory.json";
 import enSettings from "./locales/en/settings.json";
+import enSetupHub from "./locales/en/setupHub.json";
 import enStreaming from "./locales/en/streaming.json";
 import enSwarm from "./locales/en/swarm.json";
 import enTaskReview from "./locales/en/taskReview.json";
@@ -132,6 +134,7 @@ import frDialogs from "./locales/fr/dialogs.json";
 import frDocumentation from "./locales/fr/documentation.json";
 import frErrors from "./locales/fr/errors.json";
 import frGitlab from "./locales/fr/gitlab.json";
+import frGuidedTour from "./locales/fr/guidedTour.json";
 import frIdeation from "./locales/fr/ideation.json";
 import frInitDialog from "./locales/fr/initDialog.json";
 import frInsights from "./locales/fr/insights.json";
@@ -154,6 +157,7 @@ import frRoadmap from "./locales/fr/roadmap.json";
 import frSelfHealing from "./locales/fr/selfHealing.json";
 import frSessionHistory from "./locales/fr/sessionHistory.json";
 import frSettings from "./locales/fr/settings.json";
+import frSetupHub from "./locales/fr/setupHub.json";
 import frStreaming from "./locales/fr/streaming.json";
 import frSwarm from "./locales/fr/swarm.json";
 import frTaskReview from "./locales/fr/taskReview.json";
@@ -211,6 +215,7 @@ export const resources = {
 		documentation: enDocumentation,
 		errors: enErrors,
 		gitlab: enGitlab,
+		guidedTour: enGuidedTour,
 		initDialog: enInitDialog,
 		insights: enInsights,
 		learningLoop: enLearningLoop,
@@ -234,6 +239,7 @@ export const resources = {
 		refactoring: enRefactoring,
 		roadmap: enRoadmap,
 		settings: enSettings,
+		setupHub: enSetupHub,
 		streaming: enStreaming,
 		taskReview: enTaskReview,
 		tasks: enTasks,
@@ -293,6 +299,7 @@ export const resources = {
 		documentation: frDocumentation,
 		errors: frErrors,
 		gitlab: frGitlab,
+		guidedTour: frGuidedTour,
 		initDialog: frInitDialog,
 		insights: frInsights,
 		learningLoop: frLearningLoop,
@@ -316,6 +323,7 @@ export const resources = {
 		refactoring: frRefactoring,
 		roadmap: frRoadmap,
 		settings: frSettings,
+		setupHub: frSetupHub,
 		streaming: frStreaming,
 		taskReview: frTaskReview,
 		tasks: frTasks,
@@ -382,6 +390,7 @@ i18n.use(initReactI18next).init({
 		"documentation",
 		"errors",
 		"gitlab",
+		"guidedTour",
 		"initDialog",
 		"insights",
 		"learningLoop",
@@ -405,6 +414,7 @@ i18n.use(initReactI18next).init({
 		"refactoring",
 		"roadmap",
 		"settings",
+		"setupHub",
 		"streaming",
 		"taskReview",
 		"tasks",

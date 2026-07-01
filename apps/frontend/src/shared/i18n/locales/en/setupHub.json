@@ -1,0 +1,76 @@
+{
+	"title": "Setup Center",
+	"description": "Configure your tools to unlock the most of WorkPilot AI's features.",
+	"navLabel": "Getting started",
+	"navDescription": "Guided setup center",
+	"guideMe": "Guide me step by step",
+	"nothingToGuide": "Everything is already configured — nothing to guide. 🎉",
+	"progress": "{{completed}} of {{total}} configured",
+	"allDone": {
+		"title": "Everything is configured 🎉",
+		"description": "Your tools are ready. You can create your first task."
+	},
+	"actions": {
+		"configure": "Configure",
+		"edit": "Edit",
+		"review": "Review"
+	},
+	"state": {
+		"done": "Configured",
+		"todo": "To do",
+		"error": "Needs attention"
+	},
+	"noProject": {
+		"title": "No project selected",
+		"description": "Select or create a project to configure its integrations (GitHub, Jira, CI/CD, notifications…)."
+	},
+	"providersCount": "{{configured}}/{{total}} providers configured",
+	"categories": {
+		"ai": "AI accounts",
+		"integrations": "Project integrations"
+	},
+	"items": {
+		"providers": {
+			"label": "AI providers",
+			"desc": "Connect at least one provider (Claude, OpenAI, Ollama…) to enable agents. Add several to auto-switch when you hit limits."
+		},
+		"github": {
+			"label": "GitHub",
+			"desc": "Import issues as tasks, open pull requests, and sync progress automatically."
+		},
+		"gitlab": {
+			"label": "GitLab",
+			"desc": "Import issues, create merge requests, and keep status in sync with your GitLab project."
+		},
+		"azureDevOps": {
+			"label": "Azure DevOps",
+			"desc": "Import work items (RSD, bugs…) as tasks and sync with your Azure Boards."
+		},
+		"jira": {
+			"label": "Jira",
+			"desc": "Import tickets as tasks and sync progress with your Jira project."
+		},
+		"linear": {
+			"label": "Linear",
+			"desc": "Import Linear issues as tasks and sync status in real time."
+		},
+		"memory": {
+			"label": "Memory (Graphiti)",
+			"desc": "Enable persistent memory so agents keep context across sessions."
+		},
+		"cicd": {
+			"label": "CI/CD pipeline",
+			"desc": "Watch your pipelines and let WorkPilot auto-fix failing builds."
+		},
+		"notifications": {
+			"label": "Notifications",
+			"desc": "Get notified on Teams, Slack, Discord, or Google Chat when a PR is ready or a task is done."
+		}
+	},
+	"banner": {
+		"title": "Finish your setup",
+		"description": "{{completed}}/{{total}} tools configured — unlock more features.",
+		"cta": "Continue setup",
+		"dismiss": "Dismiss"
+	}
+}

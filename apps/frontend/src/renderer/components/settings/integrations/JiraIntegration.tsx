@@ -10,6 +10,7 @@ import {
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ProjectEnvConfig } from "../../../../shared/types";
+import { GUIDE_ANCHORS } from "../../guided-tour/anchors";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -49,7 +50,6 @@ export function JiraIntegration({
 
 	// Guard: don't render until envConfig is loaded (matches AzureDevOpsIntegration pattern)
 	if (!envConfig) {
-		console.warn("[JiraIntegration] envConfig is null — not rendering");
 		return null;
 	}
 
@@ -114,6 +114,7 @@ export function JiraIntegration({
 					</p>
 				</div>
 				<Switch
+					data-guide={GUIDE_ANCHORS.jira.enable}
 					checked={jiraEnabled}
 					onCheckedChange={(checked) =>
 						updateEnvConfig({ jiraEnabled: checked })
@@ -135,6 +136,7 @@ export function JiraIntegration({
 						</Label>
 						<Input
 							id="jira-url"
+							data-guide={GUIDE_ANCHORS.jira.instanceUrl}
 							type="url"
 							value={jiraInstanceUrl}
 							onChange={(e) =>
@@ -158,6 +160,7 @@ export function JiraIntegration({
 						</Label>
 						<Input
 							id="jira-email"
+							data-guide={GUIDE_ANCHORS.jira.email}
 							type="email"
 							value={jiraEmail}
 							onChange={(e) => updateEnvConfig({ jiraEmail: e.target.value })}
@@ -181,6 +184,7 @@ export function JiraIntegration({
 							<div className="relative flex-1">
 								<Input
 									id="jira-token"
+									data-guide={GUIDE_ANCHORS.jira.token}
 									type={showJiraToken ? "text" : "password"}
 									value={jiraApiToken}
 									onChange={(e) =>
@@ -225,6 +229,7 @@ export function JiraIntegration({
 						</Label>
 						<Input
 							id="jira-project"
+							data-guide={GUIDE_ANCHORS.jira.projectKey}
 							value={jiraProjectKey}
 							onChange={(e) =>
 								updateEnvConfig({ jiraProjectKey: e.target.value })

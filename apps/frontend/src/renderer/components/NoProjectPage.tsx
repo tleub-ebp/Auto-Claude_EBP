@@ -1,5 +1,6 @@
 import { FolderOpen, FolderPlus, GitBranch, Sparkles, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { SetupBanner } from "./setup-hub/SetupBanner";
 import { Button } from "./ui/button";
 
 interface NoProjectPageProps {
@@ -12,6 +13,11 @@ export function NoProjectPage({ onAddProject }: NoProjectPageProps) {
 	return (
 		<div className="flex h-full items-center justify-center p-8">
 			<div className="w-full max-w-lg flex flex-col items-center gap-8">
+				{/* Finish-your-setup nudge (hidden once fully configured / dismissed) */}
+				<div className="w-full">
+					<SetupBanner />
+				</div>
+
 				{/* Assistant bubble */}
 				<div className="flex items-start gap-4 w-full">
 					<div className="shrink-0 w-9 h-9 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">

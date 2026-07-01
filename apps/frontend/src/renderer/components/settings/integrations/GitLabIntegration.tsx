@@ -20,6 +20,7 @@ import type {
 	ProjectEnvConfig,
 	ProjectSettings,
 } from "../../../../shared/types";
+import { GUIDE_ANCHORS } from "../../guided-tour/anchors";
 import { PasswordInput } from "../../project-settings/PasswordInput";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -27,18 +28,8 @@ import { Label } from "../../ui/label";
 import { Separator } from "../../ui/separator";
 import { Switch } from "../../ui/switch";
 
-// Debug logging
-const DEBUG =
-	process.env.NODE_ENV === "development" || process.env.DEBUG === "true";
-function debugLog(message: string, data?: unknown) {
-	if (DEBUG) {
-		if (data !== undefined) {
-			console.warn(`[GitLabIntegration] ${message}`, data);
-		} else {
-			console.warn(`[GitLabIntegration] ${message}`);
-		}
-	}
-}
+// Debug logging — disabled (kept as a no-op so call sites stay valid).
+function debugLog(_message: string, _data?: unknown) {}
 
 interface GitLabProject {
 	pathWithNamespace: string;
@@ -375,6 +366,7 @@ export function GitLabIntegration({
 					</p>
 				</div>
 				<Switch
+					data-guide={GUIDE_ANCHORS.gitlab.enable}
 					checked={envConfig.gitlabEnabled}
 					onCheckedChange={(checked) =>
 						updateEnvConfig({ gitlabEnabled: checked })
@@ -590,6 +582,7 @@ export function GitLabIntegration({
 									</a>
 								</p>
 								<PasswordInput
+									data-guide={GUIDE_ANCHORS.gitlab.token}
 									value={envConfig.gitlabToken || ""}
 									onChange={(value) => updateEnvConfig({ gitlabToken: value })}
 									placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
@@ -660,6 +653,7 @@ function InstanceUrlInput({ value, onChange }: InstanceUrlInputProps) {
 				{t("settings.instanceDescription")}
 			</p>
 			<Input
+				data-guide={GUIDE_ANCHORS.gitlab.instanceUrl}
 				placeholder="https://gitlab.com"
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
@@ -855,6 +849,7 @@ function ProjectInput({ value, onChange }: ProjectInputProps) {
 				{t("settings.projectFormatExample")}
 			</p>
 			<Input
+				data-guide={GUIDE_ANCHORS.gitlab.project}
 				placeholder="group/project"
 				value={value}
 				onChange={(e) => onChange(e.target.value)}

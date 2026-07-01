@@ -1,0 +1,133 @@
+{
+	"progress": "Étape {{current}}/{{total}}",
+	"actions": {
+		"next": "Suivant",
+		"back": "Précédent",
+		"skip": "Passer",
+		"skipSection": "Passer cette section",
+		"finish": "Terminer",
+		"close": "Fermer la visite"
+	},
+	"gate": {
+		"hint": "Remplissez ce champ pour continuer."
+	},
+	"fallback": {
+		"openManually": "Impossible d'afficher cet élément automatiquement. Ouvrez la section correspondante dans les Paramètres, puis passez à l'étape suivante."
+	},
+	"steps": {
+		"providers": {
+			"configure": {
+				"title": "Ajouter un fournisseur IA",
+				"desc": "Cliquez sur « Configurer » pour connecter un fournisseur (Claude, OpenAI, Ollama…). Au moins un est nécessaire pour activer les agents."
+			}
+		},
+		"github": {
+			"enable": {
+				"title": "Activer GitHub",
+				"desc": "Activez la synchronisation GitHub pour ce projet. Les champs de configuration apparaîtront ensuite."
+			},
+			"token": {
+				"title": "Token GitHub",
+				"desc": "Collez un Personal Access Token avec la portée « repo » (GitHub ▸ Settings ▸ Developer settings ▸ Tokens)."
+			},
+			"repo": {
+				"title": "Dépôt",
+				"desc": "Indiquez le dépôt au format owner/repository. Optionnel à cette étape."
+			}
+		},
+		"gitlab": {
+			"enable": {
+				"title": "Activer GitLab",
+				"desc": "Activez la synchronisation GitLab pour faire apparaître les champs de configuration."
+			},
+			"token": {
+				"title": "Token GitLab",
+				"desc": "Collez un token d'accès personnel GitLab avec la portée « api »."
+			},
+			"instanceUrl": {
+				"title": "URL de l'instance",
+				"desc": "Si vous utilisez GitLab auto-hébergé, indiquez l'URL (sinon https://gitlab.com). Optionnel."
+			},
+			"project": {
+				"title": "Projet",
+				"desc": "Indiquez le projet au format group/project. Optionnel."
+			}
+		},
+		"azureDevOps": {
+			"enable": {
+				"title": "Activer Azure DevOps",
+				"desc": "Activez la synchronisation Azure DevOps pour faire apparaître les champs."
+			},
+			"orgUrl": {
+				"title": "URL de l'organisation",
+				"desc": "Indiquez l'URL de votre organisation, ex. https://dev.azure.com/votre-org."
+			},
+			"pat": {
+				"title": "Personal Access Token",
+				"desc": "Collez un PAT Azure DevOps avec les autorisations Work Items (lecture/écriture) et Code."
+			},
+			"repository": {
+				"title": "Dépôt",
+				"desc": "Sélectionnez le dépôt à utiliser. Optionnel à cette étape."
+			}
+		},
+		"jira": {
+			"enable": {
+				"title": "Activer Jira",
+				"desc": "Activez l'intégration Jira pour faire apparaître les champs de connexion."
+			},
+			"instanceUrl": {
+				"title": "URL de l'instance",
+				"desc": "Indiquez l'URL de votre instance, ex. https://votre-domaine.atlassian.net."
+			},
+			"email": {
+				"title": "Email",
+				"desc": "Saisissez l'email du compte Atlassian associé au token API."
+			},
+			"token": {
+				"title": "Token API",
+				"desc": "Collez un token API Atlassian (id.atlassian.com ▸ Sécurité ▸ Tokens API)."
+			},
+			"projectKey": {
+				"title": "Clé de projet",
+				"desc": "Indiquez la clé du projet Jira (ex. PROJ). Optionnel."
+			}
+		},
+		"linear": {
+			"enable": {
+				"title": "Activer Linear",
+				"desc": "Activez la synchronisation Linear pour faire apparaître le champ de clé API."
+			},
+			"apiKey": {
+				"title": "Clé API Linear",
+				"desc": "Collez une clé API Linear (linear.app ▸ Settings ▸ API)."
+			}
+		},
+		"memory": {
+			"enable": {
+				"title": "Activer la mémoire",
+				"desc": "Activez la mémoire persistante (Graphiti) pour que les agents conservent le contexte entre les sessions."
+			},
+			"embeddingProvider": {
+				"title": "Fournisseur d'embeddings",
+				"desc": "Choisissez le fournisseur d'embeddings (Ollama local, OpenAI, Voyage…), puis renseignez sa clé si nécessaire. Optionnel."
+			}
+		},
+		"cicd": {
+			"provider": {
+				"title": "Fournisseur CI/CD",
+				"desc": "Choisissez votre fournisseur de pipeline (GitHub Actions, GitLab CI, Azure, Jenkins) pour surveiller les builds."
+			}
+		},
+		"notifications": {
+			"enable": {
+				"title": "Activer une notification",
+				"desc": "Activez un canal (ici Slack) pour être prévenu quand une PR est prête ou une tâche terminée."
+			},
+			"webhook": {
+				"title": "URL du webhook",
+				"desc": "Collez l'URL du webhook entrant Slack pour recevoir les notifications."
+			}
+		}
+	}
+}

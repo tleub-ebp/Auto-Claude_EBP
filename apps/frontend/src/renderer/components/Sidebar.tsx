@@ -36,6 +36,7 @@ import {
 	ChevronRight,
 	Code,
 	Coins,
+	Compass,
 	Database,
 	Download,
 	FileCode2,
@@ -111,6 +112,7 @@ import {
 import { useProjectStore } from "@/stores/project-store";
 import { openPromptOptimizerDialog } from "@/stores/prompt-optimizer-store";
 import { saveSettings, useSettingsStore } from "@/stores/settings-store";
+import { useSetupHubStore } from "@/stores/setup-hub-store";
 import { openTestGenerationDialog } from "@/stores/test-generation-store";
 import { openVoiceControlDialog } from "@/stores/voice-control-store";
 // Modals & Components
@@ -781,6 +783,7 @@ export function Sidebar({
 	const projects = useProjectStore((state) => state.projects);
 	const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
 	const settings = useSettingsStore((state) => state.settings);
+	const openSetupHub = useSetupHubStore((state) => state.openSetupHub);
 
 	const [showAddProjectModal, setShowAddProjectModal] = useState(false);
 	const [showGitSetupModal, setShowGitSetupModal] = useState(false);
@@ -2294,6 +2297,21 @@ export function Sidebar({
 							</TooltipTrigger>
 							<TooltipContent side={isCollapsed ? "right" : "top"}>
 								{t("tooltips.settings")}
+							</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="ghost"
+									size="icon"
+									onClick={() => openSetupHub()}
+									aria-label={t("setupHub:title")}
+								>
+									<Compass className="h-4 w-4" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side={isCollapsed ? "right" : "top"}>
+								{t("setupHub:title")}
 							</TooltipContent>
 						</Tooltip>
 						<Tooltip>

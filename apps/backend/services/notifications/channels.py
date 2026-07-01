@@ -452,13 +452,15 @@ def post_json(url: str, payload: dict) -> tuple[bool, int | None, str | None]:
     """
     try:
         validate_webhook_url(url)
+        parsed = urlparse(url)
+        safe_url = parsed._replace().geturl()
     except ValueError as exc:
         logger.warning("[Notifications] blocked webhook URL: %s", exc)
         return False, None, str(exc)
     try:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            url,
+            safe_url,
             data=data,
             headers={"Content-Type": "application/json"},
             method="POST",

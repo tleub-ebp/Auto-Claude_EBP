@@ -19,19 +19,8 @@ interface GitHubOAuthFlowProps {
 	readonly onCancel?: () => void;
 }
 
-// Debug logging helper - logs when DEBUG env var is set or in development
-const DEBUG =
-	process.env.NODE_ENV === "development" || process.env.DEBUG === "true";
-
-function debugLog(message: string, data?: unknown) {
-	if (DEBUG) {
-		if (data !== null && data !== undefined) {
-			console.warn(`[GitHubOAuth] ${message}`, data);
-		} else {
-			console.warn(`[GitHubOAuth] ${message}`);
-		}
-	}
-}
+// Debug logging — disabled (kept as a no-op so call sites stay valid).
+function debugLog(_message: string, _data?: unknown) {}
 
 // Authentication timeout in milliseconds (5 minutes)
 // GitHub device codes typically expire after 15 minutes, but 5 minutes is a reasonable UX timeout

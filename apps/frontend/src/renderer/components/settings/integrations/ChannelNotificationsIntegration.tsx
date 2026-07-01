@@ -14,6 +14,7 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ProjectEnvConfig } from "../../../../shared/types";
+import { GUIDE_ANCHORS } from "../../guided-tour/anchors";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -143,6 +144,7 @@ function ChannelRow({
 					</div>
 				</div>
 				<Switch
+					data-guide={GUIDE_ANCHORS.notifications.enable(def.key)}
 					checked={enabled}
 					onCheckedChange={(checked) =>
 						updateEnvConfig({ [def.enabledField]: checked })
@@ -156,6 +158,7 @@ function ChannelRow({
 					<div className="relative">
 						<Input
 							id={`${def.key}-webhook`}
+							data-guide={GUIDE_ANCHORS.notifications.webhook(def.key)}
 							type={showUrl ? "text" : "password"}
 							value={webhookUrl}
 							onChange={(e) =>

@@ -17,6 +17,7 @@ import type {
 	ProjectEnvConfig,
 } from "../../../../shared/types";
 import { cn } from "../../../lib/utils";
+import { GUIDE_ANCHORS } from "../../guided-tour/anchors";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -214,6 +215,7 @@ export function AzureDevOpsIntegration({
 					</p>
 				</div>
 				<Switch
+					data-guide={GUIDE_ANCHORS.azureDevOps.enable}
 					checked={envConfig.azureDevOpsEnabled}
 					onCheckedChange={(checked) =>
 						updateEnvConfig({ azureDevOpsEnabled: checked })
@@ -232,6 +234,7 @@ export function AzureDevOpsIntegration({
 							{t("azureDevOps.orgUrlDescription")}
 						</p>
 						<Input
+							data-guide={GUIDE_ANCHORS.azureDevOps.orgUrl}
 							type="url"
 							placeholder={t("azureDevOps.orgUrlPlaceholder")}
 							value={envConfig.azureDevOpsOrgUrl || ""}
@@ -260,6 +263,7 @@ export function AzureDevOpsIntegration({
 						</p>
 						<div className="relative">
 							<Input
+								data-guide={GUIDE_ANCHORS.azureDevOps.pat}
 								type={showAzureDevOpsPat ? "text" : "password"}
 								placeholder={t("azureDevOps.patPlaceholder")}
 								value={envConfig.azureDevOpsPat || ""}
@@ -300,7 +304,10 @@ export function AzureDevOpsIntegration({
 					</div>
 
 					{/* Repository */}
-					<div className="space-y-2">
+					<div
+						className="space-y-2"
+						data-guide={GUIDE_ANCHORS.azureDevOps.repository}
+					>
 						<Label className="text-sm font-medium text-foreground">
 							{t("azureDevOps.repositoryLabel")}
 						</Label>

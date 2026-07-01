@@ -2,6 +2,7 @@ import { Eye, EyeOff, Info } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ProjectEnvConfig } from "../../../../shared/types";
+import { GUIDE_ANCHORS } from "../../guided-tour/anchors";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import {
@@ -71,7 +72,7 @@ export function CICDPipelineIntegration({
 					{t("cicd.providerDescription")}
 				</p>
 				<Select value={providerValue} onValueChange={setProvider}>
-					<SelectTrigger>
+					<SelectTrigger data-guide={GUIDE_ANCHORS.cicd.provider}>
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>

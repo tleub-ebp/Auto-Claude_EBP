@@ -7,6 +7,7 @@ import {
 	ChevronRight,
 	Cloud,
 	Code,
+	Compass,
 	Database,
 	FolderOpen,
 	Globe,
@@ -36,6 +37,7 @@ import { ScrollArea } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/stores/project-store";
 import { useServerSessionStore } from "@/stores/server-session-store";
+import { useGuidedTourStore } from "../guided-tour/guided-tour-store";
 import { InvitationsAdmin } from "../auth/InvitationsAdmin";
 import { Button } from "../ui/button";
 import {
@@ -101,6 +103,8 @@ interface AppSettingsDialogProps {
 	readonly initialProjectSection?: ProjectSettingsSection;
 	readonly initialProjectId?: string;
 	readonly onRerunWizard?: () => void;
+	/** Closes settings and opens the guided Setup Hub ("Centre de configuration"). */
+	readonly onOpenSetupHub?: () => void;
 }
 
 // Types de sections thématiques
@@ -337,6 +341,7 @@ export function AppSettingsDialog(props: AppSettingsDialogProps) {
 		initialProjectSection,
 		initialProjectId,
 		onRerunWizard,
+		onOpenSetupHub,
 	} = props;
 	const { t } = useTranslation(["settings", "swarm", "continuousAI"]);
 	const {
@@ -349,6 +354,11 @@ export function AppSettingsDialog(props: AppSettingsDialogProps) {
 		commitTheme,
 	} = useSettings();
 	const [version, setVersion] = useState<string>("");
+
+	// While the guided tour is running it drives this dialog; ignore stray close
+	// requests (the tour overlay portal counts as an "outside" interaction for
+	// the non-modal Radix dialog and would otherwise dismiss Settings).
+	const isTourActive = useGuidedTourStore((s) => s.isActive);
 
 	// Create dynamic settings themes with translations
 	const SETTINGS_THEMES = createSettingsThemes(t);
@@ -392,15 +402,26 @@ export function AppSettingsDialog(props: AppSettingsDialogProps) {
 	};
 
 	// Listen for cross-component navigation requests (fired by descendants like
-	// project-settings/GeneralSettings to jump to the global "Agent" section).
+	// project-settings/GeneralSettings to jump to the global "Agent" section, and
+	// by the guided tour to switch sections while the dialog is already open).
 	useEffect(() => {
 		if (!open) return;
 		const handler = (event: Event) => {
-			const target = (event as CustomEvent<{ section?: AppSection }>).detail
-				?.section;
-			if (!target) return;
-			setActiveTopLevel("app");
-			setAppSection(target);
+			const detail = (
+				event as CustomEvent<{
+					section?: AppSection;
+					projectSection?: ProjectSettingsSection;
+				}>
+			).detail;
+			if (detail?.projectSection) {
+				setActiveTopLevel("project");
+				setProjectSection(detail.projectSection);
+				return;
+			}
+			if (detail?.section) {
+				setActiveTopLevel("app");
+				setAppSection(detail.section);
+			}
 		};
 		window.addEventListener("app-settings:navigate", handler);
 		return () => window.removeEventListener("app-settings:navigate", handler);
@@ -623,6 +644,8 @@ export function AppSettingsDialog(props: AppSettingsDialogProps) {
 		<FullScreenDialog
 			open={dialogOpen}
 			onOpenChange={(newOpen) => {
+				// The tour owns the dialog lifecycle while running.
+				if (!newOpen && isTourActive) return;
 				if (!newOpen) {
 					revertTheme();
 				}
@@ -668,6 +691,38 @@ export function AppSettingsDialog(props: AppSettingsDialogProps) {
 											)}
 										/>
 									</button>
+
+									{/* Getting started — opens the guided Setup Hub. Sits at the
+									    very top so the configuration flow reads top-to-bottom. */}
+									{onOpenSetupHub && (
+										<button
+											type="button"
+											onClick={() => {
+												onOpenChange(false);
+												onOpenSetupHub();
+											}}
+											title={t("setupHub:navLabel")}
+											className={cn(
+												"w-full flex items-center rounded-lg transition-all",
+												"bg-primary/10 text-primary hover:bg-primary/20",
+												isNavigationCollapsed
+													? "justify-center p-2"
+													: "gap-3 p-3",
+											)}
+										>
+											<Compass className="h-5 w-5 shrink-0" />
+											{!isNavigationCollapsed && (
+												<div className="min-w-0 text-left">
+													<div className="font-medium text-sm">
+														{t("setupHub:navLabel")}
+													</div>
+													<div className="text-xs text-primary/70 truncate">
+														{t("setupHub:navDescription")}
+													</div>
+												</div>
+											)}
+										</button>
+									)}
 
 									{/* Thematic Navigation */}
 									{Object.entries(SETTINGS_THEMES)

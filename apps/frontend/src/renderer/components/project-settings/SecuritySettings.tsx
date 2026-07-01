@@ -25,6 +25,7 @@ import {
 } from "../ui/select";
 import { Separator } from "../ui/separator";
 import { Switch } from "../ui/switch";
+import { GUIDE_ANCHORS } from "../guided-tour/anchors";
 import { MemoryLifecycleSection } from "./MemoryLifecycleSection";
 
 interface SecuritySettingsProps {
@@ -460,6 +461,7 @@ export function SecuritySettings({
 							</p>
 						</div>
 						<Switch
+							data-guide={GUIDE_ANCHORS.memory.enable}
 							checked={envConfig.graphitiEnabled}
 							onCheckedChange={(checked) => {
 								updateEnvConfig({ graphitiEnabled: checked });
@@ -545,7 +547,9 @@ export function SecuritySettings({
 										});
 									}}
 								>
-									<SelectTrigger>
+									<SelectTrigger
+										data-guide={GUIDE_ANCHORS.memory.embeddingProvider}
+									>
 										<SelectValue placeholder="Select embedding provider" />
 									</SelectTrigger>
 									<SelectContent>
