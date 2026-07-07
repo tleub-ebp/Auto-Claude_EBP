@@ -18,7 +18,7 @@ secretstorage>=3.5.0; sys_platform == "linux"
 
 # Memory Integration - LadybugDB (embedded graph database)
 # Requires Python 3.12+ (no Docker required); wheels available for 3.14 since 0.15.x
-real_ladybug>=0.14.1; python_version >= "3.12"
+real_ladybug>=0.15.3; python_version >= "3.12"
 graphiti-core>=0.5.0; python_version >= "3.12"
 # pandas is required by real_ladybug for get_as_df() method
 # pandas 2.2.0+ required for pre-built wheels on Python 3.12
