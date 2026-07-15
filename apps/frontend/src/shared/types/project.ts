@@ -564,3 +564,15 @@ export interface FileNode {
 	name: string;
 	isDirectory: boolean;
 }
+
+/**
+ * A single match returned by the recursive project path search used to power
+ * file-path autocomplete inputs. `relativePath` is POSIX-style (forward
+ * slashes) and relative to the project root, matching how paths are typed
+ * into the agent inputs (e.g. `src/connectors/jira/connector.py`).
+ */
+export interface FileSearchResult {
+	relativePath: string;
+	name: string;
+	isDirectory: boolean;
+}

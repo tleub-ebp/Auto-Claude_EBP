@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import {
 	appendFileSync,
 	existsSync,
@@ -7,7 +7,14 @@ import {
 	writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { getToolPath } from "./cli-tool-manager";
+import { promisify } from "node:util";
+import { getToolPath, getToolPathAsync } from "./cli-tool-manager";
+
+const execFileAsync = promisify(execFile);
+
+// Bounded so a hung git subprocess (antivirus scanning git.exe on first launch,
+// an index lock, a slow fsmonitor, …) can never block indefinitely.
+const GIT_STATUS_TIMEOUT_MS = 10_000;
 
 /**
  * Debug logging - only logs when DEBUG=true or in development mode
@@ -82,6 +89,79 @@ export function checkGitStatus(projectPath: string): GitStatus {
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
 		}).trim();
+	} catch {
+		// Branch detection failed
+	}
+
+	if (!hasCommits) {
+		return {
+			isGitRepo: true,
+			hasCommits: false,
+			currentBranch,
+			error:
+				"Git repository has no commits. Please make an initial commit first.",
+		};
+	}
+
+	return {
+		isGitRepo: true,
+		hasCommits: true,
+		currentBranch,
+	};
+}
+
+/**
+ * Async, non-blocking equivalent of {@link checkGitStatus}.
+ *
+ * Use this from the Electron main process (e.g. IPC handlers). The synchronous
+ * version spawns `git.exe` several times via execFileSync; on Windows the first
+ * cold spawn after boot gets scanned by antivirus and blocks the main-process
+ * event loop for seconds, intermittently freezing launch ("Ne répond pas") since
+ * the project auto-detection calls this right after the board loads.
+ */
+export async function checkGitStatusAsync(
+	projectPath: string,
+): Promise<GitStatus> {
+	// Async detection so even resolving the git path never spawns a subprocess
+	// (git --version) on the main-process event loop.
+	const git = await getToolPathAsync("git");
+	const opts = {
+		cwd: projectPath,
+		encoding: "utf-8" as const,
+		timeout: GIT_STATUS_TIMEOUT_MS,
+	};
+
+	try {
+		// Check if it's a git repository
+		await execFileAsync(git, ["rev-parse", "--git-dir"], opts);
+	} catch {
+		return {
+			isGitRepo: false,
+			hasCommits: false,
+			currentBranch: null,
+			error: 'Not a git repository. Please run "git init" to initialize git.',
+		};
+	}
+
+	// Check if there are any commits
+	let hasCommits = false;
+	try {
+		await execFileAsync(git, ["rev-parse", "HEAD"], opts);
+		hasCommits = true;
+	} catch {
+		// No commits yet
+		hasCommits = false;
+	}
+
+	// Get current branch
+	let currentBranch: string | null = null;
+	try {
+		const { stdout } = await execFileAsync(
+			git,
+			["rev-parse", "--abbrev-ref", "HEAD"],
+			opts,
+		);
+		currentBranch = stdout.trim();
 	} catch {
 		// Branch detection failed
 	}

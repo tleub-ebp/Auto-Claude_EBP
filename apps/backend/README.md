@@ -1,6 +1,6 @@
 # WorkPilot AI Backend
 
-Autonomous coding framework powered by Claude AI. Builds software features through coordinated multi-agent sessions.
+Autonomous coding framework. Builds software features through coordinated multi-agent sessions, and is **provider-agnostic** — drive it with Claude, OpenAI, Gemini, Grok, GitHub Copilot, Azure OpenAI, a local Ollama model, or any OpenAI-compatible endpoint.
 
 ## Getting Started
 
@@ -38,8 +38,8 @@ python run.py --spec 001
 
 ## Requirements
 
-- Python 3.10+
-- Claude API token
+- Python 3.12+
+- An API key or OAuth login for at least one supported provider (Claude, OpenAI, Gemini, Grok, Copilot, Azure OpenAI, Ollama, or a custom endpoint)
 
 ## Commands
 
@@ -81,19 +81,33 @@ Optional `.env-files/.env` settings:
 
 ### Project Structure
 
+The backend has grown to **90+ specialized modules**. The core pipeline lives in a handful of them; the rest are opt-in subsystems (self-healing, tech debt, carbon profiling, consensus arbitration, multi-user server, etc.).
+
 ```
 backend/
-├── agents/          # AI agent execution
-├── analysis/        # Code analysis
-├── cli/             # Command-line interface
-├── core/            # Core utilities
-├── integrations/    # External services (Linear, Graphiti)
-├── merge/           # Git merge handling
-├── project/         # Project detection
-├── prompts/         # Prompt templates
-├── qa/              # QA validation
-├── spec/            # Spec management
-└── ui/              # Terminal UI
+├── agents/              # AI agent execution (planner, coder, session)
+├── qa/                  # QA reviewer / fixer validation loop
+├── spec/                # Spec creation and management
+├── core/                # Client, auth, worktree, platform abstraction
+├── prompts/             # Prompt templates (60+ specialized agents)
+├── skills/              # Token-optimized dynamic skill execution
+├── integrations/        # External services (GitHub, GitLab, Azure, Linear, Jira, Graphiti)
+├── merge/               # Semantic git merge handling
+├── project/             # Project / stack detection
+├── context/             # Task context building
+├── runners/             # One-shot task runners (insights, oneshot, etc.)
+├── streaming/           # Real-time session streaming (WebSocket)
+├── task_logger/         # Structured per-phase logging
+├── learning/            # Learning mode + documentation generation
+├── self_healing/        # Health monitoring + auto-repair
+├── tech_debt/           # Technical-debt tracking and resolution
+├── consensus_arbiter/   # Reconciles security / QA agent opinions
+├── agent_coach/         # Cost/model coaching from real usage
+├── carbon_profiler/     # Energy (kWh) / carbon footprint ledger
+├── release_coordinator/ # Release readiness orchestration
+├── server/              # Multi-user server mode (auth, claims, run manager)
+├── cli/                 # Command-line interface
+└── ...                  # ~70 more opt-in subsystems
 ```
 
 ### Design Principles

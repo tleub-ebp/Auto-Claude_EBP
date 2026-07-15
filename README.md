@@ -85,6 +85,10 @@ See the [Setup Guide](docs/SETUP.md) for detailed instructions.
 | **AI-Powered Merge** | Semantic conflict resolution when integrating worktrees back to main |
 | **QA Auto-Fix Loop** | Agents automatically detect, fix, and revalidate failing acceptance criteria |
 | **Spec Approval Workflow** | Review and approve AI-generated specifications before implementation begins |
+| **Hot-Swap LLM** | Change provider, model, or reasoning effort mid-task — the next turn resumes on the new engine with context replayed |
+| **Pause & Resume** | Suspend a running task and resume later with full context preserved, optionally on a different provider |
+| **Per-Phase Re-run** | Redo any phase (planning, coding, validation) on demand without restarting the whole task |
+| **PR-First Review Flow** | Guided human-review with a DoD checklist, "approve & close", and reversible task abandon |
 
 ### Multi-Agent Orchestration
 
@@ -93,6 +97,8 @@ See the [Setup Guide](docs/SETUP.md) for detailed instructions.
 | **Mission Control** | NASA-style dashboard for orchestrating multiple agents simultaneously — live status, token consumption, file changes, and per-agent reasoning |
 | **Agent Replay & Debug** | Step-by-step replay of any agent session with timeline navigation, file diffs, breakpoints, and token heatmaps |
 | **Decision Logger** | Real-time visualization of agent decision trees and trade-off rationale |
+| **Consensus Arbiter** | Reconciles conflicting opinions from security scans and QA reviewers into a single verdict |
+| **Agent Coach** | Analyzes real usage to suggest cheaper models, better effort levels, and prompt tweaks per agent |
 | **Pair Programming** | Interactive real-time AI coding partner with live suggestions and conversation-driven development |
 | **Learning Mode** | Educational mode with step-by-step explanations of agent decisions |
 
@@ -103,10 +109,12 @@ See the [Setup Guide](docs/SETUP.md) for detailed instructions.
 | **Planner** | Complexity assessment, phased subtask breakdown, dependency analysis |
 | **Coder** | Context-aware implementation with parallel subagent spawning |
 | **QA Reviewer / Fixer** | Acceptance criteria validation and automated issue resolution |
-| **Test Generator** | Unit and integration test generation with coverage analysis |
+| **Test Generator** | Unit and integration test generation with live streaming of the code as it is written |
+| **Flaky Test Detective** | Parses test reports (JUnit XML, .NET TRX, …) to surface intermittently failing tests |
 | **Refactorer** | Safe code refactoring with pattern detection and API migration |
 | **Documenter** | README, API docs, and architecture documentation generation |
 | **Migration Agent** | Framework and library migration with breaking change detection |
+| **Release Coordinator** | Orchestrates release readiness, changelog, and version bumps |
 | **Memory Manager** | Graphiti-based knowledge graph management across sessions |
 
 ### Integrations
@@ -147,12 +155,14 @@ See the [Setup Guide](docs/SETUP.md) for detailed instructions.
 | **Performance Profiler** | AI-powered bottleneck identification with optimization suggestions |
 | **Dependency Sentinel** | Monitors security vulnerabilities, version conflicts, and outdated dependencies |
 | **Self-Healing Codebase** | Automatically generates fixes when CI tests fail; integrates with Sentry, Datadog, PagerDuty for production incidents |
+| **Technical Debt Tracker** | Continuously scores code health, tracks and ages debt items, and proposes auto-fixes with PRs |
 | **Risk Classifier** | Scores code changes by risk level with impact assessment |
 
 ### Developer Productivity
 
 | Feature | Description |
 |---------|-------------|
+| **Guided Onboarding** | Setup Hub checklist plus a step-by-step coachmark tour to configure providers and integrations |
 | **Roadmap** | AI-assisted feature planning with prioritization and phased rollout |
 | **Changelog** | Auto-generates release notes from completed tasks |
 | **Natural Language Git** | AI-generated semantic commit messages from diffs |
@@ -181,7 +191,9 @@ See the [Setup Guide](docs/SETUP.md) for detailed instructions.
 | Feature | Description |
 |---------|-------------|
 | **Analytics Dashboard** | Token consumption, cost tracking, success rates, and execution time metrics — live SQLite-backed API; falls back to an explicit 503 when the analytics DB is unavailable |
+| **Formula Lab** | Pre-flight cost/success estimation per Provider × Model × Effort, calibrated on your real usage history |
 | **Cost Estimator** | Per-task cost calculation with provider comparison and budget alerts |
+| **Carbon Profiler** | Estimates the energy (kWh) and carbon footprint of your agent runs |
 | **Rate Limit Monitor** | Real-time usage tracking with proactive warnings and auto-switching triggers |
 | **Workflow Logger** | Structured execution logs with trace IDs for all agents, skills, and hooks |
 
@@ -194,6 +206,14 @@ See the [Setup Guide](docs/SETUP.md) for detailed instructions.
 | **Bilingual UI** | Full French and English interface |
 | **Command Palette** | Keyboard-driven access to all features with fuzzy search |
 | **Plugin Marketplace** | Browse and install community plugins |
+
+### Deployment & Team
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-User Server Mode** | Central deployment with JWT / Microsoft Entra auth, per-user claims, and a shared run manager |
+| **Invitation-Only Signup** | Self-service registration gated by admin invitations, with SMTP delivery and rate limiting |
+| **Notifications** | Multi-channel "PR ready" alerts (Slack, email, webhook) with SSRF hardening |
 
 ---
 
@@ -271,8 +291,20 @@ apps/backend/
 ├── services/            # Services d'intégration externes
 ├── integrations/        # Connecteurs (GitHub, GitLab, etc.)
 ├── project/             # Analyse et détection de projets
-└── merge/               # Système de fusion sémantique
+├── merge/               # Système de fusion sémantique
+├── self_healing/        # Surveillance de santé + auto-réparation
+├── tech_debt/           # Suivi et résolution de la dette technique
+├── consensus_arbiter/   # Arbitrage des avis d'agents (sécurité/QA)
+├── agent_coach/         # Conseils coût/modèle basés sur l'usage réel
+├── carbon_profiler/     # Empreinte énergie/carbone des exécutions
+├── release_coordinator/ # Préparation des releases
+├── flaky_test_detective/# Détection des tests instables
+├── streaming/           # Diffusion temps réel des sessions d'agents
+├── server/              # Mode serveur multi-utilisateurs (auth, claims)
+└── prompts/             # Prompts des agents (60+ agents spécialisés)
 ```
+
+> Le backend s'est étoffé en **90+ modules spécialisés** (accessibilité, dérive d'architecture, gouvernance de licences, orchestration multi-repo, etc.). Voir [apps/backend/README.md](apps/backend/README.md) et la [table des modules du wiki](https://github.com/tleub-ebp/WorkPilot-AI/wiki) pour l'inventaire complet auto-généré.
 
 #### Frontend Electron (`apps/frontend/`)
 ```
@@ -433,7 +465,7 @@ claude
 #### Variables d'Environnement Optionnelles
 ```bash
 # .env-files/.env
-AUTO_BUILD_MODEL=claude-3-5-sonnet-20241022
+AUTO_BUILD_MODEL=claude-opus-4-8
 DEBUG=true
 LINEAR_API_KEY=votre_clé_linear
 GRAPHITI_ENABLED=true
@@ -478,7 +510,7 @@ pnpm test
 node --version  # v24.12.0
 
 # Version Python
-python --version  # 3.10+
+python --version  # 3.12+
 
 # Configuration Claude
 claude --version

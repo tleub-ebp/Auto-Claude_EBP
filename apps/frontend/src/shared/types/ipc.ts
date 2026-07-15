@@ -100,6 +100,7 @@ import type {
 	CreateProjectFolderResult,
 	CustomMcpServer,
 	FileNode,
+	FileSearchResult,
 	GitStatus,
 	GraphitiConnectionTestResult,
 	GraphitiMemoryStatus,
@@ -1432,6 +1433,12 @@ export interface ElectronAPI {
 	// File explorer operations
 	listDirectory: (dirPath: string) => Promise<IPCResult<FileNode[]>>;
 	readFile: (filePath: string) => Promise<IPCResult<string>>;
+	/** Recursive project path search powering file-path autocomplete inputs. */
+	searchProjectFiles: (
+		rootPath: string,
+		query: string,
+		mode: "file" | "directory",
+	) => Promise<IPCResult<FileSearchResult[]>>;
 
 	// Git operations
 	/** @deprecated Will return GitBranchDetail[] in future - see getGitBranchesWithInfo */

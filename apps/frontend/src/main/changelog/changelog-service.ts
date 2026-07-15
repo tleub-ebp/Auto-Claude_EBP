@@ -24,7 +24,7 @@ import type {
 	Task,
 	TaskSpecContent,
 } from "../../shared/types";
-import { getToolInfo, getToolPath } from "../cli-tool-manager";
+import { getToolInfo } from "../cli-tool-manager";
 import { getValidatedPythonPath } from "../python-detector";
 import { getConfiguredPythonPath } from "../python-env-manager";
 import { ChangelogGenerator } from "./generator";
@@ -42,25 +42,22 @@ import { VersionSuggester } from "./version-suggester";
 /**
  * Main changelog service - orchestrates all changelog operations
  * Delegates to specialized modules for specific concerns
+ *
+ * Note: this class is instantiated as a module-level singleton, so its
+ * construction must stay I/O-free. In particular the Claude CLI path is resolved
+ * lazily (and authoritatively) by ensurePrerequisites() right before a changelog
+ * is generated — never eagerly. A synchronous getToolPath("claude") at import
+ * time would spawn `claude --version` on the Electron main process before the
+ * window is shown and before the async tool-cache pre-warm runs; on Windows that
+ * cold, antivirus-scanned spawn intermittently freezes launch ("Ne répond pas").
  */
 export class ChangelogService extends EventEmitter {
 	// Python path will be configured by pythonEnvManager after venv is ready
 	private _pythonPath: string | null = null;
-	private claudePath: string;
 	private autoBuildSourcePath: string = "";
 	private debugEnabled: boolean | null = null;
 	private generator: ChangelogGenerator | null = null;
 	private versionSuggester: VersionSuggester | null = null;
-
-	constructor() {
-		super();
-		// Use centralized CLI tool manager for Claude detection
-		this.claudePath = getToolPath("claude");
-		this.debug(
-			"ChangelogService initialized with Claude CLI:",
-			this.claudePath,
-		);
-	}
 
 	/**
 	 * Check if debug mode is enabled
@@ -209,8 +206,6 @@ export class ChangelogService extends EventEmitter {
 			);
 		}
 
-		// Update cached path with freshly resolved value
-		this.claudePath = claudeInfo.path;
 		return { autoBuildSource, claudePath: claudeInfo.path };
 	}
 

@@ -74,38 +74,33 @@ This project follows a **feature-based architecture** for better maintainability
 ```
 src/
 ├── main/                    # Electron main process
-│   ├── agent/               # Agent management
+│   ├── agent/               # Agent queue management
 │   ├── changelog/           # Changelog generation
-│   ├── claude-profile/      # Claude profile management
+│   ├── claude-profile/      # Multi-account provider profile management
+│   ├── claude-code-settings/# Claude Code settings bridge
 │   ├── insights/            # Code analysis
-│   ├── ipc-handlers/        # IPC communication handlers
-│   ├── terminal/            # PTY and terminal management
+│   ├── integrations/        # Integration handlers
+│   ├── ipc-handlers/        # IPC communication handlers (40+ modules)
+│   ├── platform/            # Cross-platform abstraction
+│   ├── services/            # SDK session recovery, etc.
+│   ├── terminal/            # PTY daemon and terminal lifecycle
 │   └── updater/             # App update service
 │
 ├── preload/                 # Electron preload scripts
 │   └── api/                 # IPC API modules
 │
 ├── renderer/                # React frontend
-│   ├── features/            # Feature modules (self-contained)
-│   │   ├── tasks/           # Task management, kanban, creation
-│   │   ├── terminals/       # Terminal emulation
-│   │   ├── projects/        # Project management, file explorer
-│   │   ├── settings/        # App and project settings
-│   │   ├── roadmap/         # Roadmap generation
-│   │   ├── ideation/        # AI-powered brainstorming
-│   │   ├── insights/        # Code analysis
-│   │   ├── changelog/       # Release management
-│   │   ├── github/          # GitHub integration
-│   │   ├── agents/          # Claude profile management
-│   │   ├── worktrees/       # Git worktree management
-│   │   └── onboarding/      # First-time setup wizard
-│   │
-│   ├── shared/              # Shared resources
-│   │   ├── components/      # Reusable UI components
-│   │   ├── hooks/           # Shared React hooks
-│   │   └── lib/             # Utilities and helpers
-│   │
-│   └── hooks/               # App-level hooks
+│   ├── components/          # Feature UIs (86+ folders: kanban, mission-control,
+│   │                        #   formula-lab, agent-debugger, agent-replay,
+│   │                        #   consensus-arbiter, carbon-profiler, arena, …)
+│   ├── contexts/            # React context providers
+│   ├── stores/              # Zustand stores (task-store, project-store, …)
+│   ├── hooks/               # Shared React hooks
+│   ├── services/            # Renderer-side services
+│   ├── lib/                 # Utilities and helpers
+│   ├── locales/             # i18n bundles (English + French)
+│   ├── styles/              # Themes and global styles
+│   └── assets/              # Icons and images
 │
 └── shared/                  # Shared between main/renderer
     ├── types/               # TypeScript type definitions
@@ -117,19 +112,19 @@ src/
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Start development server with hot reload |
-| `npm run build` | Build for production |
-| `npm run package` | Build and package for current platform |
-| `npm run package:win` | Package for Windows |
-| `npm run package:mac` | Package for macOS |
-| `npm run package:linux` | Package for Linux |
-| `npm test` | Run unit tests |
-| `npm run test:watch` | Run tests in watch mode |
-| `npm run test:coverage` | Run tests with coverage |
-| `npm run lint` | Check for lint errors |
-| `npm run lint:fix` | Auto-fix lint errors |
-| `npm run typecheck` | Type check TypeScript |
-| `npm audit` | Check for security vulnerabilities |
+| `pnpm run dev` | Start development server with hot reload |
+| `pnpm run build` | Build for production |
+| `pnpm run package` | Build and package for current platform |
+| `pnpm run package:win` | Package for Windows |
+| `pnpm run package:mac` | Package for macOS |
+| `pnpm run package:linux` | Package for Linux |
+| `pnpm test` | Run unit tests |
+| `pnpm run test:watch` | Run tests in watch mode |
+| `pnpm run test:coverage` | Run tests with coverage |
+| `pnpm run lint` | Check for lint errors |
+| `pnpm run lint:fix` | Auto-fix lint errors |
+| `pnpm run typecheck` | Type check TypeScript |
+| `pnpm audit` | Check for security vulnerabilities |
 
 ## Development Guidelines
 
@@ -237,7 +232,7 @@ git commit -m "chore: update dependencies"
 
 ## Package Manager
 
-This project uses **npm** (not pnpm or yarn). The lock files for other package managers are ignored.
+This project uses **pnpm** (`pnpm@10.27.0`, pinned in the root `package.json`). Install dependencies with `pnpm install` and run scripts with `pnpm run <script>`. Lock files for other package managers are ignored.
 
 ## License
 

@@ -121,6 +121,9 @@ const browserMockAPI: ElectronAPI = {
 	onRoadmapStopped: () => () => {
 		/* noop */
 	},
+	// File Explorer Operations (browser fallback: no filesystem access)
+	searchProjectFiles: async () => ({ success: true, data: [] }),
+
 	// Context Operations
 	...contextMock,
 

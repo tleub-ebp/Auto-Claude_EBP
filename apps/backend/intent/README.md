@@ -43,7 +43,7 @@ cd apps/backend
 python -m intent analyze "Add OAuth2 authentication with Google and GitHub"
 
 # Analyze from spec directory
-python -m intent analyze --spec-dir ../../auto-claude/specs/001-feature/
+python -m intent analyze --spec-dir .workpilot/specs/001-feature/
 
 # Get recommendations
 python -m intent recommend "Fix slow dashboard loading"
