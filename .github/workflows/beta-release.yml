@@ -96,7 +96,7 @@ jobs:
       # Setup Node.js and dependencies removed - using direct setup below
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -226,7 +226,7 @@ jobs:
       # Setup Node.js and dependencies removed - using direct setup below
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -355,7 +355,7 @@ jobs:
       # Setup Node.js and dependencies removed - using direct setup below
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -572,7 +572,7 @@ jobs:
       # Setup Node.js and dependencies removed - using direct setup below
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 

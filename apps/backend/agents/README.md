@@ -7,15 +7,26 @@ Modular agent system for autonomous coding. This module refactors the original m
 The agent system is now organized by concern:
 
 ```
-auto-claude/agents/
+apps/backend/agents/
 ├── __init__.py          # Public API exports
 ├── base.py              # Shared constants and imports
+├── base_agent.py        # Shared base class for agent implementations
 ├── utils.py             # Git operations and plan management
 ├── memory.py            # Memory management (Graphiti + file-based)
 ├── session.py           # Agent session execution
 ├── planner.py           # Follow-up planner logic
-└── coder.py             # Main autonomous agent loop
+├── coder.py             # Main autonomous agent loop
+├── hot_swap.py          # Mid-task provider/model/effort switching
+├── debugger.py          # Agent debugger (breakpoints, live resume)
+├── decision_logger.py   # Decision-tree capture for the UI
+├── pair_programming.py  # Real-time pair-programming mode
+├── test_generator.py    # Streaming unit/integration test generation
+├── refactorer.py        # Safe refactoring engine
+├── documenter.py        # Documentation generation
+└── migration_agent.py   # Framework / library migration
 ```
+
+> The module now hosts many specialized agent implementations beyond the original pipeline (hot-swap, debugger, decision logger, pair programming, self-review, impact analysis, loop detection, …). Each ships with a matching `test_*.py`.
 
 ## Modules
 
@@ -121,17 +132,17 @@ memory.py
 
 ## Testing
 
-Run the verification script to test the refactoring:
+Run the module test suite:
 
 ```bash
-python3 auto-claude/agents/test_refactoring.py
+pytest apps/backend/agents/
 ```
 
-This verifies:
-- Module structure is correct
-- All imports work
+The `test_*.py` files verify:
+- Module structure and imports
 - Public API is accessible
 - Backwards compatibility is maintained
+- Per-agent behavior (hot-swap, session replay, test-generator routing/streaming, …)
 
 ## Migration Guide
 

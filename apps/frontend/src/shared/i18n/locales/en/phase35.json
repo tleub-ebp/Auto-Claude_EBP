@@ -6,7 +6,7 @@
 		"loading": "Loading…",
 		"errorLabel": "Error",
 		"projectPathRequired": "No project path selected",
-		"backendUnreachable": "Backend unreachable. Is the backend running on port 8765?",
+		"backendUnreachable": "Backend unreachable. Is the backend running on port 9000?",
 		"noData": "No data yet — run the analysis to see results.",
 		"required": "Required",
 		"invalidNumber": "Invalid number",
@@ -26,7 +26,7 @@
 			"directoryNotFound": "Directory not found: {{path}}",
 			"fileNotFound": "File not found: {{path}}",
 			"unauthorized": "Access denied. Check directory permissions.",
-			"backendUnreachable": "Backend unreachable. Is the backend running on port 8765?",
+			"backendUnreachable": "Backend unreachable. Is the backend running on port 9000?",
 			"timeout": "Timed out — the backend did not respond in time.",
 			"unknown": "Backend error: {{message}}"
 		}

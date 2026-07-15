@@ -14,6 +14,11 @@ export interface FileAPI {
 		data: unknown,
 	) => Promise<IPCResult<boolean>>;
 	getUserHome: () => Promise<string>;
+	searchProjectFiles: (
+		rootPath: string,
+		query: string,
+		mode: "file" | "directory",
+	) => Promise<IPCResult<import("../../shared/types").FileSearchResult[]>>;
 }
 
 export const createFileAPI = (): FileAPI => ({
@@ -37,4 +42,15 @@ export const createFileAPI = (): FileAPI => ({
 		),
 	getUserHome: (): Promise<string> =>
 		ipcRenderer.invoke(IPC_CHANNELS.FILE_EXPLORER_GET_USER_HOME),
+	searchProjectFiles: (
+		rootPath: string,
+		query: string,
+		mode: "file" | "directory",
+	): Promise<IPCResult<import("../../shared/types").FileSearchResult[]>> =>
+		ipcRenderer.invoke(
+			IPC_CHANNELS.FILE_EXPLORER_SEARCH,
+			rootPath,
+			query,
+			mode,
+		),
 });

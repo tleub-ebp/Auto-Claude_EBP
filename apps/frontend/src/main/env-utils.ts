@@ -69,6 +69,31 @@ let npmGlobalPrefixCachePromise: Promise<string | null> | null = null;
  * @returns npm global binaries directory, or null if npm not available or path doesn't exist
  */
 function getNpmGlobalPrefix(): string | null {
+	// Reuse the shared cache populated by the async detector
+	// (getNpmGlobalPrefixAsync), which is pre-warmed at startup. Reading it here
+	// means that once the async pre-warm has run, no synchronous subprocess is
+	// ever spawned — on either platform.
+	if (npmGlobalPrefixCache !== undefined) {
+		return npmGlobalPrefixCache;
+	}
+
+	// Cold cache (async pre-warm hasn't completed yet). On Windows, NEVER spawn
+	// `npm config get prefix` synchronously: it goes cmd.exe → npm.cmd → node and
+	// blocks the Electron main process for ~1s per call. getAugmentedEnv() calls
+	// this on every synchronous getToolPath(), several times per startup (the
+	// changelog service constructor, the git/gh IPC handlers, …), which freezes
+	// the window ("Ne répond pas") at launch. The Windows global prefix is
+	// deterministic — %APPDATA%\npm, exactly what the subprocess would return —
+	// so resolve it directly with no child process. We intentionally do NOT write
+	// the shared cache here so the async detector stays authoritative for custom
+	// prefixes (e.g. nvm-windows).
+	if (isWindows()) {
+		const defaultNpmPath = WINDOWS_NPM_FALLBACK_PATH();
+		return fs.existsSync(defaultNpmPath) ? defaultNpmPath : null;
+	}
+
+	// On Unix, GUI-launched apps don't inherit the shell PATH, and the prefix is
+	// not deterministic, so fall back to the synchronous detection (unchanged).
 	try {
 		// Use platform module helper for npm command name
 		const npmCommand = getNpmCommand();
@@ -82,7 +107,6 @@ function getNpmGlobalPrefix(): string | null {
 				timeout: 3000,
 				windowsHide: true,
 				cwd: os.homedir(), // Run from home dir to avoid ENOWORKSPACES error in monorepos
-				shell: isWindows(), // Enable shell on Windows for .cmd resolution
 			},
 		).trim();
 
@@ -91,26 +115,13 @@ function getNpmGlobalPrefix(): string | null {
 		}
 
 		// On non-Windows platforms, npm globals are installed in prefix/bin
-		// On Windows, they're installed directly in the prefix directory
-		const binPath = isWindows() ? rawPrefix : path.join(rawPrefix, "bin");
+		const binPath = path.join(rawPrefix, "bin");
 
 		// Normalize and verify the path exists
 		const normalizedPath = path.normalize(binPath);
 
 		return fs.existsSync(normalizedPath) ? normalizedPath : null;
 	} catch (_error) {
-		// Fallback for Windows: try default npm global location when npm.cmd is not in PATH
-		// This happens when the packaged app launches from GUI without full shell environment
-		if (isWindows()) {
-			const defaultNpmPath = WINDOWS_NPM_FALLBACK_PATH();
-			if (fs.existsSync(defaultNpmPath)) {
-				console.warn(
-					"[env-utils] npm command not found, using default npm path:",
-					defaultNpmPath,
-				);
-				return defaultNpmPath;
-			}
-		}
 		return null;
 	}
 }

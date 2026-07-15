@@ -1448,23 +1448,34 @@ function getCredentialsFromWindows(
 ): PlatformCredentials {
 	const isDebug = process.env.DEBUG === "true";
 
-	// Get credentials from both sources
+	// Read the file FIRST (fast: plain file read, no subprocess).
+	//
+	// On Windows the Claude CLI writes OAuth tokens to .credentials.json as its
+	// PRIMARY store, and when both sources have a token we prefer the file
+	// anyway (see below). So whenever the file already has a valid token there
+	// is nothing to gain from also reading the Credential Manager — and that
+	// read spawns PowerShell + `Add-Type` (runtime C# compilation via csc.exe),
+	// a SYNCHRONOUS ~0.7s (cold boot / antivirus: several seconds) freeze of the
+	// Electron main-process event loop. Short-circuiting here removes that
+	// needless freeze on the common path (the app window appears "Not
+	// responding" at startup while this blocks). We only pay the Credential
+	// Manager cost when the file has no token.
 	const fileResult = getCredentialsFromWindowsFile(configDir, forceRefresh);
-	const credManagerResult = getCredentialsFromWindowsCredentialManager(
-		configDir,
-		forceRefresh,
-	);
-
-	// If only one has a token, use that one
-	if (fileResult.token && !credManagerResult.token) {
+	if (fileResult.token) {
 		if (isDebug) {
 			console.warn(
-				"[CredentialUtils:Windows] Using file credentials (Credential Manager empty)",
+				"[CredentialUtils:Windows] Using file credentials (skipping Credential Manager PowerShell read)",
 			);
 		}
 		return fileResult;
 	}
-	if (credManagerResult.token && !fileResult.token) {
+
+	// File has no token — fall back to the (slower) Credential Manager.
+	const credManagerResult = getCredentialsFromWindowsCredentialManager(
+		configDir,
+		forceRefresh,
+	);
+	if (credManagerResult.token) {
 		if (isDebug) {
 			console.warn(
 				"[CredentialUtils:Windows] Using Credential Manager credentials (file empty)",
@@ -1473,17 +1484,8 @@ function getCredentialsFromWindows(
 		return credManagerResult;
 	}
 
-	// If neither has a token, return file result (which has the appropriate error)
-	if (!fileResult.token && !credManagerResult.token) {
-		return fileResult;
-	}
-
-	// Both have tokens - prefer file since Claude CLI writes there after login
-	if (isDebug) {
-		console.warn(
-			"[CredentialUtils:Windows] Both sources have tokens, preferring file (Claude CLI primary storage)",
-		);
-	}
+	// Neither has a token — return the file result (carries the appropriate
+	// empty/error state so callers behave exactly as before).
 	return fileResult;
 }
 
@@ -2067,21 +2069,28 @@ function getFullCredentialsFromWindows(
 ): FullOAuthCredentials {
 	const isDebug = process.env.DEBUG === "true";
 
-	// Get credentials from both sources
+	// Read the file FIRST (fast: plain file read, no subprocess).
+	//
+	// Same short-circuit as getCredentialsFromWindows(): when the file already
+	// has a token we prefer it anyway, so skip the Credential Manager read
+	// (PowerShell + `Add-Type`) that would otherwise SYNCHRONOUSLY freeze the
+	// main process. This matters even more here because the full-credentials
+	// Credential Manager path is UNCACHED — without the short-circuit every
+	// token-refresh / subscription-metadata read re-pays the freeze.
 	const fileResult = getFullCredentialsFromWindowsFile(configDir);
-	const credManagerResult =
-		getFullCredentialsFromWindowsCredentialManager(configDir);
-
-	// If only one has a token, use that one
-	if (fileResult.token && !credManagerResult.token) {
+	if (fileResult.token) {
 		if (isDebug) {
 			console.warn(
-				"[CredentialUtils:Windows:Full] Using file credentials (Credential Manager empty)",
+				"[CredentialUtils:Windows:Full] Using file credentials (skipping Credential Manager PowerShell read)",
 			);
 		}
 		return fileResult;
 	}
-	if (credManagerResult.token && !fileResult.token) {
+
+	// File has no token — fall back to the (slower, uncached) Credential Manager.
+	const credManagerResult =
+		getFullCredentialsFromWindowsCredentialManager(configDir);
+	if (credManagerResult.token) {
 		if (isDebug) {
 			console.warn(
 				"[CredentialUtils:Windows:Full] Using Credential Manager credentials (file empty)",
@@ -2090,20 +2099,8 @@ function getFullCredentialsFromWindows(
 		return credManagerResult;
 	}
 
-	// If neither has a token, return file result (which has the appropriate error)
-	if (!fileResult.token && !credManagerResult.token) {
-		return fileResult;
-	}
-
-	// Both have tokens - prefer file since Claude CLI writes there after login
-	// This is consistent with getCredentialsFromWindows() which also prefers file.
-	// Using file as primary ensures consistency: the same token is returned whether
-	// calling getCredentialsFromKeychain() or getFullCredentialsFromKeychain().
-	if (isDebug) {
-		console.warn(
-			"[CredentialUtils:Windows:Full] Both sources have tokens, preferring file (Claude CLI primary storage)",
-		);
-	}
+	// Neither has a token — return the file result (carries the appropriate
+	// empty/error state so callers behave exactly as before).
 	return fileResult;
 }
 

@@ -508,6 +508,29 @@ describe("credential-utils", () => {
 			expect(result.token).toBe("sk-ant-windows-file-token");
 			expect(result.email).toBe("windowsfile@example.com");
 		});
+
+		it("should NOT spawn PowerShell (Credential Manager) when the file already has a token", () => {
+			// Regression guard for the startup-freeze fix: reading the Windows
+			// Credential Manager spawns PowerShell + Add-Type synchronously, which
+			// blocks the Electron main process. When the file already has a valid
+			// token (the common case — Claude CLI writes there on login) we must
+			// return it WITHOUT touching the Credential Manager.
+			vi.mocked(existsSync).mockReturnValue(true);
+			vi.mocked(readFileSync).mockReturnValue(
+				JSON.stringify({
+					claudeAiOauth: {
+						accessToken: "sk-ant-file-only-token",
+						email: "fileonly@example.com",
+					},
+				}),
+			);
+
+			const result = getCredentialsFromKeychain();
+
+			expect(result.token).toBe("sk-ant-file-only-token");
+			// The whole point of the fix: no synchronous PowerShell spawn.
+			expect(execFileSync).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("getFullCredentialsFromKeychain (Windows)", () => {
@@ -596,6 +619,30 @@ describe("credential-utils", () => {
 			expect(result.token).toBe("sk-ant-file-full-token");
 			expect(result.refreshToken).toBe("file-refresh");
 			expect(result.email).toBe("file@example.com");
+		});
+
+		it("should NOT spawn PowerShell (Credential Manager) when the file already has a token", () => {
+			// Regression guard for the startup-freeze fix. The full-credentials
+			// Credential Manager path is UNCACHED, so without this short-circuit
+			// every token-refresh cycle re-spawns PowerShell + Add-Type and
+			// re-freezes the main process. File token present => no subprocess.
+			vi.mocked(existsSync).mockReturnValue(true);
+			vi.mocked(readFileSync).mockReturnValue(
+				JSON.stringify({
+					claudeAiOauth: {
+						accessToken: "sk-ant-file-full-only-token",
+						refreshToken: "file-only-refresh",
+						expiresAt: 1700000000000,
+						email: "fullfileonly@example.com",
+					},
+				}),
+			);
+
+			const result = getFullCredentialsFromKeychain();
+
+			expect(result.token).toBe("sk-ant-file-full-only-token");
+			expect(result.refreshToken).toBe("file-only-refresh");
+			expect(execFileSync).not.toHaveBeenCalled();
 		});
 
 		it("should return null when both sources have no credentials", () => {

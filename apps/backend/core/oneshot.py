@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -221,12 +222,21 @@ async def oneshot_completion(
     project_dir: str | None = None,
     spec_dir: str | None = None,
     max_turns: int = 1,
+    on_delta: Callable[[str], None] | None = None,
 ) -> str:
     """Run a single text completion against the active provider; return the text.
 
     Returns an empty string on any failure inside the stream (the caller decides
     how to degrade). Raising exceptions is left to the caller's runner so they
     surface on stderr.
+
+    ``on_delta`` — optional callback invoked with each chunk of assistant text as
+    it arrives from ``receive_response()``. Streaming providers (Copilot / OpenAI
+    / local) yield many small chunks → genuinely live output; the Claude one-shot
+    client yields the full text in a single final message, so ``on_delta`` fires
+    once. Callers that want a uniformly live UX buffer these and reveal them.
+    Exceptions raised inside the callback are swallowed so a flaky consumer can
+    never break the generation.
     """
     from core.client import _get_active_provider
 
@@ -256,5 +266,13 @@ async def oneshot_completion(
     async with client:
         await client.query(prompt)
         async for msg in client.receive_response():
-            text += _extract_text(msg)
+            delta = _extract_text(msg)
+            if not delta:
+                continue
+            text += delta
+            if on_delta is not None:
+                try:
+                    on_delta(delta)
+                except Exception:  # noqa: BLE001 — a flaky consumer must not break generation
+                    logger.debug("[oneshot] on_delta callback raised", exc_info=True)
     return text.strip()

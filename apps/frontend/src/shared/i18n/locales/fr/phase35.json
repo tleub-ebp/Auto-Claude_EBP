@@ -6,7 +6,7 @@
 		"loading": "Chargement…",
 		"errorLabel": "Erreur",
 		"projectPathRequired": "Aucun projet sélectionné",
-		"backendUnreachable": "Backend inaccessible. Le backend tourne-t-il sur le port 8765 ?",
+		"backendUnreachable": "Backend inaccessible. Le backend tourne-t-il sur le port 9000 ?",
 		"noData": "Aucune donnée — lancez l'analyse pour voir les résultats.",
 		"required": "Champ requis",
 		"invalidNumber": "Nombre invalide",
@@ -26,7 +26,7 @@
 			"directoryNotFound": "Dossier introuvable : {{path}}",
 			"fileNotFound": "Fichier introuvable : {{path}}",
 			"unauthorized": "Accès refusé. Vérifiez les permissions du dossier.",
-			"backendUnreachable": "Backend inaccessible. Le backend tourne-t-il sur le port 8765 ?",
+			"backendUnreachable": "Backend inaccessible. Le backend tourne-t-il sur le port 9000 ?",
 			"timeout": "Délai dépassé — le backend n'a pas répondu à temps.",
 			"unknown": "Erreur backend : {{message}}"
 		}

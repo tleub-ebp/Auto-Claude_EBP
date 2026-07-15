@@ -14,7 +14,7 @@ import {
 	refreshSession,
 } from "../server-connection";
 
-const DEFAULT_BACKEND_URL = "http://127.0.0.1:8765";
+const DEFAULT_BACKEND_URL = "http://127.0.0.1:9000";
 
 export function getBackendUrl(): string {
 	// Server mode: every backend call targets the remote multi-user server.

@@ -1,5 +1,6 @@
 import {
 	Check,
+	ChevronDown,
 	Copy,
 	FlaskConical,
 	Loader2,
@@ -16,13 +17,7 @@ import {
 } from "../../stores/test-generation-store";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-} from "../ui/card";
+import { Card, CardContent } from "../ui/card";
 import {
 	Dialog,
 	DialogContent,
@@ -33,7 +28,6 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { ScrollArea } from "../ui/scroll-area";
 import {
 	Select,
 	SelectContent,
@@ -43,6 +37,7 @@ import {
 } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
+import { LiveGenerationSurface } from "./LiveGenerationSurface";
 import { SmartFilePicker } from "./SmartFilePicker";
 
 const PRIORITY_COLORS = {
@@ -50,6 +45,15 @@ const PRIORITY_COLORS = {
 	medium: "bg-yellow-100 text-yellow-800",
 	low: "bg-green-100 text-green-800",
 };
+
+/** Count assertion-like calls in a test body, for the per-test summary chip. */
+function countAssertions(code: string): number {
+	if (!code) return 0;
+	const matches = code.match(
+		/\b(assert|expect|Assert|should|verify|Verify)\b|\.toBe|\.toEqual|\.Should\(/g,
+	);
+	return matches ? matches.length : 0;
+}
 
 /**
  * TestGenerationDialog — AI-powered test generation dialog.
@@ -83,6 +87,7 @@ export function TestGenerationDialog({
 		isOpen,
 		closeDialog,
 		phase,
+		isLiveRun,
 		status,
 		result,
 		error,
@@ -116,30 +121,46 @@ export function TestGenerationDialog({
 
 	const handleAnalyzeCoverage = useCallback(async () => {
 		if (!selectedFile) return;
-		await analyzeCoverage(selectedFile, existingTestPath || undefined);
+		try {
+			await analyzeCoverage(selectedFile, existingTestPath || undefined);
+		} catch {
+			// Error is surfaced via the store's error state (rendered in the UI).
+		}
 	}, [selectedFile, existingTestPath, analyzeCoverage]);
 
 	const handleGenerateUnitTests = useCallback(async () => {
 		if (!selectedFile) return;
-		await generateUnitTests(
-			selectedFile,
-			existingTestPath || undefined,
-			coverageTarget,
-		);
+		try {
+			await generateUnitTests(
+				selectedFile,
+				existingTestPath || undefined,
+				coverageTarget,
+			);
+		} catch {
+			// Error is surfaced via the store's error state (rendered in the UI).
+		}
 	}, [selectedFile, existingTestPath, coverageTarget, generateUnitTests]);
 
 	const handleGenerateE2ETests = useCallback(async () => {
 		if (!userStory.trim() || !targetModule.trim()) return;
-		await generateE2ETests(userStory, targetModule);
+		try {
+			await generateE2ETests(userStory, targetModule);
+		} catch {
+			// Error is surfaced via the store's error state (rendered in the UI).
+		}
 	}, [userStory, targetModule, generateE2ETests]);
 
 	const handleGenerateTDDTests = useCallback(async () => {
 		if (!tddDescription.trim()) return;
-		await generateTDDTests({
-			description: tddDescription,
-			language: tddLanguage,
-			snippet_type: tddSnippetType,
-		});
+		try {
+			await generateTDDTests({
+				description: tddDescription,
+				language: tddLanguage,
+				snippet_type: tddSnippetType,
+			});
+		} catch {
+			// Error is surfaced via the store's error state (rendered in the UI).
+		}
 	}, [tddDescription, tddLanguage, tddSnippetType, generateTDDTests]);
 
 	const handleCopyToClipboard = useCallback((content: string) => {
@@ -179,27 +200,57 @@ export function TestGenerationDialog({
 	);
 
 	const renderGeneratedTests = (tests: GeneratedTest[]) => (
-		<div className="space-y-4">
-			{tests.map((test) => (
-				<Card key={test.test_name}>
-					<CardHeader>
-						<div className="flex items-center justify-between">
-							<CardTitle className="text-sm font-mono">
-								{test.test_name}
-							</CardTitle>
-							<Badge variant="outline">{test.test_type}</Badge>
-						</div>
-						<CardDescription>{test.description}</CardDescription>
-					</CardHeader>
-					<CardContent>
-						<ScrollArea className="h-32 w-full">
-							<pre className="text-xs bg-gray-50 p-2 rounded">
-								{test.test_code}
-							</pre>
-						</ScrollArea>
-					</CardContent>
-				</Card>
-			))}
+		<div className="space-y-3">
+			{tests.map((test) => {
+				const asserts = countAssertions(test.test_code);
+				const hasCode = Boolean(test.test_code?.trim());
+				return (
+					<Card key={test.test_name} className="overflow-hidden">
+						<CardContent className="flex flex-col gap-2 pt-4">
+							<div className="flex items-center gap-2">
+								<span className="grid h-5 w-5 flex-none place-items-center rounded-full bg-emerald-500/15 text-emerald-400">
+									<Check className="h-3 w-3" />
+								</span>
+								<span className="flex-1 break-all font-mono text-sm font-medium">
+									{test.test_name}
+								</span>
+								<Badge variant="outline" className="flex-none">
+									{test.test_type}
+								</Badge>
+							</div>
+							{test.description && (
+								<p className="text-sm text-muted-foreground">
+									{test.description}
+								</p>
+							)}
+							{asserts > 0 && (
+								<div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+									<Check className="h-3 w-3 text-primary" />
+									<span className="font-medium text-primary">{asserts}</span>
+									{t("testGeneration:live.assertions", {
+										defaultValue: "assertions",
+									})}
+								</div>
+							)}
+							{hasCode && (
+								<details className="group">
+									<summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+										<ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+										{t("testGeneration:live.viewCode", {
+											defaultValue: "View code",
+										})}
+									</summary>
+									<div className="mt-2 max-h-56 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-3">
+										<pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed text-zinc-300">
+											{test.test_code}
+										</pre>
+									</div>
+								</details>
+							)}
+						</CardContent>
+					</Card>
+				);
+			})}
 		</div>
 	);
 
@@ -662,6 +713,15 @@ export function TestGenerationDialog({
 						</div>
 					</TabsContent>
 				</Tabs>
+
+				{isLiveRun &&
+					(phase === "generating" ||
+						phase === "complete" ||
+						phase === "error") && (
+						<div className="mt-4">
+							<LiveGenerationSurface />
+						</div>
+					)}
 
 				<DialogFooter>
 					<Button variant="outline" onClick={closeDialog}>

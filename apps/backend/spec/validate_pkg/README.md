@@ -85,7 +85,7 @@ from validate_spec import SpecValidator, auto_fix_plan
 from pathlib import Path
 
 # Create validator
-spec_dir = Path("auto-claude/specs/001-feature")
+spec_dir = Path(".workpilot/specs/001-feature")
 validator = SpecValidator(spec_dir)
 
 # Validate specific checkpoint
@@ -107,16 +107,16 @@ if auto_fix_plan(spec_dir):
 
 ```bash
 # Validate all checkpoints
-python auto-claude/validate_spec.py --spec-dir auto-claude/specs/001-feature/ --checkpoint all
+python apps/backend/spec/validate_spec.py --spec-dir .workpilot/specs/001-feature/ --checkpoint all
 
 # Validate specific checkpoint
-python auto-claude/validate_spec.py --spec-dir auto-claude/specs/001-feature/ --checkpoint context
+python apps/backend/spec/validate_spec.py --spec-dir .workpilot/specs/001-feature/ --checkpoint context
 
 # Auto-fix and validate
-python auto-claude/validate_spec.py --spec-dir auto-claude/specs/001-feature/ --auto-fix --checkpoint plan
+python apps/backend/spec/validate_spec.py --spec-dir .workpilot/specs/001-feature/ --auto-fix --checkpoint plan
 
 # JSON output
-python auto-claude/validate_spec.py --spec-dir auto-claude/specs/001-feature/ --checkpoint all --json
+python apps/backend/spec/validate_spec.py --spec-dir .workpilot/specs/001-feature/ --checkpoint all --json
 ```
 
 ## Imports

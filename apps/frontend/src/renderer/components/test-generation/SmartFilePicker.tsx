@@ -216,12 +216,26 @@ export function SmartFilePicker({
 
 	return (
 		<div className="space-y-1.5">
-			{/* Selected file chip / trigger */}
-			<button
-				type="button"
+			{/* Selected file chip / trigger.
+			    Rendered as a div (not a button) because it can contain the clear
+			    button, and a <button> may not nest another <button>. */}
+			<div
+				role="button"
+				tabIndex={0}
+				aria-expanded={isOpen}
 				onClick={isOpen ? () => setIsOpen(false) : handleOpen}
+				onKeyDown={(e) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						if (isOpen) {
+							setIsOpen(false);
+						} else {
+							void handleOpen();
+						}
+					}
+				}}
 				className={cn(
-					"w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 text-left transition-all duration-200",
+					"w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 text-left transition-all duration-200 cursor-pointer",
 					"hover:border-accent focus:outline-none focus:border-accent",
 					buttonClasses,
 				)}
@@ -255,7 +269,7 @@ export function SmartFilePicker({
 						<ChevronDown className="w-4 h-4" />
 					)}
 				</span>
-			</button>
+			</div>
 
 			{/* Inline file tree panel */}
 			{isOpen && (

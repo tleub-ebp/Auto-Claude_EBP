@@ -6,6 +6,18 @@ import { type IpcRendererEvent, ipcRenderer } from "electron";
  * Provides access to test generation functionality from the renderer process.
  */
 
+/** A live pipeline-stage event streamed during generation. */
+export interface TestGenStageEvent {
+	type: "stage";
+	stage: "detect" | "read" | "generate" | "write" | "done";
+	status?: "done";
+	detail?: string;
+	language?: string;
+	framework?: string;
+	path?: string;
+	tests?: number;
+}
+
 export interface TestGenerationAPI {
 	analyzeTestCoverage: (
 		filePath: string,
@@ -40,6 +52,12 @@ export interface TestGenerationAPI {
 	onTestGenerationResult: (callback: (result: any) => void) => void;
 	// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
 	onTestGenerationComplete: (callback: (result: any) => void) => void;
+	/** Live pipeline stage events (detect → read → generate → write → done). */
+	onTestGenerationProgress: (
+		callback: (event: TestGenStageEvent) => void,
+	) => void;
+	/** Streamed chunks of clean generated test code. */
+	onTestGenerationCode: (callback: (delta: string) => void) => void;
 	removeTestGenerationStatusListener: (
 		callback: (status: string) => void,
 	) => void;
@@ -50,6 +68,10 @@ export interface TestGenerationAPI {
 	removeTestGenerationCompleteListener: (
 		callback: (result: unknown) => void,
 	) => void;
+	removeTestGenerationProgressListener: (
+		callback: (event: TestGenStageEvent) => void,
+	) => void;
+	removeTestGenerationCodeListener: (callback: (delta: string) => void) => void;
 }
 
 // Type aliases for different callback signatures
@@ -57,6 +79,8 @@ type StatusListenerFn = (status: string) => void;
 type ErrorListenerFn = (error: string) => void;
 type ResultListenerFn = (result: unknown) => void;
 type CompleteListenerFn = (result: unknown) => void;
+type ProgressListenerFn = (event: TestGenStageEvent) => void;
+type CodeListenerFn = (delta: string) => void;
 
 // Maps to store callback → actual IPC listener so removeListener can find the exact reference
 const statusListeners = new Map<
@@ -74,6 +98,14 @@ const resultListeners = new Map<
 const completeListeners = new Map<
 	CompleteListenerFn,
 	(event: IpcRendererEvent, result: unknown) => void
+>();
+const progressListeners = new Map<
+	ProgressListenerFn,
+	(event: IpcRendererEvent, payload: TestGenStageEvent) => void
+>();
+const codeListeners = new Map<
+	CodeListenerFn,
+	(event: IpcRendererEvent, delta: string) => void
 >();
 
 export const createTestGenerationAPI = (): TestGenerationAPI => ({
@@ -186,11 +218,51 @@ export const createTestGenerationAPI = (): TestGenerationAPI => ({
 		ipcRenderer.on("test-generation:complete", listener);
 	},
 
+	onTestGenerationProgress: (callback: (event: TestGenStageEvent) => void) => {
+		const existing = progressListeners.get(callback);
+		if (existing) {
+			ipcRenderer.removeListener("test-generation:progress", existing);
+		}
+		const listener = (_event: IpcRendererEvent, payload: TestGenStageEvent) =>
+			callback(payload);
+		progressListeners.set(callback, listener);
+		ipcRenderer.on("test-generation:progress", listener);
+	},
+
+	onTestGenerationCode: (callback: (delta: string) => void) => {
+		const existing = codeListeners.get(callback);
+		if (existing) {
+			ipcRenderer.removeListener("test-generation:code", existing);
+		}
+		const listener = (_event: IpcRendererEvent, delta: string) =>
+			callback(delta);
+		codeListeners.set(callback, listener);
+		ipcRenderer.on("test-generation:code", listener);
+	},
+
 	removeTestGenerationStatusListener: (callback: (status: string) => void) => {
 		const listener = statusListeners.get(callback);
 		if (listener) {
 			ipcRenderer.removeListener("test-generation:status", listener);
 			statusListeners.delete(callback);
+		}
+	},
+
+	removeTestGenerationProgressListener: (
+		callback: (event: TestGenStageEvent) => void,
+	) => {
+		const listener = progressListeners.get(callback);
+		if (listener) {
+			ipcRenderer.removeListener("test-generation:progress", listener);
+			progressListeners.delete(callback);
+		}
+	},
+
+	removeTestGenerationCodeListener: (callback: (delta: string) => void) => {
+		const listener = codeListeners.get(callback);
+		if (listener) {
+			ipcRenderer.removeListener("test-generation:code", listener);
+			codeListeners.delete(callback);
 		}
 	},
 

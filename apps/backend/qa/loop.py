@@ -407,6 +407,15 @@ async def run_qa_validation_loop(
     print("\n🔐 Running security scan...")
     try:
         sec_passed, _, sec_issues = await run_qa_security_scan(project_dir, spec_dir)
+        # Feed the Consensus Arbiter: persist the security scanner's findings as
+        # security-domain opinions so the arbiter has real data to reconcile
+        # against the QA reviewer's verdict. Overwrites each run (latest state).
+        try:
+            from consensus_arbiter.opinion_writer import record_security_opinions
+
+            record_security_opinions(project_dir, sec_issues)
+        except Exception as _op_err:  # never let the producer break QA
+            debug_warning("qa_loop", f"Security opinion producer skipped: {_op_err}")
         if not sec_passed:
             critical_count = sum(1 for i in sec_issues if i.get("type") == "critical")
             high_count = sum(1 for i in sec_issues if i.get("type") == "high")
@@ -613,6 +622,26 @@ async def run_qa_validation_loop(
             duration_seconds=f"{iteration_duration:.1f}",
             response_length=len(response),
         )
+
+        # Feed the Consensus Arbiter: persist the QA reviewer's verdict as a
+        # qa-domain opinion over the files this task changed. When the security
+        # scanner flagged one of those files but QA approved it, the arbiter
+        # surfaces the disagreement for a human to settle.
+        try:
+            from consensus_arbiter.opinion_writer import (
+                get_task_changed_files,
+                record_qa_reviewer_opinion,
+            )
+
+            _qa_signoff = get_qa_signoff_status(spec_dir) or {}
+            record_qa_reviewer_opinion(
+                project_dir,
+                status,
+                get_task_changed_files(project_dir, spec_dir),
+                issues=_qa_signoff.get("issues_found"),
+            )
+        except Exception as _op_err:  # never let the producer break QA
+            debug_warning("qa_loop", f"QA opinion producer skipped: {_op_err}")
 
         # A local model that never emits a real tool call cannot drive agentic
         # QA — it can only hallucinate (e.g. a fabricated "spec file not found"

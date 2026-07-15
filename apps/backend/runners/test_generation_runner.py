@@ -53,6 +53,19 @@ def _status(message: str) -> None:
     print(message, flush=True)
 
 
+def _emit_event(event: dict) -> None:
+    """Emit a structured live-progress event for the UI.
+
+    One JSON object per line, prefixed with ``__TG_EVENT__:``. ``json.dumps``
+    escapes newlines inside string values, so a ``code`` delta spanning several
+    lines still arrives as a single stdout line (the frontend splits on '\\n').
+    """
+    try:
+        print(f"__TG_EVENT__:{json.dumps(event, ensure_ascii=False)}", flush=True)
+    except Exception:  # noqa: BLE001 — progress reporting must never abort a run
+        pass
+
+
 def _write_test_file(
     result, project_path: str | None, source_file_path: str | None = None
 ) -> None:
@@ -112,9 +125,20 @@ def _run_generate_unit(agent, args) -> None:
             existing_test_path=args.existing_test_path,
             max_tests_per_function=3,
             project_path=args.project_path,
+            on_event=_emit_event,
         )
         _status(f"Generated {result.tests_generated} test(s)")
+        _emit_event({"type": "stage", "stage": "write"})
         _write_test_file(result, args.project_path, args.file_path)
+        _emit_event(
+            {
+                "type": "stage",
+                "stage": "done",
+                "status": "done",
+                "path": result.test_file_path,
+                "tests": result.tests_generated,
+            }
+        )
         _print_result({"success": True, "result": _serialize(result)})
     except Exception as exc:  # noqa: BLE001
         _print_error(str(exc))
@@ -135,9 +159,20 @@ def _run_generate_e2e(agent, args) -> None:
             args.user_story,
             args.target_module,
             project_path=args.project_path,
+            on_event=_emit_event,
         )
         _status(f"Generated {result.tests_generated} E2E test(s)")
+        _emit_event({"type": "stage", "stage": "write"})
         _write_test_file(result, args.project_path, args.target_module or None)
+        _emit_event(
+            {
+                "type": "stage",
+                "stage": "done",
+                "status": "done",
+                "path": result.test_file_path,
+                "tests": result.tests_generated,
+            }
+        )
         _print_result({"success": True, "result": _serialize(result)})
     except Exception as exc:  # noqa: BLE001
         _print_error(str(exc))
@@ -163,9 +198,21 @@ def _run_generate_tdd(agent, args) -> None:
     }
 
     try:
-        result = agent.generate_tdd_tests(spec, project_path=args.project_path)
+        result = agent.generate_tdd_tests(
+            spec, project_path=args.project_path, on_event=_emit_event
+        )
         _status(f"Generated {result.tests_generated} TDD test(s)")
+        _emit_event({"type": "stage", "stage": "write"})
         _write_test_file(result, args.project_path)
+        _emit_event(
+            {
+                "type": "stage",
+                "stage": "done",
+                "status": "done",
+                "path": result.test_file_path,
+                "tests": result.tests_generated,
+            }
+        )
         _print_result({"success": True, "result": _serialize(result)})
     except Exception as exc:  # noqa: BLE001
         _print_error(str(exc))

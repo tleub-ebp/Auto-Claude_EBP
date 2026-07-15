@@ -152,7 +152,7 @@ test('buildMemoryStatus returns correct status', () => {
 
 ## Related Documentation
 
-- [Project Memory System](../../../../auto-claude/memory.py)
-- [Graphiti Memory Integration](../../../../auto-claude/graphiti_memory.py)
+- Project Memory System — `apps/backend/agents/memory.py`
+- Graphiti Memory Integration — `apps/backend/integrations/graphiti/`
 - [LadybugDB Integration](../../ladybug-service.ts)
 - [IPC Channels](../../../shared/constants.ts)

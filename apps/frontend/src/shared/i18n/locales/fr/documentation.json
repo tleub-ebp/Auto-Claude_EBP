@@ -31,5 +31,11 @@
 		"networkError": "Erreur réseau"
 	},
 	"symbols": { "title": "Symboles" },
-	"docstrings": { "title": "Docstrings générés ({{count}})" }
+	"docstrings": { "title": "Docstrings générés ({{count}})" },
+	"autocomplete": {
+		"searching": "Recherche…",
+		"noResults": "Aucun fichier correspondant",
+		"noResultsDir": "Aucun répertoire correspondant",
+		"noProject": "Sélectionnez d'abord un projet"
+	}
 }

@@ -46,6 +46,7 @@ import {
 } from "../cli-tool-manager";
 import { credentialManager } from "../services/credential-manager";
 import { getSettingsPath, readSettingsFile } from "../settings-utils";
+import { testGenerationService } from "../test-generation-service";
 import { parseEnvFile } from "./utils";
 
 const settingsPath = getSettingsPath();
@@ -616,6 +617,9 @@ export function registerSettingsHandlers(
 						settings.pythonPath,
 						settings.autoBuildPath,
 					);
+					if (settings.pythonPath) {
+						testGenerationService.configure(settings.pythonPath);
+					}
 				}
 
 				// Configure CLI tools if any paths changed

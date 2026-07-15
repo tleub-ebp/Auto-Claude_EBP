@@ -105,5 +105,25 @@
 		"noFile": "Please select a file to analyze",
 		"noProject": "Please select a project",
 		"generic": "An error occurred during test generation"
+	},
+	"live": {
+		"stages": {
+			"detect": "Detecting framework",
+			"read": "Reading source",
+			"generate": "Generating",
+			"write": "Writing file"
+		},
+		"elapsed": "Elapsed",
+		"lines": "Lines written",
+		"tests": "Tests detected",
+		"framework": "Framework",
+		"badgeLive": "LIVE",
+		"waiting": "Waiting for the model…",
+		"writtenTo": "Written to",
+		"copyPath": "Copy path",
+		"copied": "Copied",
+		"cancel": "Cancel generation",
+		"assertions": "assertions",
+		"viewCode": "View code"
 	}
 }

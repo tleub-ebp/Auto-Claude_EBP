@@ -139,7 +139,7 @@ registerTaskHandlers(agentManager, pythonEnvManager, getMainWindow);
 ### Worktree Architecture
 Each task spec has its own isolated worktree at `.worktrees/{spec-name}/`:
 - Enables safe parallel development
-- Each spec has dedicated branch: `auto-claude/{spec-name}`
+- Each spec has dedicated branch: `workpilot/{spec-name}`
 - Branches stay local until user explicitly pushes
 - User reviews in worktree before merging to main
 

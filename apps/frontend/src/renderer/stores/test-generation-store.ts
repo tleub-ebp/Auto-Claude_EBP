@@ -73,6 +73,36 @@ export type TestGenerationPhase =
 	| "complete"
 	| "error";
 
+/** Pipeline stage ids emitted by the backend during a live generation. */
+export type StageId = "detect" | "read" | "generate" | "write" | "done";
+
+/** A live pipeline-stage event coming from the backend runner. */
+export interface TestGenStageEvent {
+	type: "stage";
+	stage: StageId;
+	status?: "done";
+	detail?: string;
+	language?: string;
+	framework?: string;
+	path?: string;
+	tests?: number;
+}
+
+/** A stage as tracked in the store (arrival order preserved). */
+export interface LiveStage {
+	id: StageId;
+	status: "active" | "done";
+	detail?: string;
+}
+
+/** Rolling metadata surfaced in the live stats strip. */
+export interface LiveMeta {
+	language?: string;
+	framework?: string;
+	path?: string;
+	tests?: number;
+}
+
 interface TestGenerationState {
 	// State
 	phase: TestGenerationPhase;
@@ -87,6 +117,14 @@ interface TestGenerationState {
 	tddLanguage: string;
 	tddSnippetType: string;
 
+	// Live streaming state
+	liveStages: LiveStage[];
+	streamedCode: string;
+	liveMeta: LiveMeta;
+	genStartedAt: number | null;
+	/** True when the current/last run is a streaming generation (not analyze). */
+	isLiveRun: boolean;
+
 	// Actions
 	openDialog: (filePath: string, existingTestPath?: string) => void;
 	closeDialog: () => void;
@@ -100,6 +138,10 @@ interface TestGenerationState {
 	setTddSnippetType: (snippetType: string) => void;
 	setSelectedFile: (filePath: string) => void;
 	reset: () => void;
+	resetLive: () => void;
+	applyStageEvent: (event: TestGenStageEvent) => void;
+	appendCode: (delta: string) => void;
+	cancelGeneration: () => void;
 	createErrorHandler: (
 		cleanup: () => void,
 		reject: (reason?: unknown) => void,
@@ -143,6 +185,11 @@ const initialState = {
 	coverageTarget: 80,
 	tddLanguage: "typescript",
 	tddSnippetType: "function",
+	liveStages: [] as LiveStage[],
+	streamedCode: "",
+	liveMeta: {} as LiveMeta,
+	genStartedAt: null as number | null,
+	isLiveRun: false,
 };
 
 export const useTestGenerationStore = create<TestGenerationState>(
@@ -205,10 +252,91 @@ export const useTestGenerationStore = create<TestGenerationState>(
 
 		reset: () => set(initialState),
 
+		resetLive: () =>
+			set({
+				liveStages: [],
+				streamedCode: "",
+				liveMeta: {},
+				genStartedAt: Date.now(),
+				isLiveRun: true,
+			}),
+
+		applyStageEvent: (event: TestGenStageEvent) =>
+			set((state) => {
+				// The terminal "done" event finalises the run: mark every stage done
+				// and fold in the final metadata (path, test count) — it is not a
+				// visible pipeline step of its own.
+				if (event.stage === "done") {
+					const liveMeta: LiveMeta = { ...state.liveMeta };
+					if (event.path) liveMeta.path = event.path;
+					if (typeof event.tests === "number") liveMeta.tests = event.tests;
+					return {
+						liveStages: state.liveStages.map((s) => ({
+							...s,
+							status: "done" as const,
+						})),
+						liveMeta,
+					};
+				}
+				const isDone = event.status === "done";
+				const existing = state.liveStages.find((s) => s.id === event.stage);
+				let liveStages: LiveStage[];
+				if (existing) {
+					liveStages = state.liveStages.map((s) =>
+						s.id === event.stage
+							? {
+									id: s.id,
+									status: isDone ? "done" : s.status,
+									detail: event.detail ?? s.detail,
+								}
+							: s,
+					);
+				} else {
+					// First sight of this stage: mark any still-active earlier stage
+					// done (the backend has clearly moved on), then append.
+					liveStages = [
+						...state.liveStages.map((s) =>
+							s.status === "active" ? { ...s, status: "done" as const } : s,
+						),
+						{
+							id: event.stage,
+							status: isDone ? "done" : "active",
+							detail: event.detail,
+						},
+					];
+				}
+				const liveMeta: LiveMeta = { ...state.liveMeta };
+				if (event.language) liveMeta.language = event.language;
+				if (event.framework) liveMeta.framework = event.framework;
+				if (event.path) liveMeta.path = event.path;
+				if (typeof event.tests === "number") liveMeta.tests = event.tests;
+				return { liveStages, liveMeta };
+			}),
+
+		appendCode: (delta: string) =>
+			set((state) => ({ streamedCode: state.streamedCode + delta })),
+
+		cancelGeneration: () => {
+			try {
+				globalThis.electronAPI.cancelTestGeneration();
+			} catch {
+				// best-effort — the process may already be gone
+			}
+			set({
+				phase: "idle",
+				status: "",
+				liveStages: [],
+				streamedCode: "",
+				liveMeta: {},
+				genStartedAt: null,
+			});
+		},
+
 		analyzeCoverage: async (filePath: string, existingTestPath?: string) => {
 			const { setPhase, setStatus } = get();
 			setPhase("analyzing");
 			setStatus("Analyzing test coverage...");
+			set({ isLiveRun: false });
 
 			return new Promise<CoverageGap[]>((resolve, reject) => {
 				const onStatus = (status: string) => setStatus(status);
@@ -245,12 +373,16 @@ export const useTestGenerationStore = create<TestGenerationState>(
 			existingTestPath?: string,
 			coverageTarget?: number,
 		) => {
-			const { setPhase, setStatus, setResult } = get();
+			const { setPhase, setStatus, setResult, resetLive } = get();
 			setPhase("generating");
 			setStatus("Generating unit tests...");
+			resetLive();
 
 			return new Promise<TestGenerationResult>((resolve, reject) => {
 				const onStatus = (status: string) => setStatus(status);
+				const onProgress = (event: TestGenStageEvent) =>
+					get().applyStageEvent(event);
+				const onCode = (delta: string) => get().appendCode(delta);
 				const cleanup = get().createCleanupHandler([
 					() =>
 						globalThis.electronAPI.removeTestGenerationStatusListener(onStatus),
@@ -260,6 +392,11 @@ export const useTestGenerationStore = create<TestGenerationState>(
 						),
 					() =>
 						globalThis.electronAPI.removeTestGenerationErrorListener(onError),
+					() =>
+						globalThis.electronAPI.removeTestGenerationProgressListener(
+							onProgress,
+						),
+					() => globalThis.electronAPI.removeTestGenerationCodeListener(onCode),
 				]);
 				// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
 				const onComplete = (data: any) => {
@@ -276,6 +413,8 @@ export const useTestGenerationStore = create<TestGenerationState>(
 				globalThis.electronAPI.onTestGenerationStatus(onStatus);
 				globalThis.electronAPI.onTestGenerationComplete(onComplete);
 				globalThis.electronAPI.onTestGenerationError(onError);
+				globalThis.electronAPI.onTestGenerationProgress(onProgress);
+				globalThis.electronAPI.onTestGenerationCode(onCode);
 				globalThis.electronAPI.generateUnitTests(
 					filePath,
 					existingTestPath,
@@ -286,12 +425,16 @@ export const useTestGenerationStore = create<TestGenerationState>(
 		},
 
 		generateE2ETests: async (userStory: string, targetModule: string) => {
-			const { setPhase, setStatus, setResult } = get();
+			const { setPhase, setStatus, setResult, resetLive } = get();
 			setPhase("generating");
 			setStatus("Generating E2E tests...");
+			resetLive();
 
 			return new Promise<TestGenerationResult>((resolve, reject) => {
 				const onStatus = (status: string) => setStatus(status);
+				const onProgress = (event: TestGenStageEvent) =>
+					get().applyStageEvent(event);
+				const onCode = (delta: string) => get().appendCode(delta);
 				const cleanup = get().createCleanupHandler([
 					() =>
 						globalThis.electronAPI.removeTestGenerationStatusListener(onStatus),
@@ -301,6 +444,11 @@ export const useTestGenerationStore = create<TestGenerationState>(
 						),
 					() =>
 						globalThis.electronAPI.removeTestGenerationErrorListener(onError),
+					() =>
+						globalThis.electronAPI.removeTestGenerationProgressListener(
+							onProgress,
+						),
+					() => globalThis.electronAPI.removeTestGenerationCodeListener(onCode),
 				]);
 				// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
 				const onComplete = (data: any) => {
@@ -317,6 +465,8 @@ export const useTestGenerationStore = create<TestGenerationState>(
 				globalThis.electronAPI.onTestGenerationStatus(onStatus);
 				globalThis.electronAPI.onTestGenerationComplete(onComplete);
 				globalThis.electronAPI.onTestGenerationError(onError);
+				globalThis.electronAPI.onTestGenerationProgress(onProgress);
+				globalThis.electronAPI.onTestGenerationCode(onCode);
 				globalThis.electronAPI.generateE2ETests(
 					userStory,
 					targetModule,
@@ -330,12 +480,16 @@ export const useTestGenerationStore = create<TestGenerationState>(
 			language: string;
 			snippet_type: string;
 		}) => {
-			const { setPhase, setStatus, setResult } = get();
+			const { setPhase, setStatus, setResult, resetLive } = get();
 			setPhase("generating");
 			setStatus("Generating TDD tests...");
+			resetLive();
 
 			return new Promise<TestGenerationResult>((resolve, reject) => {
 				const onStatus = (status: string) => setStatus(status);
+				const onProgress = (event: TestGenStageEvent) =>
+					get().applyStageEvent(event);
+				const onCode = (delta: string) => get().appendCode(delta);
 				const cleanup = get().createCleanupHandler([
 					() =>
 						globalThis.electronAPI.removeTestGenerationStatusListener(onStatus),
@@ -345,6 +499,11 @@ export const useTestGenerationStore = create<TestGenerationState>(
 						),
 					() =>
 						globalThis.electronAPI.removeTestGenerationErrorListener(onError),
+					() =>
+						globalThis.electronAPI.removeTestGenerationProgressListener(
+							onProgress,
+						),
+					() => globalThis.electronAPI.removeTestGenerationCodeListener(onCode),
 				]);
 				// biome-ignore lint/suspicious/noExplicitAny: TODO: type this properly
 				const onComplete = (data: any) => {
@@ -361,6 +520,8 @@ export const useTestGenerationStore = create<TestGenerationState>(
 				globalThis.electronAPI.onTestGenerationStatus(onStatus);
 				globalThis.electronAPI.onTestGenerationComplete(onComplete);
 				globalThis.electronAPI.onTestGenerationError(onError);
+				globalThis.electronAPI.onTestGenerationProgress(onProgress);
+				globalThis.electronAPI.onTestGenerationCode(onCode);
 				globalThis.electronAPI.generateTDDTests(
 					spec.description,
 					spec.language,

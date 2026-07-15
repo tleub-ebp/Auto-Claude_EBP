@@ -38,6 +38,22 @@ export function setupTestGenerationHandlers(
 		}
 	});
 
+	// Live pipeline stage events (detect/read/generate/write/done)
+	testGenerationService.on("progress", (event: unknown) => {
+		const mainWindow = getMainWindow();
+		if (mainWindow && !mainWindow.isDestroyed()) {
+			mainWindow.webContents.send("test-generation:progress", event);
+		}
+	});
+
+	// Streamed chunks of clean generated test code
+	testGenerationService.on("code", (delta: string) => {
+		const mainWindow = getMainWindow();
+		if (mainWindow && !mainWindow.isDestroyed()) {
+			mainWindow.webContents.send("test-generation:code", delta);
+		}
+	});
+
 	// Analyze test coverage
 	ipcMain.handle(
 		"test-generation:analyze-coverage",

@@ -1,7 +1,8 @@
 {
 	"title": "Personal Agent Coach",
 	"noData": "No agent run records found",
-	"summary": "{{runs}} runs · {{successRate}}% success · ${{cost}} total cost",
+	"summary": "{{runs}} runs · {{successRate}}% success · {{cost}} total cost",
+	"summaryDetail": "{{tips}} tips · {{runs}} runs analyzed · {{successRate}}% success · {{cost}} total cost",
 	"stats": {
 		"runs": "Runs",
 		"successRate": "Success Rate",

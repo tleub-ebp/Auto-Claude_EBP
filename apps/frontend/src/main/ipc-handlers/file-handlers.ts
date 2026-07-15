@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { ipcMain } from "electron";
 import { IPC_CHANNELS } from "../../shared/constants";
-import type { FileNode, IPCResult } from "../../shared/types";
+import type { FileNode, FileSearchResult, IPCResult } from "../../shared/types";
+import { IGNORED_DIRS, searchProjectPaths } from "./path-search";
 
 // Maximum file size to read (1MB)
 const MAX_FILE_SIZE = 1024 * 1024;
@@ -97,28 +98,6 @@ function validateFileName(
 	}
 	return { valid: true, name: fileName };
 }
-
-// Directories to ignore when listing
-const IGNORED_DIRS = new Set([
-	"node_modules",
-	".git",
-	"__pycache__",
-	"dist",
-	"build",
-	".next",
-	".nuxt",
-	"coverage",
-	".cache",
-	".venv",
-	"venv",
-	"out",
-	".turbo",
-	".worktrees",
-	"vendor",
-	"target",
-	".gradle",
-	".maven",
-]);
 
 /**
  * Register all file-related IPC handlers
@@ -250,5 +229,34 @@ export function registerFileHandlers(): void {
 	ipcMain.handle(
 		IPC_CHANNELS.FILE_EXPLORER_GET_USER_HOME,
 		async (): Promise<string> => os.homedir(),
+	);
+
+	ipcMain.handle(
+		IPC_CHANNELS.FILE_EXPLORER_SEARCH,
+		async (
+			_,
+			rootPath: string,
+			query: string,
+			mode: "file" | "directory",
+		): Promise<IPCResult<FileSearchResult[]>> => {
+			try {
+				const validation = validatePath(rootPath);
+				if (!validation.valid) {
+					return { success: false, error: validation.error };
+				}
+				const results = await searchProjectPaths(
+					validation.path,
+					typeof query === "string" ? query : "",
+					mode === "directory" ? "directory" : "file",
+				);
+				return { success: true, data: results };
+			} catch (error) {
+				return {
+					success: false,
+					error:
+						error instanceof Error ? error.message : "Failed to search files",
+				};
+			}
+		},
 	);
 }

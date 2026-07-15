@@ -105,5 +105,25 @@
 		"noFile": "Veuillez sélectionner un fichier à analyser",
 		"noProject": "Veuillez sélectionner un projet",
 		"generic": "Une erreur est survenue lors de la génération des tests"
+	},
+	"live": {
+		"stages": {
+			"detect": "Détection du framework",
+			"read": "Lecture de la source",
+			"generate": "Génération",
+			"write": "Écriture du fichier"
+		},
+		"elapsed": "Temps écoulé",
+		"lines": "Lignes écrites",
+		"tests": "Tests détectés",
+		"framework": "Framework",
+		"badgeLive": "EN DIRECT",
+		"waiting": "En attente du modèle…",
+		"writtenTo": "Écrit dans",
+		"copyPath": "Copier le chemin",
+		"copied": "Copié",
+		"cancel": "Annuler la génération",
+		"assertions": "assertions",
+		"viewCode": "Voir le code"
 	}
 }

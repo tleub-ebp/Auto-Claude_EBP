@@ -1,7 +1,8 @@
 {
 	"title": "Coach personnel d'agent",
 	"noData": "Aucun enregistrement d'exécution d'agent trouvé",
-	"summary": "{{runs}} exécutions · {{successRate}}% succès · ${{cost}} coût total",
+	"summary": "{{runs}} exécutions · {{successRate}}% succès · {{cost}} coût total",
+	"summaryDetail": "{{tips}} conseils · {{runs}} exécutions analysées · {{successRate}}% succès · {{cost}} coût total",
 	"stats": {
 		"runs": "Exécutions",
 		"successRate": "Taux de succès",

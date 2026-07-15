@@ -117,6 +117,20 @@ def run_scan(project_path: Path) -> dict[str, Any]:
             engine.record_batch(records)
             total_records += len(records)
 
+    # No explicit agent-runs/*.json are written by the pipeline, so rebuild the
+    # coach's history from the usage ledger (cost_data.json) that usage_tracker
+    # already persists for every LLM call. Without this the panel is always
+    # empty ("Aucun enregistrement d'exécution d'agent trouvé").
+    try:
+        from agent_coach.usage_ingest import load_agent_runs_from_usage
+
+        usage_runs = load_agent_runs_from_usage(project_path)
+        if usage_runs:
+            engine.record_batch(usage_runs)
+            total_records += len(usage_runs)
+    except Exception as exc:  # pragma: no cover - best-effort ingest
+        _emit_event("progress", {"status": f"Usage ledger ingest skipped: {exc}"})
+
     _emit_event(
         "progress",
         {"status": f"Loaded {total_records} run record(s), generating report..."},

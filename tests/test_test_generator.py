@@ -10,6 +10,7 @@ Tests the test generator agent including:
 - Utility functions
 """
 
+import json
 import textwrap
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,34 @@ from apps.backend.agents.test_generator import (
     TestGenerationResult,
     TestGeneratorAgent,
 )
+
+
+class _FakeOneshot:
+    """Stand-in for ``core.oneshot.oneshot_completion``.
+
+    Records the prompts it is handed and returns a fixed response, so the
+    generation tests are deterministic and never touch a real provider. The
+    signature mirrors the real function (including ``on_delta``) so it slots in
+    via ``patch("core.oneshot.oneshot_completion", new=...)``.
+    """
+
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.prompts: list[str] = []
+
+    async def __call__(
+        self, prompt, system_prompt=None, project_dir=None, on_delta=None, **_kwargs
+    ):
+        self.prompts.append(prompt)
+        if on_delta is not None:
+            on_delta(self.response)
+        return self.response
+
+
+def _patch_llm(response: str) -> tuple:
+    """Return ``(_FakeOneshot, patch_ctx)`` patching the shared LLM entrypoint."""
+    fake = _FakeOneshot(response)
+    return fake, patch("core.oneshot.oneshot_completion", new=fake)
 
 # ── CodeAnalyzer tests ──────────────────────────────────────────
 
@@ -203,7 +232,14 @@ class TestFunctionInfo:
 
 
 class TestTestGeneratorAgent:
-    """Tests for TestGeneratorAgent operations."""
+    """Tests for TestGeneratorAgent operations.
+
+    The agent wraps an LLM, so these mock the shared ``oneshot_completion``
+    entrypoint and assert the agent's *own* responsibilities: it builds the right
+    prompt and faithfully parses the model's JSON into a result. The LLM's
+    judgement (which functions are gaps, how many tests to write) is not
+    deterministic and is intentionally not asserted here.
+    """
 
     @pytest.fixture
     def agent(self):
@@ -242,164 +278,288 @@ class TestTestGeneratorAgent:
         return str(file_path)
 
     def test_analyze_coverage_finds_gaps(self, agent, sample_source):
-        """analyze_coverage() identifies untested functions."""
-        gaps = agent.analyze_coverage(sample_source)
+        """analyze_coverage() parses the model's gaps into CoverageGap objects."""
+        response = json.dumps(
+            {
+                "functions_analyzed": 4,
+                "gaps": [
+                    {"name": "get_user", "class_name": "UserService", "line_number": 5, "priority": "high", "reason": "public read", "suggested_test_count": 2},
+                    {"name": "create_user", "class_name": "UserService", "line_number": 9, "priority": "high", "reason": "validates + writes", "suggested_test_count": 3},
+                ],
+            }
+        )
+        _fake, ctx = _patch_llm(response)
+        with ctx:
+            gaps = agent.analyze_coverage(sample_source)
 
-        assert len(gaps) > 0
+        assert len(gaps) == 2
         assert all(isinstance(g, CoverageGap) for g in gaps)
-
         func_names = [g.function.name for g in gaps]
         assert "get_user" in func_names
         assert "create_user" in func_names
 
-    def test_analyze_coverage_with_existing_tests(self, agent, sample_source, tmp_path):
-        """analyze_coverage() excludes already-tested functions."""
-        test_source = textwrap.dedent('''
-            def test_get_user_returns_expected():
-                pass
-
-            def test_get_user_with_empty_input():
-                pass
-        ''')
+    def test_analyze_coverage_forwards_existing_tests(
+        self, agent, sample_source, tmp_path
+    ):
+        """analyze_coverage() feeds existing tests into the prompt so the model
+        can exclude already-covered functions."""
+        test_source = "def test_get_user_returns_expected():\n    pass\n"
         test_path = tmp_path / "test_user_service.py"
         test_path.write_text(test_source)
 
-        gaps = agent.analyze_coverage(sample_source, str(test_path))
+        response = json.dumps({"functions_analyzed": 4, "gaps": []})
+        fake, ctx = _patch_llm(response)
+        with ctx:
+            agent.analyze_coverage(sample_source, str(test_path))
 
-        func_names = [g.function.name for g in gaps]
-        assert "get_user" not in func_names
-        assert "create_user" in func_names
+        assert fake.prompts, "the agent should have called the model"
+        assert "test_get_user_returns_expected" in fake.prompts[0]
 
     def test_analyze_coverage_priority_ordering(self, agent, sample_source):
-        """analyze_coverage() orders gaps by priority (high first)."""
-        gaps = agent.analyze_coverage(sample_source)
+        """analyze_coverage() surfaces high-priority gaps first, whatever order
+        the model emitted them in."""
+        response = json.dumps(
+            {
+                "functions_analyzed": 3,
+                "gaps": [
+                    {"name": "helper_function", "priority": "low", "reason": "trivial"},
+                    {"name": "create_user", "priority": "high", "reason": "business logic"},
+                    {"name": "get_user", "priority": "medium", "reason": "reads db"},
+                ],
+            }
+        )
+        _fake, ctx = _patch_llm(response)
+        with ctx:
+            gaps = agent.analyze_coverage(sample_source)
 
-        priorities = [g.priority for g in gaps]
         priority_order = {"high": 0, "medium": 1, "low": 2}
-        values = [priority_order[p] for p in priorities]
+        values = [priority_order[g.priority] for g in gaps]
         assert values == sorted(values)
+        assert gaps[0].function.name == "create_user"  # high priority floats up
 
-    def test_analyze_coverage_skips_dunders(self, agent, sample_source):
-        """analyze_coverage() skips dunder methods except __init__."""
-        gaps = agent.analyze_coverage(sample_source)
-        func_names = [g.function.name for g in gaps]
+    def test_analyze_coverage_prompt_skips_dunders(self, agent, sample_source):
+        """The coverage prompt instructs the model to skip dunders except
+        __init__."""
+        fake, ctx = _patch_llm(json.dumps({"functions_analyzed": 0, "gaps": []}))
+        with ctx:
+            agent.analyze_coverage(sample_source)
 
-        # __init__ should be present (it's kept)
-        assert "__init__" in func_names
+        assert "__init__" in fake.prompts[0]
+        assert "dunder" in fake.prompts[0].lower()
 
     def test_generate_unit_tests(self, agent, sample_source):
-        """generate_unit_tests() produces a TestGenerationResult."""
-        result = agent.generate_unit_tests(sample_source)
+        """generate_unit_tests() parses the model response into a result."""
+        response = json.dumps(
+            {
+                "test_file_content": (
+                    "import pytest\n"
+                    "from user_service import UserService\n\n\n"
+                    "def test_get_user_returns_record():\n"
+                    "    assert UserService(FakeDB()).get_user(1) == {'id': 1}\n"
+                ),
+                "test_file_path": "tests/test_user_service.py",
+                "tests_generated": 2,
+                "functions_analyzed": 3,
+                "generated_tests": [
+                    {"test_name": "test_get_user_returns_record", "description": "reads a record"},
+                    {"test_name": "test_create_user_requires_name", "description": "raises on empty name"},
+                ],
+            }
+        )
+        _fake, ctx = _patch_llm(response)
+        with ctx:
+            result = agent.generate_unit_tests(sample_source)
 
         assert isinstance(result, TestGenerationResult)
         assert result.source_file == sample_source
-        assert result.functions_analyzed > 0
-        assert result.tests_generated > 0
-        assert len(result.generated_tests) > 0
+        assert result.functions_analyzed == 3
+        assert result.tests_generated == 2
+        assert len(result.generated_tests) == 2
         assert result.test_file_content != ""
         assert result.test_file_path != ""
 
     def test_generate_unit_tests_content(self, agent, sample_source):
-        """generate_unit_tests() generates valid test content."""
-        result = agent.generate_unit_tests(sample_source)
+        """generate_unit_tests() surfaces the model's real test file content."""
+        response = json.dumps(
+            {
+                "test_file_content": "import pytest\n\n\ndef test_thing():\n    assert True\n",
+                "test_file_path": "tests/test_user_service.py",
+                "tests_generated": 1,
+                "functions_analyzed": 1,
+                "generated_tests": [{"test_name": "test_thing", "description": "x"}],
+            }
+        )
+        _fake, ctx = _patch_llm(response)
+        with ctx:
+            result = agent.generate_unit_tests(sample_source)
 
-        # Verify test file content structure
         assert "import pytest" in result.test_file_content
         assert "def test_" in result.test_file_content
 
-    def test_generate_unit_tests_with_existing(self, agent, sample_source, tmp_path):
-        """generate_unit_tests() skips already-covered functions.
+    def test_generation_keeps_content_mentioning_limit_or_error(
+        self, agent, sample_source
+    ):
+        """Regression: a valid response whose test code says "limit"/"error" must
+        NOT be discarded as a rate-limit and replaced with a placeholder stub.
 
-        We mock the LLM call so the assertion below tests our logic (that
-        existing_test_path is forwarded into the prompt and the result is
-        well-formed) rather than the non-determinism of two live LLM calls.
-        Without the mock, two calls can legitimately return different counts
-        and the assertion flakes — that was a real pre-push blocker.
+        This is the exact failure that showed the "// Tests would be generated
+        here when API is available" box for a feature named "…limitation…".
         """
-        test_source = textwrap.dedent('''
-            def test_get_user_returns_expected():
-                pass
-            def test_create_user_success():
-                pass
-            def test_helper_function_returns():
-                pass
-        ''')
+        content = (
+            "import pytest\n\n\n"
+            "def test_rejects_value_over_limit():\n"
+            "    # limitation check — error handling path\n"
+            "    with pytest.raises(ValueError):\n"
+            "        validate(999)\n"
+        )
+        response = json.dumps(
+            {
+                "test_file_content": content,
+                "test_file_path": "tests/test_user_service.py",
+                "tests_generated": 1,
+                "functions_analyzed": 1,
+                "generated_tests": [
+                    {"test_name": "test_rejects_value_over_limit", "description": "boundary + error"}
+                ],
+            }
+        )
+        _fake, ctx = _patch_llm(response)
+        with ctx:
+            result = agent.generate_unit_tests(sample_source)
+
+        assert result.test_file_content == content
+        assert "Tests would be generated here" not in result.test_file_content
+        assert result.tests_generated == 1
+        # The empty-card fix: each test carries its real source, not "".
+        assert "test_rejects_value_over_limit" in result.generated_tests[0].test_code
+
+    def test_generate_unit_tests_forwards_max_and_existing(
+        self, agent, sample_source, tmp_path
+    ):
+        """The unit prompt carries max_tests_per_function and existing tests."""
+        test_source = "def test_get_user_returns_expected():\n    pass\n"
         test_path = tmp_path / "test_existing.py"
         test_path.write_text(test_source)
 
-        fake_response = textwrap.dedent('''
+        response = json.dumps(
             {
-              "test_file_content": "import pytest\\n\\ndef test_stub():\\n    pass\\n",
-              "test_file_path": "test_user_service.py",
-              "tests_generated": 2,
-              "functions_analyzed": 2,
-              "generated_tests": [
-                {"test_name": "test_stub", "description": "stub"}
-              ]
+                "test_file_content": "import pytest\n\n\ndef test_x():\n    assert True\n",
+                "test_file_path": "tests/test_user_service.py",
+                "tests_generated": 1,
+                "functions_analyzed": 1,
+                "generated_tests": [{"test_name": "test_x", "description": "x"}],
             }
-        ''').strip()
+        )
+        fake, ctx = _patch_llm(response)
+        with ctx:
+            agent.generate_unit_tests(
+                sample_source, str(test_path), max_tests_per_function=1
+            )
 
-        async def fake_call(_prompt):
-            return fake_response
-
-        with patch.object(agent, "_call_claude", side_effect=fake_call):
-            result = agent.generate_unit_tests(sample_source, str(test_path))
-            result_no_existing = agent.generate_unit_tests(sample_source)
-
-        assert result.tests_generated <= result_no_existing.tests_generated
+        assert "Max tests per function: 1" in fake.prompts[0]
+        assert "test_get_user_returns_expected" in fake.prompts[0]
 
     def test_generate_tdd_tests(self, agent):
-        """generate_tdd_tests() produces TDD test stubs."""
+        """generate_tdd_tests() parses the failing-test file the model returns."""
         spec = {
             "name": "calculate_price",
             "module": "pricing",
-            "args": ["base_price", "discount", "tax_rate"],
-            "returns": "float",
             "description": "Calculate final price with discount and tax",
-            "edge_cases": [
-                "zero discount",
-                "100 percent discount",
-                "negative price",
-            ],
+            "language": "python",
+            "edge_cases": ["zero discount", "negative price"],
         }
-
-        result = agent.generate_tdd_tests(spec)
+        response = json.dumps(
+            {
+                "test_file_content": (
+                    "import pytest\n"
+                    "from pricing import calculate_price\n\n\n"
+                    "def test_calculate_price_applies_discount():\n"
+                    "    assert calculate_price(100, 0.1, 0.2) == pytest.approx(108.0)\n\n\n"
+                    "def test_calculate_price_rejects_negative():\n"
+                    "    with pytest.raises(ValueError):\n"
+                    "        calculate_price(-1, 0, 0)\n"
+                ),
+                "test_file_path": "tests/test_calculate_price.py",
+                "tests_generated": 2,
+                "functions_analyzed": 0,
+                "generated_tests": [
+                    {"test_name": "test_calculate_price_applies_discount", "description": "happy path"},
+                    {"test_name": "test_calculate_price_rejects_negative", "description": "error case"},
+                ],
+            }
+        )
+        _fake, ctx = _patch_llm(response)
+        with ctx:
+            result = agent.generate_tdd_tests(spec)
 
         assert isinstance(result, TestGenerationResult)
-        assert result.tests_generated >= 3  # happy + edge cases + error
-        assert "test_calculate_price_happy_path" in result.test_file_content
-        assert "test_calculate_price_error_handling" in result.test_file_content
-        assert "TDD" in result.test_file_content
+        assert result.tests_generated == 2
+        assert "calculate_price" in result.test_file_content
+        assert len(result.generated_tests) == 2
+        assert result.generated_tests[0].test_code.strip()
 
     def test_generate_e2e_from_user_story(self, agent):
-        """generate_tests_from_user_story() creates E2E tests."""
+        """generate_tests_from_user_story() parses E2E tests and normalises path."""
         user_story = (
             "User registration flow\n"
             "Given a new user visits the registration page\n"
             "When they fill in their name and email\n"
-            "Then they should see a success message\n"
-            "And they should receive a confirmation email"
+            "Then they should see a success message"
         )
-
-        result = agent.generate_tests_from_user_story(
-            user_story, target_module="auth"
+        response = json.dumps(
+            {
+                "test_file_content": (
+                    "import pytest\n\n\n"
+                    "def test_user_registration_flow():\n"
+                    "    assert register('Ada', 'ada@x.io')['ok'] is True\n"
+                ),
+                "test_file_path": "e2e/test_auth.py",
+                "tests_generated": 1,
+                "functions_analyzed": 0,
+                "generated_tests": [
+                    {"test_name": "test_user_registration_flow", "description": "happy path"}
+                ],
+            }
         )
+        _fake, ctx = _patch_llm(response)
+        with ctx:
+            result = agent.generate_tests_from_user_story(
+                user_story, target_module="auth"
+            )
 
         assert isinstance(result, TestGenerationResult)
         assert result.tests_generated >= 1
         assert "e2e" in result.test_file_path
-        assert "E2E" in result.test_file_content
+        assert "registration" in result.test_file_content
 
-    def test_max_tests_per_function(self, agent, sample_source):
-        """generate_unit_tests() respects max_tests_per_function."""
-        result = agent.generate_unit_tests(sample_source, max_tests_per_function=1)
+    def test_e2e_path_normalised_when_model_omits_e2e(self, agent):
+        """E2E results always land under an e2e/ path even if the model didn't."""
+        response = json.dumps(
+            {
+                "test_file_content": "def test_flow():\n    assert True\n",
+                "test_file_path": "tests/test_auth.py",  # missing e2e/
+                "tests_generated": 1,
+                "generated_tests": [{"test_name": "test_flow", "description": "x"}],
+            }
+        )
+        _fake, ctx = _patch_llm(response)
+        with ctx:
+            result = agent.generate_tests_from_user_story("A story", target_module="auth")
 
-        # Each function should have at most 1 test
-        targets = [t.target_function for t in result.generated_tests]
-        from collections import Counter
-        counts = Counter(targets)
-        for count in counts.values():
-            assert count <= 1
+        assert "e2e" in result.test_file_path
+
+    def test_generation_falls_back_to_raw_response_when_not_json(
+        self, agent, sample_source
+    ):
+        """When the model returns raw code (no JSON envelope), the user still
+        sees it — not an empty box or a fake stub."""
+        raw = "import pytest\n\n\ndef test_raw():\n    assert True\n"
+        _fake, ctx = _patch_llm(raw)
+        with ctx:
+            result = agent.generate_unit_tests(sample_source)
+
+        assert result.test_file_content == raw
+        assert "Tests would be generated here" not in result.test_file_content
 
 
 # ── Utility method tests ────────────────────────────────────────
@@ -459,6 +619,45 @@ class TestUtilities:
 
         assert len(scenarios) == 1
         assert len(scenarios[0]["steps"]) == 3
+
+
+# ── _extract_json robustness ────────────────────────────────────
+
+
+class TestExtractJson:
+    """The JSON extractor must trust valid JSON and only bail on unparseable text.
+
+    Regression cover for the bug where any response containing the substrings
+    "limit"/"error"/"reset" was thrown away as a rate-limit — which silently
+    discarded real generated tests for a feature named "…limitation…".
+    """
+
+    @pytest.fixture
+    def agent(self):
+        return TestGeneratorAgent()
+
+    def test_parses_valid_json_even_when_it_mentions_limit_and_error(self, agent):
+        payload = {
+            "test_file_content": "// limitation check; throws on error\n",
+            "tests_generated": 1,
+        }
+        data = agent._extract_json(json.dumps(payload))
+        assert data["tests_generated"] == 1
+        assert "limitation" in data["test_file_content"]
+
+    def test_parses_json_wrapped_in_markdown_fence(self, agent):
+        raw = '```json\n{"tests_generated": 2, "note": "handles error paths"}\n```'
+        data = agent._extract_json(raw)
+        assert data["tests_generated"] == 2
+
+    def test_parses_json_embedded_in_prose(self, agent):
+        raw = 'Sure! Here is the object:\n{"tests_generated": 3}\nHope this helps.'
+        data = agent._extract_json(raw)
+        assert data["tests_generated"] == 3
+
+    def test_returns_empty_dict_for_unparseable_text(self, agent):
+        assert agent._extract_json("rate limit exceeded, try again later") == {}
+        assert agent._extract_json("") == {}
 
 
 # ── GeneratedTest model tests ───────────────────────────────────

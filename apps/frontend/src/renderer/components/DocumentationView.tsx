@@ -11,12 +11,13 @@ import {
 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useProjectStore } from "../stores/project-store";
 import { cn } from "../lib/utils";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
-import { Input } from "./ui/input";
 import { ScrollArea } from "./ui/scroll-area";
+import { FilePathAutocomplete } from "./FilePathAutocomplete";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -161,9 +162,11 @@ function CopyButton({ text }: { readonly text: string }) {
 // Main component
 // ---------------------------------------------------------------------------
 
-// biome-ignore lint/correctness/noUnusedFunctionParameters: parameter kept for API compatibility
 export function DocumentationView({ projectId }: DocumentationViewProps) {
 	const { t } = useTranslation(["documentation"]);
+	const projectPath = useProjectStore(
+		(s) => s.projects.find((p) => p.id === projectId)?.path ?? "",
+	);
 	const [filePath, setFilePath] = useState("");
 	const [dirPath, setDirPath] = useState("");
 	const [coverage, setCoverage] = useState<CoverageResult | null>(null);
@@ -286,9 +289,11 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
 							{t("documentation:coverage.checkLabel")}
 						</label>
 						<div className="flex gap-2">
-							<Input
+							<FilePathAutocomplete
 								value={filePath}
-								onChange={(e) => setFilePath(e.target.value)}
+								onChange={setFilePath}
+								rootPath={projectPath}
+								mode="file"
 								placeholder={t("documentation:coverage.filePathPlaceholder")}
 								className="font-mono text-xs"
 							/>
@@ -327,9 +332,11 @@ export function DocumentationView({ projectId }: DocumentationViewProps) {
 							{t("documentation:readme.generateLabel")}
 						</label>
 						<div className="flex gap-2">
-							<Input
+							<FilePathAutocomplete
 								value={dirPath}
-								onChange={(e) => setDirPath(e.target.value)}
+								onChange={setDirPath}
+								rootPath={projectPath}
+								mode="directory"
 								placeholder={t("documentation:readme.dirPathPlaceholder")}
 								className="font-mono text-xs"
 							/>

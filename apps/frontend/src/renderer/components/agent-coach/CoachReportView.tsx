@@ -1,6 +1,8 @@
 import type React from "react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { useCurrency } from "../../hooks/useCurrency";
+import { formatCurrency } from "../../lib/currency";
 import {
 	setupAgentCoachListeners,
 	useAgentCoachStore,
@@ -37,9 +39,11 @@ function StatCard({
 function ReportBody({
 	report,
 	t,
+	formatCost,
 }: {
 	readonly report: CoachReport;
 	readonly t: (key: string, options?: Record<string, unknown>) => string;
+	readonly formatCost: (usd: number, decimals: number) => string;
 }): React.ReactElement {
 	return (
 		<div className="flex flex-col gap-4">
@@ -48,7 +52,7 @@ function ReportBody({
 					{t("summary", {
 						runs: report.totalRuns,
 						successRate: (report.successRate * 100).toFixed(1),
-						cost: report.totalCostUsd.toFixed(2),
+						cost: formatCost(report.totalCostUsd, 2),
 					})}
 				</p>
 			</div>
@@ -68,7 +72,7 @@ function ReportBody({
 				/>
 				<StatCard
 					label={t("stats.avgCost")}
-					value={`$${report.avgCostUsd.toFixed(4)}`}
+					value={formatCost(report.avgCostUsd, 4)}
 					color="text-purple-400"
 				/>
 				<StatCard
@@ -106,11 +110,14 @@ function ReportBody({
 				))}
 			</div>
 
-			{report.summary && (
-				<p className="text-sm text-(--text-secondary) italic mt-2">
-					{report.summary}
-				</p>
-			)}
+			<p className="text-sm text-(--text-secondary) italic mt-2">
+				{t("summaryDetail", {
+					tips: report.tips.length,
+					runs: report.totalRuns,
+					successRate: (report.successRate * 100).toFixed(0),
+					cost: formatCost(report.totalCostUsd, 2),
+				})}
+			</p>
 		</div>
 	);
 }
@@ -118,7 +125,11 @@ function ReportBody({
 export function CoachReportView({
 	projectPath,
 }: CoachReportViewProps): React.ReactElement {
-	const { t } = useTranslation("agentCoach");
+	const { t, i18n } = useTranslation("agentCoach");
+	const { rate } = useCurrency();
+
+	const formatCost = (usd: number, decimals: number): string =>
+		formatCurrency(usd, i18n.language, rate, decimals);
 
 	useEffect(() => {
 		const cleanup = setupAgentCoachListeners();
@@ -197,7 +208,7 @@ export function CoachReportView({
 			)}
 
 			{phase === "complete" && report && report.totalRuns > 0 && (
-				<ReportBody report={report} t={t} />
+				<ReportBody report={report} t={t} formatCost={formatCost} />
 			)}
 		</div>
 	);

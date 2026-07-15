@@ -31,5 +31,11 @@
 		"networkError": "Network error"
 	},
 	"symbols": { "title": "Symbols" },
-	"docstrings": { "title": "Generated Docstrings ({{count}})" }
+	"docstrings": { "title": "Generated Docstrings ({{count}})" },
+	"autocomplete": {
+		"searching": "Searching…",
+		"noResults": "No matching files",
+		"noResultsDir": "No matching directories",
+		"noProject": "Select a project first"
+	}
 }
