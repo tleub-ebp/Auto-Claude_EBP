@@ -12,9 +12,14 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-  # npm dependencies
+  # npm dependencies.
+  # Root, not /apps/frontend: this is a pnpm workspace, and pnpm-lock.yaml +
+  # pnpm-workspace.yaml (which carries the security `overrides`) both live at the
+  # top level. Pointed at apps/frontend, the updater saw a package.json with no
+  # lockfile beside it and could not open a fix PR — both esbuild and @babel/core
+  # were reported against `pnpm-lock.yaml` and neither got one.
   - package-ecosystem: npm
-    directory: /apps/frontend
+    directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

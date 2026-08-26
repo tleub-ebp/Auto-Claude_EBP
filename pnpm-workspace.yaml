@@ -14,7 +14,18 @@ overrides:
   "builder-util-runtime": ">= 9.7.0"
   "@electron/rebuild": "4.0.3"
   "vite": ">= 8.0.16"
-  "esbuild": ">= 0.25.0"
+  # GHSA-g7r4-m6w7-qqqr: arbitrary file read from the dev server on Windows
+  # (>= 0.27.3, < 0.28.1). The affected copy is the peer vite resolves; vite 8
+  # accepts "^0.27.0 || ^0.28.0", so 0.28.x is in range. Kept global rather than
+  # scoped to vite: esbuild is an *optional peer* there, and a scoped override
+  # left vite with no esbuild at all instead of a patched one. The side effect is
+  # that electron-vite 5.0.0 ("^0.25.11", not itself affected) is pulled up to the
+  # same 0.28.x — it only uses the stable build/transform API.
+  "esbuild": ">= 0.28.1"
+  # GHSA-4x5r-pxfx-6jf8: arbitrary file read via sourceMappingURL comment
+  # (<= 7.29.0). Caret, not ">=", because @vitejs/plugin-react 5.2.0 declares
+  # "^7.29.0" and babel 8 would fall outside it.
+  "@babel/core": "^7.29.6"
   "lodash": ">= 4.18.0"
   "@xmldom/xmldom": "^0.8.12"
   "brace-expansion": ">= 5.0.9"

@@ -14,7 +14,9 @@ author: "WorkPilot AI Team"
 - `scripts/analyze_angular_project.py` — detect Angular version, dependencies, project structure.
 - `scripts/upgrade_angular_version.py` — version migrations with breaking-change detection + auto-fix.
 - `scripts/generate_component.py` — scaffold components (standalone by default).
-- Templates: `templates/component.template.ts`, `templates/standalone.component.template.ts`.
+- Templates: `templates/component.ts.template`, `templates/standalone.component.ts.template`
+  (suffixed `.template` because `{{ComponentName}}` placeholders are not valid TypeScript —
+  a formatter run once rewrote them into uncompilable code).
 
 ```python
 analysis = skill.execute_script("analyze_angular_project.py", {"project_root": "/path"})

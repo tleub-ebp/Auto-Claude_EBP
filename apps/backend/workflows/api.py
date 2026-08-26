@@ -40,13 +40,33 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_WORKFLOW = "feature-build"
 
 
+# A caller-supplied path is capped before it is touched, so a pathological
+# string cannot be walked at all. Same ceiling as the sibling endpoint.
+_MAX_PATH_LEN = 4096
+
+
 def _validate_dir(raw: str, label: str, base: Path | None = None) -> Path:
+    """Resolve a caller-supplied directory, refusing traversal.
+
+    `base` is for paths that are *supposed* to stay under a known root — the
+    spec directory under its project. It is deliberately not applied to
+    `project_dir` itself: a user's project lives wherever they keep it, and
+    almost never inside this repository. `slash_commands.api._safe_project_dir`
+    settled that policy for the sibling endpoint, with the same reasoning that
+    applies here — this endpoint is read-only and side-effect free, so an
+    unknown path yields an error, never a disclosure.
+
+    Anchoring `project_dir` to `_REPO_ROOT` instead made the endpoint reject
+    every real call, since the Kanban sends the project the user opened; a
+    later rule that the path be *relative* rejected the rest, an absolute path
+    being the only thing the renderer has.
+    """
     if not raw or raw.strip().startswith("-"):
         raise ValueError(f"{label} must be a non-empty path not starting with '-'")
+    if len(raw) > _MAX_PATH_LEN:
+        raise ValueError(f"{label} is longer than {_MAX_PATH_LEN} characters")
 
     candidate = Path(raw).expanduser()
-    if candidate.is_absolute():
-        raise ValueError(f"{label} must be a relative path")
     if ".." in candidate.parts:
         raise ValueError(f"{label} must not contain parent-directory traversal")
 
@@ -56,9 +76,9 @@ def _validate_dir(raw: str, label: str, base: Path | None = None) -> Path:
         try:
             p.relative_to(b)
         except ValueError:
-            raise ValueError(f"{label} must be within {b}") from None
+            raise ValueError(f"{label} escapes the directory it belongs to") from None
     if not p.exists() or not p.is_dir():
-        raise ValueError(f"{label} does not exist or is not a directory: {p}")
+        raise ValueError(f"{label} does not exist or is not a directory")
     return p
 
 
@@ -72,16 +92,19 @@ def _resolve_spec_dir(
     written down once, here, instead of once here and once in TypeScript.
     """
     if spec_dir:
-        return _validate_dir(spec_dir, "spec_dir", base=_REPO_ROOT)
+        return _validate_dir(spec_dir, "spec_dir")
     if not (project_dir and spec_id):
         raise ValueError("pass spec_dir, or both project_dir and spec_id")
     if "/" in spec_id or "\\" in spec_id or spec_id in ("", ".", ".."):
         raise ValueError(f"spec_id is not a directory name: {spec_id!r}")
-    root = _validate_dir(project_dir, "project_dir", base=_REPO_ROOT)
+    root = _validate_dir(project_dir, "project_dir")
     candidate = (root / ".workpilot" / "specs" / spec_id).resolve()
     if not str(candidate).startswith(str(root) + os.sep):
         raise ValueError("spec_id escapes the project directory")
-    return _validate_dir(str(candidate), "spec_dir")
+    # Re-checked against the project root: `spec_id` is the untrusted half of
+    # this pair, and the containment test is what keeps it from naming a
+    # directory outside the project it claims to belong to.
+    return _validate_dir(str(candidate), "spec_dir", base=root)
 
 
 def _workflow_path(name: str) -> Path:
@@ -218,8 +241,13 @@ def workflow_profile(
         sd = _resolve_spec_dir(spec_dir, project_dir, spec_id)
         path = _workflow_path(workflow)
     except ValueError as exc:
+        # The reason, not a generic string: every branch above rejects
+        # something the *caller* sent, and the renderer has nothing to show
+        # otherwise. `_validate_dir` and `_workflow_path` are written to keep
+        # resolved server paths out of these messages; the internal-error path
+        # below stays opaque, because that one can carry anything.
         logger.warning("invalid workflow profile request parameters: %s", exc)
-        return {"success": False, "error": "Invalid request parameters."}
+        return {"success": False, "error": str(exc)}
 
     try:
         from phase_config import get_phase_provider, get_phase_thinking
