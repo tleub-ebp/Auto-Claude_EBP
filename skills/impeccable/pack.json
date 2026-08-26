@@ -1,0 +1,29 @@
+{
+	"name": "impeccable",
+	"version": "0.0.0",
+	"description": "Frontend design guidance: 23 commands plus 59 deterministic detector rules that run locally with no API call.",
+	"targets": {},
+	"source": "pbakaus/impeccable",
+	"maintainer": "upstream (vendored on demand)",
+	"bootstrap": {
+		"command": [
+			"python3",
+			"scripts/vendor_pack.py",
+			"pbakaus/impeccable",
+			"--into",
+			"skills/impeccable"
+		],
+		"note": "Vendored by git clone, not by `npx skills add`: that tool writes into every harness directory it knows and writes its own skills-lock.json at the repo root — both are artifacts `skills-cli build` already owns. Verified, not assumed. `npx skills add <repo> --list` remains the way to see what a repository offers."
+	},
+	"gate": {
+		"command": [
+			"npx",
+			"--yes",
+			"impeccable",
+			"detect",
+			"--json"
+		],
+		"clean_when": "exit_zero",
+		"note": "Deterministic: 59 rules evaluated locally, no API call, so pruning it by effort would save nothing and it runs at every level. Its verdict is an external verification signal the learning loop can use — the agent's opinion of its own frontend work is not."
+	}
+}

@@ -1,0 +1,19 @@
+{
+	"name": "claude-mem",
+	"version": "0.0.0",
+	"description": "Persistent session memory (SQLite + Chroma + a Bun worker). Optional: WorkPilot's own three memories plus the mem-search skill cover the same ground without a fourth store.",
+	"targets": {},
+	"source": "thedotmack/claude-mem",
+	"maintainer": "upstream (vendored on demand)",
+	"bootstrap": {
+		"command": [
+			"python3",
+			"scripts/vendor_pack.py",
+			"thedotmack/claude-mem",
+			"--into",
+			"skills/claude-mem"
+		],
+		"note": "Opt-in. WorkPilot already keeps three memories — task_logger captures, graphiti holds the graph, learning_loop distils — and claude-mem would add a fourth with its own Bun worker, SQLite file and Chroma store. What it gets right is its three-layer retrieval, and that is a query shape rather than a dependency: the `mem-search` skill implements it over the stores already here. Declared so anyone running Claude Code without the WorkPilot backend can have the real thing with `skills:bootstrap --pack claude-mem`. Vendored by git clone like the other upstream packs — see scripts/vendor_pack.py for why `npx skills add` cannot be the fetcher.",
+		"optional": true
+	}
+}

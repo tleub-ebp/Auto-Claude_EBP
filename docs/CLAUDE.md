@@ -18,6 +18,8 @@ WorkPilot AI is an autonomous multi-agent coding framework that plans, builds, a
   - [Spec Directory Structure](#spec-directory-structure)
   - [Memory System (Graphiti)](#memory-system-graphiti)
   - [Skills System](#skills-system)
+  - [Memory Search (mem-search)](#memory-search-mem-search)
+  - [Declarative Workflows](#declarative-workflows)
   - [Workflow Logger](#workflow-logger)
 - [Frontend Development](#frontend-development)
   - [Tech Stack](#tech-stack)
@@ -99,7 +101,7 @@ WorkPilot-AI/
 │   │   ├── agents/                   # planner, coder, session management
 │   │   ├── qa/                       # reviewer, fixer, loop, criteria
 │   │   ├── spec/                     # Spec creation pipeline
-│   │   ├── skills/                   # AI skills system with optimization
+│   │   ├── skills/                   # Executable Python skills (angular, migration)
 │   │   ├── cli/                      # CLI commands (spec, build, workspace, QA)
 │   │   ├── context/                  # Task context building, semantic search
 │   │   ├── runners/                  # 66 standalone runners (spec, roadmap, insights, github, self-healing, etc.)
@@ -256,33 +258,113 @@ Graph-based semantic memory in `integrations/graphiti/`. Configured through the 
 
 ### Skills System
 
-Advanced AI skills system in `apps/backend/skills/` with token optimization and dynamic context management:
+Skills are markdown files with YAML frontmatter, following the [Agent Skills](https://agentskills.io)
+open standard so the same file works across Claude Code, Copilot, Codex, Cursor and Gemini.
 
-**Key Features:**
-- **Token Optimization:** Compress metadata, limit descriptions to 512 chars, cache operations
-- **Context Management:** Aggressive compaction at 70% limit, checkpoint system
-- **Performance:** Default max_workers=3, timeout=25s, subagent delegation
-- **Dynamic Registration:** Runtime skill validation and registration
+**Where they live:**
 
-**Usage Example:**
+| Path | Role |
+|---|---|
+| `.agents/skills/<name>/SKILL.md` | The source read in production. Provider- and IDE-agnostic. |
+| `.claude/skills/`, `.github/skills/`, `.cursor/skills/` | Per-harness mirrors |
+| `.gemini/commands/*.toml` | Gemini CLI mirror |
+
+Those are **generated**. `skills/` is the source, and `scripts/skills_cli.py` is the only
+thing that writes the outputs — `pnpm run skills:check` fails CI on drift. Packs are
+added, updated and dropped through the same CLI (`skills:add`, `skills:update`,
+`skills:remove`), which keeps `skills-lock.json`, `.workpilot/skills.toml` and the
+`.gitignore` entries in step. See [skills/README.md](../skills/README.md).
+
+`apps/backend/slash_commands/api.py` scans `.agents/skills/` and serves the result to the
+Kanban Quick-Command bar (`GET /api/slash-commands`), then resolves a command's body
+server-side so any provider can execute it.
+
+**Reading frontmatter:** always through `skills_registry.frontmatter.parse_frontmatter`.
+It parses with PyYAML and degrades to a line parser for hand-edited blocks. Do not write
+another one — the repo used to carry four, with divergent semantics, and three of them
+truncated any description ending in a quoted phrase.
+
+WorkPilot-specific fields live under `metadata.workpilot` (pack, version, targets,
+requires, min_effort, provenance) — a free-form space the Agent Skills spec reserves for
+tooling and that Claude Code ignores.
+
+**Python-side skills:** `apps/backend/skills/` holds two executable skills (`angular/`,
+`migration/`) loaded by `skill_manager.py` with progressive disclosure — metadata first,
+instructions on trigger, scripts on demand:
+
 ```python
-from apps.backend.skills.skill_manager import skill_manager
+from skills.skill_manager import SkillManager
 
-# Execute optimized skill
-result = await skill_manager.execute_skill(
-    skill_name="framework-migration",
-    action="analyze",
-    context={"framework": "react", "project_path": "/path/to/project"}
-)
+manager = SkillManager("apps/backend/skills")
+skill = manager.load_skill("framework-migration")
+result = skill.execute_script("analyze_stack.py", {"project-root": "/path/to/project"})
 ```
 
-**Files:**
-- `skill_manager.py` - Main skill orchestration
-- `context_optimizer.py` - Context compaction and checkpoints
-- `token_optimizer.py` - Token counting and compression
-- `dynamic_skill_manager.py` - Runtime skill registration
+### Memory Search (`mem-search`)
 
-See `apps/backend/skills/CLAUDE.md` for detailed guidelines.
+Three-layer progressive retrieval over the memories that already exist — `task_logger`
+traces and `learning_loop` patterns — so an agent can ask "have we hit this before?"
+without paying for every candidate to discard most of them.
+
+```python
+from mem_search import search_for
+
+memory = search_for(project_dir)
+index = memory.index("flaky timeout in the integration suite")  # ~100 tokens, always
+memory.timeline(index.ids()[:3])                                # a couple of lines each
+memory.detail("task:042-add-widget")                            # the full record, by id
+```
+
+The index is held to a token budget by dropping entries and reporting the count, never
+by truncating what it kept, and building it never reads a record body — a source that
+loaded everything in order to list it would have moved the cost, not removed it.
+
+The agent-facing side is `skills/tooling/mem-search/`. `claude-mem` is declared as an
+**optional** pack (`pnpm run skills:bootstrap --pack claude-mem`) rather than installed:
+its retrieval pattern is what was worth adopting, and taking the tool itself would add a
+fourth memory with its own worker and two more stores.
+
+### Declarative Workflows
+
+`workflows/<name>/workflow.yaml` describes a build as phases; `workflows/engine.py`
+resolves it against the effort level the user picked, the provider's capabilities
+and the files the task touched. The resolved profile is printed before the build
+starts, so the user sees what their effort setting bought.
+
+```bash
+pnpm run skills:workflow -- --effort high      # what would run, and what is pruned
+pnpm run skills:workflow -- --effort low --provider mistral
+```
+
+**Opt-in.** The engine is gated on `WORKPILOT_WORKFLOW_ENGINE=1` in
+`.env-files/.env`; unset, `handle_build_command` behaves exactly as it did
+before. It is off by default because most phases are still executed by the
+hard-coded sequence — see the table below for what the engine actually drives
+today.
+
+| Phase | Who runs it |
+|---|---|
+| `design-check` and any deterministic gate | the engine (`workflows/gates.py`) |
+| the `tests-pass` hard gate | the engine (`workflows/hard_gates.py`) |
+| `observe` | the engine (`learning_loop/observe.py`) |
+| `qa` | the hard-coded loop, which the profile can switch off |
+| everything else | the hard-coded sequence in `run_autonomous_agent` |
+
+Two rules the resolver enforces and that are easy to break:
+
+- **A `hard_gate` is never pruned by effort**, and it is evaluated after the
+  build: `verify` declares `tests-pass`, and `workflows/hard_gates.py` reports
+  whether it held. A gate that failed is reported as failed; one with no
+  evidence to judge is reported as unknown and does not block, because
+  refusing on an absent signal would make every project without a QA report
+  unbuildable.
+- **A deterministic phase is never pruned either.** It costs no API call, so
+  there is no effort level at which skipping it saves anything — and its verdict
+  is an *external* signal the learning loop may count as corroboration.
+
+A phase asking for `subagent-per-task` on a provider with no subagents degrades
+to sequential execution with a context reset, recorded on the resolved phase
+rather than silently pretended.
 
 ### Workflow Logger
 
@@ -545,7 +627,6 @@ export GRAPHITI_ENABLED=true
 ```
 
 **Performance Issues:**
-- Check skill optimization: `python apps/backend/skills/performance_test.py`
 - Monitor workflow logs: `tail -f logs/workflow.log`
 - Reduce concurrent agents in settings
 

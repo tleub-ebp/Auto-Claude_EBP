@@ -56,7 +56,7 @@
 		"format": "biome format --write .",
 		"typecheck": "tsc --noEmit",
 		"fix:electron": "node ../../scripts/fix-electron.js",
-		"sync-backend-port": "python ../../scripts/sync_backend_port_to_frontend_env.py"
+		"sync-backend-port": "node ../../scripts/sync-backend-port-to-frontend-env.cjs"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.71.2",

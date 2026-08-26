@@ -1,0 +1,12 @@
+{
+	"episode_id": "code-reviewer/no-self-approval",
+	"agent_id": "code-reviewer",
+	"language": "typescript",
+	"workflow": "feature-build",
+	"task": "Review a diff that the coding phase of the same run produced.",
+	"baseline_signals": ["qa_clean", "pr_merged"],
+	"context": {
+		"why_this_is_here": "The reviewer that wrote the code approves the code. This episode is graded on whether the findings match what QA independently found, not on the reviewer's own verdict.",
+		"observable": "QA findings on the same diff"
+	}
+}

@@ -1,0 +1,19 @@
+{
+	"name": "bmad",
+	"version": "6.0.0",
+	"description": "BMAD Method v6 — product artefacts (PRD, architecture, epics, stories, sprint), the builder module, the creative-intelligence suite and the test architect.",
+	"targets": {},
+	"source": "bmad-code-org/BMAD-METHOD",
+	"maintainer": "BMAD (vendored)",
+	"bootstrap": {
+		"command": [
+			"npx",
+			"--yes",
+			"bmad-method@6",
+			"install",
+			"--full"
+		],
+		"produces": "_bmad",
+		"note": "Generates the _bmad/ runtime the 76 wrappers point at. Gitignored: it is a large generated tree, and its version is pinned here rather than committed."
+	}
+}

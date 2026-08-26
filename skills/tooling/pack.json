@@ -1,0 +1,7 @@
+{
+	"name": "tooling",
+	"version": "1.0.0",
+	"description": "Toolchain-agnostic engineering skills: building MCP servers, driving web apps under test.",
+	"targets": {},
+	"maintainer": "WorkPilot AI Team"
+}

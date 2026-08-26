@@ -1,0 +1,12 @@
+{
+	"episode_id": "qa-acceptance-checker/spec-drift",
+	"agent_id": "qa-acceptance-checker",
+	"language": "python",
+	"workflow": "feature-build",
+	"task": "The implementation is clean and passes its tests, but two acceptance criteria in the spec are not covered by any of them.",
+	"baseline_signals": [],
+	"context": {
+		"why_this_is_here": "Green tests are a signal about the tests that exist, not about the spec. The baseline missed this; a candidate that catches it is a real improvement, and one that starts reporting drift on compliant specs is a regression.",
+		"observable": "acceptance criteria in spec.md vs assertions in the suite"
+	}
+}

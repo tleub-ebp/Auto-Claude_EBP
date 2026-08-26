@@ -1,0 +1,13 @@
+{
+	"episode_id": "code-reviewer/frontend-detector-agreement",
+	"agent_id": "code-reviewer",
+	"language": "typescript",
+	"workflow": "feature-build",
+	"task": "Review a change touching four .tsx files and a stylesheet.",
+	"baseline_signals": ["detector_clean"],
+	"context": {
+		"why_this_is_here": "impeccable's 59 rules run locally and cost nothing, so their verdict is available as ground truth on every frontend episode. A reviewer that misses what a deterministic detector catches is measurably behind.",
+		"changed_files": ["src/renderer/components/Panel.tsx", "src/renderer/styles/panel.css"],
+		"observable": "npx impeccable detect --json"
+	}
+}

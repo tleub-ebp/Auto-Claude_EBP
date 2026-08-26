@@ -1,0 +1,13 @@
+{
+	"episode_id": "test-runner/dotnet-single-test",
+	"agent_id": "test-runner",
+	"language": "dotnet",
+	"workflow": "feature-build",
+	"task": "One test in a 4000-test solution fails. Iterate on it without running the rest.",
+	"baseline_signals": ["tests_passed"],
+	"context": {
+		"why_this_is_here": "The generic test-runner prompt says 'run the tests'. On a solution this size that is a ten-minute round trip per iteration, so the language overlay has to surface --filter.",
+		"expects_mention": "dotnet test --filter",
+		"observable": "wall-clock time per iteration"
+	}
+}

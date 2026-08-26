@@ -1,0 +1,95 @@
+name: feature-build
+description: >-
+  The default build pipeline. Replaces the sequence hard-coded in
+  cli/build_commands.py, and is what arbitrates between the methodology packs:
+  each phase names an implementation, so BMAD, superpowers and mattpocock stop
+  being three competing methodologies and become interchangeable parts.
+
+# Phase ids reuse the vocabulary phase_config already knows (spec, planning,
+# coding, qa), so per-phase model and effort resolution keeps working unchanged.
+phases:
+  - id: brainstorm
+    impl: superpowers/brainstorming
+    min_effort: high
+    description: >-
+      Refuse to write code until the design has been questioned and agreed.
+      Expensive in turns, so it earns its place only at high effort.
+
+  - id: spec
+    impl: bmad/bmad-bmm-create-prd
+    min_effort: medium
+    description: Product artefact — what we are building and why.
+
+  - id: planning
+    impl: workpilot/planner
+    min_effort: low
+    gate: human
+    description: >-
+      The existing planner. Human approval before implementation starts is a
+      deliberate stop, not a formality.
+
+  - id: coding
+    impl: superpowers/test-driven-development
+    dispatch: subagent-per-task
+    description: >-
+      Red-green-refactor. Degrades to sequential execution with a context reset
+      on providers that cannot run subagents.
+
+  - id: design-check
+    impl: impeccable/impeccable
+    when: touches("**/*.tsx,**/*.jsx,**/*.css,**/*.scss,**/*.vue")
+    description: >-
+      Frontend only. impeccable's 59 detector rules run locally with no API
+      call, so this is never pruned by effort — skipping it would save nothing.
+
+  - id: review
+    impl: mattpocock/code-review
+    min_effort: medium
+    dispatch: fresh-context
+    description: >-
+      A reviewer that did not write the code. At low effort the coding phase's
+      own self-review is what there is.
+
+  - id: qa
+    impl: workpilot/qa-loop
+    min_effort: low
+    description: The existing QA reviewer/fixer loop.
+
+  - id: adversarial-review
+    impl: bmad/bmad-review-adversarial-general
+    min_effort: ultrathink
+    dispatch: fresh-context
+    description: >-
+      A reader whose job is to find what is wrong, not to agree. Only at the
+      top effort level: it is a second full pass over the same code, and the
+      point of paying for ultrathink is buying the pass that disagrees with the
+      first one. Runs in a fresh context so it inherits none of the reasoning
+      it is supposed to attack.
+
+  - id: spec-conformance
+    impl: bmad/bmad-bmm-check-implementation-readiness
+    min_effort: ultrathink
+    dispatch: fresh-context
+    description: >-
+      The second of the two ultrathink readings, and a different question from
+      the one above: not "is this good code" but "is this the thing that was
+      asked for". Green tests are evidence about the tests that exist, not
+      about the acceptance criteria nobody wrote a test for. The
+      `qa-acceptance-checker` subagent does this inside the QA loop; this is
+      the same audit run against the finished branch with nothing else in
+      context.
+
+  - id: verify
+    impl: superpowers/verification-before-completion
+    hard_gate: tests-pass
+    description: >-
+      Never pruned at any effort. Whether the tests pass is not a budget
+      decision, and "it looked right" is not evidence.
+
+  - id: observe
+    impl: task-observer/task-observer
+    always: true
+    description: >-
+      Watches for corrections the user made, work no skill covered, and its own
+      blind spots. Writes candidates to skills/_proposed/ and never edits a
+      skill directly. Near-free, so it runs at every effort level.

@@ -1,0 +1,20 @@
+{
+	"name": "workpilot",
+	"owner": {
+		"name": "WorkPilot AI Team"
+	},
+	"plugins": [
+		{
+			"name": "workpilot-comms",
+			"source": "./skills/comms",
+			"version": "1.0.0",
+			"description": "Business communication and brand guidelines for generated documents and reports."
+		},
+		{
+			"name": "workpilot-tooling",
+			"source": "./skills/tooling",
+			"version": "1.0.0",
+			"description": "Toolchain-agnostic engineering skills: building MCP servers, driving web apps under test."
+		}
+	]
+}

@@ -276,11 +276,14 @@ class ParallelOrchestratorReviewer:
         """
         Define specialist agents for the SDK.
 
-        Each agent has:
-        - description: When the orchestrator should invoke this agent
-        - prompt: System prompt for the agent (includes working directory)
-        - tools: Tools the agent can use (read-only for PR review)
-        - model: "inherit" = use same model as orchestrator (user's choice)
+        The roster itself lives in `agents/subagents/pr_review.py`, with the
+        other three. It used to be declared here, which made this the fourth
+        place in the repo where subagents were defined and the only one the
+        registry could not see.
+
+        What stays here is what depends on this review: which worktree the
+        agents read from. A subagent does not inherit the parent's cwd, so
+        every prompt is prefixed with the path explicitly.
 
         Args:
             project_root: Working directory for the agents (worktree path).
@@ -288,106 +291,16 @@ class ParallelOrchestratorReviewer:
 
         Returns AgentDefinition dataclass instances as required by the SDK.
         """
-        # Use provided project_root or fall back to default
+        # Imported here, not at module scope: the registry binds
+        # `claude_agent_sdk` when it loads, and this module is imported by
+        # callers that never build a roster. Pulling the SDK in for them makes
+        # the binding depend on import order rather than on need.
+        from agents.subagents.pr_review import pr_review_agents
+
         working_dir = project_root or self.project_dir
-
-        # Load agent prompts from files
-        security_prompt = self._load_prompt("pr_security_agent.md")
-        quality_prompt = self._load_prompt("pr_quality_agent.md")
-        logic_prompt = self._load_prompt("pr_logic_agent.md")
-        codebase_fit_prompt = self._load_prompt("pr_codebase_fit_agent.md")
-        ai_triage_prompt = self._load_prompt("pr_ai_triage.md")
-        validator_prompt = self._load_prompt("pr_finding_validator.md")
-
-        # CRITICAL: Inject working directory into all prompts
-        # Subagents don't inherit cwd from parent, so they need explicit path info
         with_working_dir = create_working_dir_injector(working_dir)
 
-        return {
-            "security-reviewer": AgentDefinition(
-                description=(
-                    "Security specialist. Use for OWASP Top 10, authentication, "
-                    "injection, cryptographic issues, and sensitive data exposure. "
-                    "Invoke when PR touches auth, API endpoints, user input, database queries, "
-                    "or file operations. Use Read, Grep, and Glob tools to explore related files, "
-                    "callers, and tests as needed."
-                ),
-                prompt=with_working_dir(
-                    security_prompt, "You are a security expert. Find vulnerabilities."
-                ),
-                tools=["Read", "Grep", "Glob"],
-                model="inherit",
-            ),
-            "quality-reviewer": AgentDefinition(
-                description=(
-                    "Code quality expert. Use for complexity, duplication, error handling, "
-                    "maintainability, and pattern adherence. Invoke when PR has complex logic, "
-                    "large functions, or significant business logic changes. Use Grep to search "
-                    "for similar patterns across the codebase for consistency checks."
-                ),
-                prompt=with_working_dir(
-                    quality_prompt,
-                    "You are a code quality expert. Find quality issues.",
-                ),
-                tools=["Read", "Grep", "Glob"],
-                model="inherit",
-            ),
-            "logic-reviewer": AgentDefinition(
-                description=(
-                    "Logic and correctness specialist. Use for algorithm verification, "
-                    "edge cases, state management, and race conditions. Invoke when PR has "
-                    "algorithmic changes, data transformations, concurrent operations, or bug fixes. "
-                    "Use Grep to find callers and dependents that may be affected by logic changes."
-                ),
-                prompt=with_working_dir(
-                    logic_prompt, "You are a logic expert. Find correctness issues."
-                ),
-                tools=["Read", "Grep", "Glob"],
-                model="inherit",
-            ),
-            "codebase-fit-reviewer": AgentDefinition(
-                description=(
-                    "Codebase consistency expert. Use for naming conventions, ecosystem fit, "
-                    "architectural alignment, and avoiding reinvention. Invoke when PR introduces "
-                    "new patterns, large additions, or code that might duplicate existing functionality. "
-                    "Use Grep and Glob to explore existing patterns and conventions in the codebase."
-                ),
-                prompt=with_working_dir(
-                    codebase_fit_prompt,
-                    "You are a codebase expert. Check for consistency.",
-                ),
-                tools=["Read", "Grep", "Glob"],
-                model="inherit",
-            ),
-            "ai-triage-reviewer": AgentDefinition(
-                description=(
-                    "AI comment validator. Use for triaging comments from CodeRabbit, "
-                    "Gemini Code Assist, Cursor, Greptile, and other AI reviewers. "
-                    "Invoke when PR has existing AI review comments that need validation."
-                ),
-                prompt=with_working_dir(
-                    ai_triage_prompt,
-                    "You are an AI triage expert. Validate AI comments.",
-                ),
-                tools=["Read", "Grep", "Glob"],
-                model="inherit",
-            ),
-            "finding-validator": AgentDefinition(
-                description=(
-                    "Finding validation specialist. Re-investigates findings to validate "
-                    "they are actually real issues, not false positives. "
-                    "Reads the ACTUAL CODE at the finding location with fresh eyes. "
-                    "CRITICAL: Invoke for ALL findings after specialist agents complete. "
-                    "Can confirm findings as valid OR dismiss them as false positives. "
-                    "Use Read, Grep, and Glob to check for mitigations the original agent missed."
-                ),
-                prompt=with_working_dir(
-                    validator_prompt, "You validate whether findings are real issues."
-                ),
-                tools=["Read", "Grep", "Glob"],
-                model="inherit",
-            ),
-        }
+        return pr_review_agents(self._load_prompt, with_working_dir)
 
     # =========================================================================
     # Parallel SDK Sessions Implementation

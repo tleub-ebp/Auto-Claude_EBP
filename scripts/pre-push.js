@@ -237,11 +237,29 @@ if (ruffPath) {
 			"--check",
 		]),
 	);
+	// The two scripts that write the generated skill output. CI lints them for
+	// the same reason: they produce files the `skills` job then verifies.
+	jobs.push(
+		runJob("skills:ruff", ruffPath, [
+			"check",
+			"scripts/skills_cli.py",
+			"scripts/skills_sync.py",
+		]),
+	);
 } else {
 	console.warn(
 		"⚠  ruff not found in venv — skipping backend lint. Install with `pip install ruff`.",
 	);
 }
+
+// `.agents/skills/`, `.agents/agents/` and the harness mirrors are build
+// output. Cheap, deterministic and offline, so it belongs in the default pass
+// rather than being discovered on CI after the push. Python is required
+// anyway for the ruff jobs above.
+const pythonPath = findVenvBin(ROOT, "python") || "python3";
+jobs.push(
+	runJob("skills:check", pythonPath, ["scripts/skills_cli.py", "build", "--check"]),
+);
 
 // --- Checks lourds : opt-in seulement -------------------------------------
 // pytest / tsc / vitest coûtent plusieurs minutes et sont DÉJÀ rejoués par la

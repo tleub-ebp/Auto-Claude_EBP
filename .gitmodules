@@ -1,0 +1,3 @@
+[submodule "src/connectors/grepai/grepai"]
+	path = src/connectors/grepai/grepai
+	url = https://github.com/yoanbernabeu/grepai.git

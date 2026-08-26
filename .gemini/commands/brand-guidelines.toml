@@ -1,0 +1,41 @@
+description = "Charte de marque EBP (couleurs, typographie, formatage) pour documents et présentations professionnels. À utiliser pour appliquer l'identité visuelle, choisir des couleurs de marque, formater des rapports, business plans, présentations Word/PowerPoint/Excel/PDF."
+prompt = """
+# Charte de Marque EBP
+
+Identité visuelle et règles de style pour produire des artefacts professionnels cohérents.
+
+## Couleurs (RGB)
+
+| Rôle | Hex | Usage |
+|------|-----|-------|
+| Bleu primaire | `#0056b3` | Titres, éléments importants |
+| Gris foncé | `#2c3e50` | Texte principal, fonds sombres |
+| Blanc | `#ffffff` | Fonds clairs, texte sur fond sombre |
+| Gris moyen | `#95a5a6` | Éléments secondaires |
+| Orange (accent) | `#ff6b35` | CTA, accent primaire |
+| Vert | `#27ae60` | Succès, indicateurs positifs |
+| Rouge | `#e74c3c` | Alertes, indicateurs négatifs |
+
+Sélectionner la couleur de texte selon le contraste du fond. Les formes non-textuelles cyclent entre orange → vert → bleu.
+
+## Typographie
+
+- **Titres (≥18pt)** : Inter (fallback Arial)
+- **Texte corps** : Open Sans (fallback Helvetica)
+- Le fallback est automatique si la police n'est pas installée — aucune installation requise, mais pré-installer Inter/Open Sans donne le meilleur rendu.
+
+## Formats & modèles
+
+Formats supportés : `.docx`, `.pptx`, `.xlsx`, `.pdf`.
+
+- **Business plan** : sections exécutives, financières, opérationnelles
+- **Rapport de projet** : KPIs, timeline, risques (voir `examples/business-report-template.md`)
+- **Présentation** : en-tête, pied de page et branding cohérents
+
+## Règles
+
+1. **Cohérence** visuelle sur tous les documents
+2. **Hiérarchie** via la typographie (tailles, graisses)
+3. **Accessibilité** : contraste suffisant pour la lisibilité
+4. **Professionnalisme** aligné sur les standards EBP
+"""

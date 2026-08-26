@@ -1,0 +1,13 @@
+{
+	"episode_id": "test-runner/python-collection-error",
+	"agent_id": "test-runner",
+	"language": "python",
+	"workflow": "feature-build",
+	"task": "The suite reports 0 tests and a non-zero exit. Find out why and get it green.",
+	"baseline_signals": ["tests_passed"],
+	"context": {
+		"why_this_is_here": "A collection error is not a test failure. An agent that reads only the tail of the output sees '0 passed' and reports the suite as empty, which is the wrong diagnosis and the wrong fix.",
+		"changed_files": ["tests/conftest.py"],
+		"observable": "ImportError at the top of the pytest output, exit code 2"
+	}
+}

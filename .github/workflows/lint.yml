@@ -10,6 +10,17 @@ on:
       - '.github/actions/**'
       - 'apps/frontend/biome.jsonc'
       - '.pre-commit-config.yaml'
+      - 'skills/**'
+      - 'capabilities/**'
+      - '.agents/**'
+      - '.gemini/**'
+      - '.claude-plugin/**'
+      - 'skills-lock.json'
+      - 'scripts/skills_cli.py'
+      - 'scripts/skills_sync.py'
+      - '.workpilot/skills.toml'
+      - '.codex/**'
+      - '.github/agents/**'
   pull_request:
     branches: [main, develop]
     paths:
@@ -19,6 +30,17 @@ on:
       - '.github/actions/**'
       - 'apps/frontend/biome.jsonc'
       - '.pre-commit-config.yaml'
+      - 'skills/**'
+      - 'capabilities/**'
+      - '.agents/**'
+      - '.gemini/**'
+      - '.claude-plugin/**'
+      - 'skills-lock.json'
+      - 'scripts/skills_cli.py'
+      - 'scripts/skills_sync.py'
+      - '.workpilot/skills.toml'
+      - '.codex/**'
+      - '.github/agents/**'
 
 permissions:
   contents: read
@@ -52,6 +74,16 @@ jobs:
       - name: Run ruff format check
         run: ruff format apps/backend/ --check --diff
 
+      # `scripts/` as a whole is not linted here: three unrelated merge scripts
+      # carry pre-existing violations, and fixing them belongs to whoever owns
+      # them. These two are the registry's own, and they write the generated
+      # output the `skills` job then verifies — so they get the same guarantee
+      # as the code they generate from.
+      - name: Run ruff on the skills scripts
+        run: |
+          ruff check scripts/skills_cli.py scripts/skills_sync.py --output-format=github
+          ruff format scripts/skills_cli.py scripts/skills_sync.py --check --diff
+
   # TypeScript/JavaScript linting (Biome) - 15-25x faster than ESLint
   typescript:
     name: TypeScript (Biome)
@@ -74,22 +106,50 @@ jobs:
         # Use --error-on-warnings when ready to enforce all rules
         run: biome ci .
 
+  # Skills are generated: `skills/` is the source, `.agents/skills/` and the
+  # harness mirrors are build output. This fails when someone edits an output
+  # by hand or forgets to rebuild after editing a source.
+  skills:
+    name: Skills (generated output)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install "PyYAML>=6.0" pytest
+
+      - name: Check materialised skills are up to date
+        run: python3 scripts/skills_cli.py build --check
+
+      # The gate the learning loop has to pass. Offline: the replay uses a
+      # recorded grader, so this costs no API call and cannot flake on one.
+      - name: Skills evaluation harness
+        run: python3 -m pytest tests/skills_eval/ -q -p no:cacheprovider
+
   # --------------------------------------------------------------------------
   # Gate Job - Single check for branch protection
   # --------------------------------------------------------------------------
   lint-complete:
     name: Lint Complete
     runs-on: ubuntu-latest
-    needs: [python, typescript]
+    needs: [python, typescript, skills]
     if: always()
     steps:
       - name: Check lint results
         run: |
           if [[ "${{ needs.python.result }}" != "success" ]] || \
-             [[ "${{ needs.typescript.result }}" != "success" ]]; then
+             [[ "${{ needs.typescript.result }}" != "success" ]] || \
+             [[ "${{ needs.skills.result }}" != "success" ]]; then
             echo "❌ Linting failed"
             echo "  Python:     ${{ needs.python.result }}"
             echo "  TypeScript: ${{ needs.typescript.result }}"
+            echo "  Skills:     ${{ needs.skills.result }}"
             exit 1
           fi
           echo "✅ All linting passed"

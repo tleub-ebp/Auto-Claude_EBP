@@ -23,6 +23,12 @@ from typing import Any
 from core.workflow_logger import workflow_logger
 
 logging.basicConfig(level=logging.INFO)
+try:
+    from skills_registry.frontmatter import parse_frontmatter
+except ImportError:  # running as `python skills/skill_manager.py`
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from skills_registry.frontmatter import parse_frontmatter
+
 logger = logging.getLogger(__name__)
 
 
@@ -201,7 +207,10 @@ class SkillManager:
                 if skill_file.exists():
                     try:
                         metadata = self._extract_metadata(skill_file)
-                        metadata.skill_path = skill_dir
+                        # Resolve: execute_script() runs the subprocess with cwd set
+                        # to the skills dir's parent, so a relative skill_path would
+                        # be joined onto that cwd and double the prefix.
+                        metadata.skill_path = skill_dir.resolve()
                         self.skill_metadata[metadata.name] = metadata
                         logger.debug(f"Loaded metadata for skill: {metadata.name}")
                     except Exception as e:
@@ -210,53 +219,33 @@ class SkillManager:
         logger.info(f"Loaded metadata for {len(self.skill_metadata)} skills")
 
     def _extract_metadata(self, skill_file: Path) -> SkillMetadata:
-        """Extract metadata from SKILL.md frontmatter."""
+        """Extract metadata from SKILL.md frontmatter.
+
+        Parsing is delegated to skills_registry.frontmatter so this module
+        agrees with the slash-command API on what a frontmatter block means.
+        """
         content = skill_file.read_text(encoding="utf-8")
+        try:
+            meta, _ = parse_frontmatter(content)
+        except Exception as e:
+            logger.error(f"Error parsing frontmatter in {skill_file}: {e}")
+            meta = {}
 
-        # Extract YAML frontmatter
-        if content.startswith("---"):
-            try:
-                end_marker = content.find("---", 3)
-                if end_marker != -1:
-                    frontmatter = content[3:end_marker].strip()
-                    metadata_dict = {}
+        if not meta:
+            return SkillMetadata(
+                name=skill_file.parent.name,
+                description="No description available",
+                triggers=[],
+                category="general",
+            )
 
-                    # Simple YAML parsing for our specific fields
-                    for line in frontmatter.split("\n"):
-                        if ":" in line:
-                            key, value = line.split(":", 1)
-                            key = key.strip()
-                            value = value.strip()
-
-                            # Handle different field types
-                            if key == "triggers":
-                                # Parse triggers as list
-                                value = value.strip("[]").split(",")
-                                value = [
-                                    t.strip().strip("\"'") for t in value if t.strip()
-                                ]
-                            elif key.startswith('"') and key.endswith('"'):
-                                value = value.strip("\"'")
-
-                            metadata_dict[key] = value
-
-                    return SkillMetadata(
-                        name=metadata_dict.get("name", ""),
-                        description=metadata_dict.get("description", ""),
-                        triggers=metadata_dict.get("triggers", []),
-                        category=metadata_dict.get("category", "general"),
-                        version=metadata_dict.get("version", "1.0.0"),
-                        author=metadata_dict.get("author", ""),
-                    )
-            except Exception as e:
-                logger.error(f"Error parsing frontmatter in {skill_file}: {e}")
-
-        # Fallback if frontmatter parsing fails
         return SkillMetadata(
-            name=skill_file.parent.name,
-            description="No description available",
-            triggers=[],
-            category="general",
+            name=str(meta.get("name", "") or ""),
+            description=str(meta.get("description", "") or ""),
+            triggers=list(meta.get("triggers", []) or []),
+            category=str(meta.get("category", "general") or "general"),
+            version=str(meta.get("version", "1.0.0") or "1.0.0"),
+            author=str(meta.get("author", "") or ""),
         )
 
     def get_relevant_skills(self, query: str) -> list[str]:

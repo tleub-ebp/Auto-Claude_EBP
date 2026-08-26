@@ -1,0 +1,36 @@
+# Which skills this repository itself gets, and from where.
+#
+# `skills-cli` reads this to resolve `skills/` into `.agents/skills/` and the
+# harness mirrors. Run `pnpm run skills:build` after editing, and commit the
+# result -- CI runs `pnpm run skills:check` and fails on drift.
+#
+#   pnpm run skills:list      what resolves here, and why the rest does not
+
+[targets]
+# Toolchain versions this repo is on. Anything omitted is detected from the
+# files on disk (package.json engines, .nvmrc, pyproject, go.mod, Cargo.toml).
+# Declared explicitly here because detection only looks at the repo root, and
+# the Python side of this monorepo lives under apps/backend.
+node = "20.0.0"
+python = "3.13"
+
+[packs]
+# A want-list, not a filter: a pack that is NOT listed here is not resolved at
+# all. Opt-in rather than opt-out, because `skills/` holds packs vendored on
+# demand whose content is gitignored — with opt-out the emitted set would
+# depend on whether you had run `skills:bootstrap`, and `skills:check` would
+# pass on a fresh clone and fail for anyone who had.
+#
+# The value is a semver range, or "latest" to take whatever is in `skills/`.
+comms = "^1"
+tooling = "^1"
+# Not listed, therefore not emitted here:
+#   dotnet       authored for consumer projects; this repo is Python + TS
+#   bmad         76 wrappers, needs `skills:bootstrap` and a _bmad/ runtime
+#   superpowers, mattpocock, impeccable, task-observer, claude-mem
+#                upstream packs, available to any project that lists them
+# Add one and run `pnpm run skills:build` to pull it into this repo's palette.
+
+# Harnesses to materialise. Omit to use the defaults from
+# capabilities/harnesses.yaml (agnostic + gemini).
+# harnesses = ["agnostic", "gemini", "copilot"]

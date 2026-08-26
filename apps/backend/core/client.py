@@ -144,6 +144,7 @@ from agents.tools_pkg import (
     get_required_mcp_servers,
     is_tools_available,
 )
+from skills_registry.providers import get_provider_capabilities
 
 # Make claude_agent_sdk optional for testing purposes
 try:
@@ -1290,27 +1291,29 @@ def create_client(
     if output_format:
         options_kwargs["output_format"] = output_format
 
-    # Merge phase-appropriate default subagents with any caller-supplied ones.
-    # Caller wins on key collision so a specific run can override defaults.
-    # The set is chosen by agent_type so the planner doesn't waste context on
-    # QA subagents and vice versa.
+    # Compose the subagent roster: phase defaults, specialised by the detected
+    # language stack, with caller-supplied agents winning on key collision.
+    # The phase split means the planner does not carry QA subagents into its
+    # context, and vice versa; the language layer means a Rust card and a .NET
+    # card no longer get the same generic `test-runner` prompt.
     # See: code.claude.com/docs/en/agent-sdk/subagents
     try:
-        if agent_type in ("qa_reviewer", "qa_fixer", "qa"):
-            from agents.qa_subagents import (
-                merge_with_user_agents as _merge_phase_agents,
-            )
-        elif agent_type in ("planner", "architect"):
-            from agents.planner_subagents import (
-                merge_with_user_agents as _merge_phase_agents,
-            )
-        else:
-            from agents.kanban_subagents import (
-                merge_with_user_agents as _merge_phase_agents,
-            )
+        from agents.subagents import resolve as _resolve_subagents
 
-        _merged_agents = _merge_phase_agents(agents)
-    except Exception:
+        # The provider matters: `resolve` returns no roster at all for one
+        # that cannot run subagents, rather than handing the SDK a list it
+        # will ignore. Omitting it here was why that degradation, though
+        # implemented and tested, never fired in a real run.
+        _merged_agents = _resolve_subagents(
+            agent_type,
+            project_dir=project_dir,
+            user_agents=agents,
+            provider=_get_active_provider(spec_dir),
+        )
+    except Exception as exc:
+        # Roster composition must never break client creation; falling back to
+        # exactly what the caller passed preserves the previous behaviour.
+        logger.debug("subagent resolution failed, using caller agents: %s", exc)
         _merged_agents = agents
     if _merged_agents:
         options_kwargs["agents"] = _merged_agents
@@ -1631,6 +1634,32 @@ def _get_active_provider(spec_dir: Path | None = None) -> str:
 # in) — so we can leave a trace in the task activity feed showing from when which
 # provider/model/effort was in use.
 LLM_CONTEXT_STATE_FILE = ".llm_context.json"
+
+
+def _log_provider_degradation(spec_dir: Path, requested: str, actual: str) -> None:
+    """Tell the user, in the task feed, that their provider choice was not honoured.
+
+    Selecting Mistral and getting Claude is the kind of thing that has to be
+    visible: it changes cost, latency and behaviour, and it silently invalidates
+    any conclusion drawn from "I tested this on Mistral". A warning in the
+    backend log is not visible.
+
+    Like _log_llm_context_switch, this must never break client creation, so
+    every step is guarded.
+    """
+    message = (
+        f"⚠️ Provider degraded — {requested} has no agentic adapter in WorkPilot; "
+        f"this run executes on {actual}. Subagents are disabled."
+    )
+    logger.warning("[provider-degradation] %s", message)
+    try:
+        from task_logger import get_task_logger
+
+        tl = get_task_logger()
+        if tl is not None and Path(tl.spec_dir) == Path(spec_dir):
+            tl.log_info(message)
+    except Exception as exc:  # pragma: no cover - tracing must not break a run
+        logger.debug("could not surface provider degradation in the feed: %s", exc)
 
 
 def _log_llm_context_switch(
@@ -2014,10 +2043,22 @@ def create_agent_client(
         )
 
     else:
-        # For other providers (mistral, deepseek, grok, meta, …), fall back to
-        # Claude SDK with provider selection.
+        # No agentic adapter for this provider (mistral, deepseek, grok, meta,
+        # aws, cursor, custom). The task still runs — on the Claude SDK — but
+        # that is a real limitation, not a detail, so say so where the user can
+        # see it instead of in a log line nobody reads. capabilities/providers.yaml
+        # is the record of which providers are in this state.
+        #
+        # `create_client` takes no provider argument: the previous comment here
+        # claimed "with provider selection", which was never true.
+        caps = get_provider_capabilities(provider)
+        target = caps.degrades_to or "claude"
+        _log_provider_degradation(spec_dir, provider, target)
         logger.warning(
-            f"Provider '{provider}' not directly supported, falling back to Claude SDK with provider selection"
+            "Provider %r has no agentic adapter; running on the %s SDK instead. "
+            "Subagents are disabled for this run.",
+            provider,
+            target,
         )
         sdk_client = create_client(
             project_dir=project_dir,
@@ -2026,6 +2067,10 @@ def create_agent_client(
             agent_type=agent_type,
             max_thinking_tokens=max_thinking_tokens,
             output_format=output_format,
-            agents=agents,
+            # Deliberately dropped: this provider does not run subagents, and
+            # passing a dict nobody reads makes the roster look active when it
+            # is not.
+            agents=None,
+            resume=resume,
         )
         return ClaudeAgentClient(sdk_client)

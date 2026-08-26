@@ -70,7 +70,17 @@ lerna-debug.log*
 # ===========================
 # WorkPilot AI Generated
 # ===========================
-.workpilot/
+# Note the trailing /* rather than /: git cannot re-include a file whose
+# parent directory is excluded, so ignoring the directory itself would make the
+# negations below dead letters (which is why the .md files here were previously
+# kept alive by `git add -f`). These four are inputs, not runtime state -- CI
+# must resolve the same skills a developer does, and it cannot do that if the
+# config is not committed.
+.workpilot/*
+!.workpilot/architecture.md
+!.workpilot/conventions.md
+!.workpilot/patterns.md
+!.workpilot/skills.toml
 .planning/
 .planning-archive/
 .auto-build-security.json
@@ -186,6 +196,17 @@ apps/frontend/electron.vite.config.*.mjs
 # ones kept working — a trap, especially now that the README links into docs/.
 dev/
 _bmad/
+# Skill packs vendored on demand by `pnpm run skills:bootstrap`. Only the
+# pack.json manifest is committed -- the content is third-party, has its own
+# release cadence, and is pinned by tree SHA in skills-lock.json instead.
+skills/superpowers/*
+!skills/superpowers/pack.json
+skills/mattpocock/*
+!skills/mattpocock/pack.json
+skills/impeccable/*
+!skills/impeccable/pack.json
+skills/task-observer/*
+!skills/task-observer/pack.json
 _bmad-output/
 .claude/
 /.github/agents
@@ -193,7 +214,6 @@ _bmad-output/
 # WorkPilot AI generated files
 .security-key
 logs/security/
-Agents.md
 nul
 
 # ===========================
@@ -214,3 +234,12 @@ tmp/ipc-handlers-test/userData/store/projects.json
 # Generated security-scan reports (bandit) — must never be committed.
 bandit-report.json
 apps/backend/bandit-report.json
+
+# Per-agent experience ledgers, written by the `observe` phase on every build.
+# The proposals themselves (skills/_proposed/*.md) ARE committed — they are the
+# reviewable diff — and each one embeds the signals and build ids that earned
+# it, so the evidence is in the pull request without the raw tally churning.
+skills/_proposed/_ledgers/
+# skills-cli: vendored on demand (claude-mem)
+skills/claude-mem/*
+!skills/claude-mem/pack.json

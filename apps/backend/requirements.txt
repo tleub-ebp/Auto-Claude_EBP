@@ -11,6 +11,13 @@ websockets>=16.0
 # TOML parsing fallback for Python < 3.11
 tomli>=2.0.0; python_version < "3.11"
 
+# YAML parsing. Imported behind try/except by api_watcher/contract_parser.py,
+# analysis/ci_discovery.py, environment/capturer.py and
+# scheduling/task_templates.py, and required outright by
+# skills_registry/frontmatter.py -- it was pulled in transitively and those
+# modules silently degraded whenever it was not. Declared so they don't.
+PyYAML>=6.0
+
 # Linux Secret Service support for credential storage
 # Provides access to the Freedesktop.org Secret Service API via DBus
 # Used on Linux to store OAuth tokens in gnome-keyring/kwallet

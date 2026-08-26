@@ -1,0 +1,125 @@
+# What each LLM provider can actually do when driving an agentic task.
+#
+# The point of this file is that WorkPilot advertises itself as
+# provider-agnostic, and "agnostic" has to mean *honest about the differences*
+# rather than pretending there are none. Before it existed, picking Mistral,
+# DeepSeek, Grok, Meta or AWS silently ran the task on Claude: the `else`
+# branch of create_agent_client() logged a warning nobody reads and called
+# create_client(), which has no provider parameter at all.
+#
+# Fields:
+#   adapter     the client class that drives this provider agentically.
+#               `null` means there is none — see `degrades_to`.
+#   subagents   native   the provider runs real subagents in their own context
+#               none     it cannot; the workflow runs phases sequentially with
+#                        a context reset instead of dispatching in parallel
+#   effort      how reasoning depth is expressed, so phase_config can map onto it
+#   degrades_to what actually runs when `adapter` is null. Surfaced in the task
+#               feed, never silent.
+#
+# Adding a real adapter for a provider is a strictly better outcome than
+# listing it here with `adapter: null`. This file records the current truth,
+# not the desired one.
+
+claude:
+  adapter: ClaudeAgentClient
+  subagents: native
+  effort: thinking_budget
+  degrades_to: null
+
+copilot:
+  adapter: CopilotAgentClient
+  subagents: native
+  effort: thinking_budget
+  degrades_to: null
+  note: Converts AgentDefinition to its own SubagentDefinition.
+
+windsurf:
+  adapter: WindsurfAgentClient
+  subagents: none
+  effort: none
+  degrades_to: null
+  note: >-
+    Dual-mode (gRPC to the local IDE language server, or REST with
+    OpenAI-compatible function calling). Neither mode carries subagents.
+
+openai:
+  adapter: OpenAIAgentClient
+  subagents: none
+  effort: reasoning_effort
+  degrades_to: null
+
+google:
+  adapter: GoogleAgentClient
+  subagents: none
+  effort: thinking_budget
+  degrades_to: null
+
+ollama:
+  adapter: LocalAgentClient
+  subagents: none
+  effort: none
+  degrades_to: null
+local:
+  adapter: LocalAgentClient
+  subagents: none
+  effort: none
+  degrades_to: null
+lmstudio:
+  adapter: LocalAgentClient
+  subagents: none
+  effort: none
+  degrades_to: null
+
+# ---------------------------------------------------------------------------
+# No agentic adapter yet. Selecting one of these runs the task on the Claude
+# SDK. That is a real limitation, not a configuration detail, so it is stated
+# here and traced into the task feed at run time.
+# ---------------------------------------------------------------------------
+
+mistral:
+  adapter: null
+  subagents: none
+  effort: none
+  degrades_to: claude
+
+deepseek:
+  adapter: null
+  subagents: none
+  effort: none
+  degrades_to: claude
+
+grok:
+  adapter: null
+  subagents: none
+  effort: none
+  degrades_to: claude
+
+meta:
+  adapter: null
+  subagents: none
+  effort: none
+  degrades_to: claude
+
+aws:
+  adapter: null
+  subagents: none
+  effort: thinking_budget
+  degrades_to: claude
+  note: Bedrock-hosted Anthropic models; the degradation is closer than it looks.
+
+cursor:
+  adapter: null
+  subagents: none
+  effort: none
+  degrades_to: claude
+
+custom:
+  adapter: null
+  subagents: none
+  effort: none
+  degrades_to: claude
+  note: >-
+    An Anthropic-compatible gateway configured through ANTHROPIC_BASE_URL. The
+    degradation is intentional here: routing through the Claude SDK is exactly
+    what a custom gateway is for.

@@ -1,0 +1,18 @@
+{
+	"name": "superpowers",
+	"version": "0.0.0",
+	"description": "Agentic development methodology: brainstorming, git worktrees, written plans, subagent-driven TDD, code review, branch completion.",
+	"targets": {},
+	"source": "obra/superpowers",
+	"maintainer": "upstream (vendored on demand)",
+	"bootstrap": {
+		"command": [
+			"python3",
+			"scripts/vendor_pack.py",
+			"obra/superpowers",
+			"--into",
+			"skills/superpowers"
+		],
+		"note": "Vendored by git clone, not by `npx skills add`: that tool writes into every harness directory it knows and writes its own skills-lock.json at the repo root — both are artifacts `skills-cli build` already owns. Verified, not assumed. `npx skills add <repo> --list` remains the way to see what a repository offers."
+	}
+}

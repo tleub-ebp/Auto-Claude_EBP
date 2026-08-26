@@ -113,6 +113,16 @@ def detect_project_stack(project_dir: Path) -> dict:
         stack["languages"].append("rust")
         stack["package_managers"].append("cargo")
 
+    # .NET. Project files can sit in subdirectories next to a solution at the
+    # root, which is the usual layout, so a root-only check misses most repos.
+    dotnet_projects = (
+        list(project_dir.glob("*.sln")) or list(project_dir.glob("**/*.csproj"))[:50]
+    )
+    if dotnet_projects:
+        stack["languages"].append("c#")
+        stack["package_managers"].append("nuget")
+        stack["test_runners"].append("dotnet test")
+
     if (project_dir / "go.mod").exists():
         stack["languages"].append("go")
         stack["package_managers"].append("go mod")

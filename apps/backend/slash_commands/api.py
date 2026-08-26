@@ -40,6 +40,8 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, HTTPException, Query
+from skills_registry.frontmatter import parse_frontmatter, workpilot_meta
+from skills_registry.resolver import check_requires
 
 logger = logging.getLogger(__name__)
 
@@ -67,28 +69,15 @@ def _safe_project_dir(raw: str) -> Path:
     return p
 
 
-def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Very small YAML-ish frontmatter parser.
+def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Parse a SKILL.md / command frontmatter block.
 
-    The .claude/commands/*.md files in this repo use a simple
-    `key: value` frontmatter block delimited by `---`. A full YAML
-    parser would be overkill (and would pull in a runtime dep we don't
-    need); we just split the leading block and read `key: value` lines.
+    Delegates to the shared parser so every reader in the repo agrees on what
+    a frontmatter block means. The previous local implementation stripped
+    quotes off the whole value, which truncated any description ending in a
+    quoted phrase -- 32 of the BMAD skills lost their closing quote that way.
     """
-    if not text.startswith("---"):
-        return {}, text
-    end = text.find("\n---", 3)
-    if end == -1:
-        return {}, text
-    header = text[3:end].strip("\n")
-    body = text[end + 4 :].lstrip("\n")
-    meta: dict[str, str] = {}
-    for line in header.splitlines():
-        if ":" not in line:
-            continue
-        k, _, v = line.partition(":")
-        meta[k.strip()] = v.strip().strip('"').strip("'")
-    return meta, body
+    return parse_frontmatter(text)
 
 
 def _scan_commands_dir(dir_path: Path, source: str) -> list[dict[str, Any]]:
@@ -141,6 +130,8 @@ def _scan_skills_dir(project_dir: Path, source: str) -> list[dict[str, Any]]:
         except OSError:
             continue
         meta, _ = _parse_frontmatter(text)
+        if not _runtime_is_present(meta, project_dir):
+            continue
         items.append(
             {
                 # The folder name is the command name (e.g. /bmad-bmm-create-prd).
@@ -151,6 +142,37 @@ def _scan_skills_dir(project_dir: Path, source: str) -> list[dict[str, Any]]:
             }
         )
     return items
+
+
+def _runtime_is_present(meta: dict[str, Any], project_dir: Path) -> bool:
+    """Whether this skill's `requires` are satisfied here, right now.
+
+    The build already refuses to emit a skill whose runtime is missing, so on a
+    freshly generated tree this changes nothing. It matters because
+    `.agents/skills/` is **committed**: a developer who bootstrapped BMAD
+    locally emits its 76 wrappers and commits them, and the next clone has the
+    files without `_bmad/`. That is exactly the original failure — a palette
+    listing 76 commands that all fail on invocation — arriving by a different
+    route, so the gate is enforced at read time too.
+
+    A malformed or unrecognised `requires` hides the command rather than
+    showing it. A command that cannot run is worse than one that is missing:
+    the user picks it, waits, and gets an error.
+    """
+    requires = workpilot_meta(meta).get("requires")
+    if not requires:
+        return True
+    if not isinstance(requires, dict):
+        logger.debug("skill has a non-mapping `requires`, hidden from the palette")
+        return False
+    try:
+        ok, reason = check_requires(requires, project_dir)
+    except Exception as exc:  # noqa: BLE001 - a bad gate hides, never crashes
+        logger.debug("requires check failed, hiding command: %s", exc)
+        return False
+    if not ok:
+        logger.debug("command hidden: %s", reason)
+    return ok
 
 
 def _resolve_command_body(proj: Path, command: str) -> str | None:

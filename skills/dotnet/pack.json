@@ -1,0 +1,7 @@
+{
+	"name": "dotnet",
+	"version": "1.0.0",
+	"description": ".NET development: modern stack (C# 14, ASP.NET Core 10, EF Core 10) plus distributed-systems, performance and integration-testing specialists.",
+	"targets": { "dotnet": ">=10.0" },
+	"maintainer": "WorkPilot AI Team"
+}

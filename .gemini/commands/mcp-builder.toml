@@ -1,0 +1,64 @@
+description = "Construire des serveurs MCP (Model Context Protocol) de qualité production qui exposent des APIs/services externes à un agent via des outils bien conçus. À utiliser pour créer un serveur MCP en TypeScript (MCP SDK) ou Python (FastMCP), définir des outils, schémas et évaluations."
+prompt = """
+# Construction de Serveurs MCP
+
+La qualité d'un serveur MCP se mesure à la capacité d'un agent à accomplir des tâches réelles avec ses outils. Stack recommandé : **TypeScript + MCP SDK**, transport **Streamable HTTP** (JSON stateless) pour le distant, **stdio** pour le local. Python/FastMCP est une alternative.
+
+## Documentation à charger (à la demande)
+
+Ne pas tout charger d'avance — récupérer selon la phase :
+
+- **Spécification MCP** : `https://modelcontextprotocol.io/sitemap.xml` puis la page voulue avec suffixe `.md` (ex. `.../specification/draft.md`).
+- **TypeScript SDK** : `https://raw.githubusercontent.com/modelcontextprotocol/typescript-sdk/main/README.md`
+- **Python SDK** : `https://raw.githubusercontent.com/modelcontextprotocol/python-sdk/main/README.md`
+
+## Phase 1 — Recherche & conception
+
+Principes de conception modernes :
+
+- **Couverture vs workflow** : en cas de doute, prioriser la couverture complète des endpoints API (l'agent compose lui-même). Ajouter des outils workflow pour les tâches fréquentes.
+- **Nommage** : noms d'outils clairs, préfixés et orientés action (`github_create_issue`, `github_list_repos`).
+- **Contexte** : outils retournant des données focalisées, avec filtrage/pagination.
+- **Erreurs actionnables** : chaque message d'erreur guide vers la correction (suggestion + étape suivante).
+
+Étudier l'API cible (endpoints clés, auth, modèles de données) via recherche web / fetch, puis lister les outils à implémenter en commençant par les opérations les plus courantes.
+
+## Phase 2 — Implémentation
+
+Infrastructure partagée : client API authentifié · helpers d'erreurs · formatage des réponses (JSON/Markdown) · pagination.
+
+Pour chaque outil :
+
+- **Schéma d'entrée** : Zod (TS) / Pydantic (Python), contraintes + descriptions + exemples dans les champs.
+- **Schéma de sortie** : définir `outputSchema` et renvoyer `structuredContent` quand le SDK le permet.
+- **Description** : résumé concis + paramètres + type de retour.
+- **Implémentation** : `async/await` pour l'I/O, erreurs actionnables, pagination.
+- **Annotations** : `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`.
+
+## Phase 3 — Revue & test
+
+Vérifier : pas de duplication (DRY), gestion d'erreurs cohérente, typage complet, descriptions claires.
+
+- **TypeScript** : `npm run build`, puis tester via `npx @modelcontextprotocol/inspector`.
+- **Python** : `python -m py_compile server.py`, puis MCP Inspector.
+
+## Phase 4 — Évaluations
+
+Créer 10 questions vérifiant qu'un LLM peut résoudre des tâches réalistes avec le serveur.
+
+Processus : inspecter les outils → explorer le contenu (opérations read-only) → générer 10 questions → résoudre chacune soi-même pour fixer la réponse attendue.
+
+Chaque question doit être : **indépendante**, **read-only**, **complexe** (plusieurs appels d'outils), **réaliste**, **vérifiable** (réponse unique comparable par chaîne) et **stable** dans le temps.
+
+Format de sortie :
+
+```xml
+<evaluation>
+  <qa_pair>
+    <question>…</question>
+    <answer>3</answer>
+  </qa_pair>
+  <!-- 10 paires au total -->
+</evaluation>
+```
+"""
