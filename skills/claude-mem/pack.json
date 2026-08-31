@@ -1,6 +1,6 @@
 {
 	"name": "claude-mem",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"description": "Persistent session memory (SQLite + Chroma + a Bun worker). Optional: WorkPilot's own three memories plus the mem-search skill cover the same ground without a fourth store.",
 	"targets": {},
 	"source": "thedotmack/claude-mem",
