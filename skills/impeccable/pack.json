@@ -1,6 +1,6 @@
 {
 	"name": "impeccable",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"description": "Frontend design guidance: 23 commands plus 59 deterministic detector rules that run locally with no API call.",
 	"targets": {},
 	"source": "pbakaus/impeccable",

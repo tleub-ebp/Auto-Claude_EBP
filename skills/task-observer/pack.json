@@ -1,6 +1,6 @@
 {
 	"name": "task-observer",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"description": "Meta-skill that watches a session for corrections, uncovered work and its own blind spots, and writes candidates for the learning loop. Never edits a skill directly.",
 	"targets": {},
 	"source": "rebelytics/one-skill-to-rule-them-all",
