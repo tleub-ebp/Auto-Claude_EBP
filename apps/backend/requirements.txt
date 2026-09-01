@@ -78,7 +78,7 @@ httpx[http2]>=0.27.0
 aiohttp>=3.10.0
 h2>=4.3.0  # HTTP/2 support for Windsurf gRPC proxy
 sqlalchemy>=2.0.0
-psutil>=5.9.0
+psutil>=7.2.2
 azure-devops>=7.1.0b4  # Azure DevOps SDK for src/connectors/azure_devops
 msrest>=0.7.1           # Required by azure-devops SDK
 
