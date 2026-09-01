@@ -58,7 +58,7 @@ bandit>=1.9.4
 # Install separately: pip install pip-audit
 
 fastapi>=0.141.1
-uvicorn[standard]>=0.50.2
+uvicorn[standard]>=0.52.4
 slowapi>=0.1.10
 
 # Multi-user server mode (central deployment)
