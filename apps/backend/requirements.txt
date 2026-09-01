@@ -64,7 +64,7 @@ slowapi>=0.1.10
 # Multi-user server mode (central deployment)
 alembic>=1.18.5          # DB schema migrations
 asyncpg>=0.29.0          # PostgreSQL async driver (server mode)
-aiosqlite>=0.20.0        # SQLite async driver (dev/tests fallback)
+aiosqlite>=0.22.1        # SQLite async driver (dev/tests fallback)
 argon2-cffi>=25.1.0      # Password hashing for local accounts
 PyJWT[crypto]>=2.13.0     # JWT access/refresh tokens + Entra ID JWKS validation
 cryptography>=49.0.0     # Fernet encryption for per-user integration secrets
