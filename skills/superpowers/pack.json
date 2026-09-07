@@ -1,6 +1,6 @@
 {
 	"name": "superpowers",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"description": "Agentic development methodology: brainstorming, git worktrees, written plans, subagent-driven TDD, code review, branch completion.",
 	"targets": {},
 	"source": "obra/superpowers",
